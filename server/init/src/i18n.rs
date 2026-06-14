@@ -12,6 +12,9 @@ pub enum Lang {
 
 pub const GITHUB_URL: &str = "https://github.com/cccdemon/RDOC-SquadLinkLite";
 pub const RAUMDOCK_URL: &str = "https://raumdock.org";
+/// Microsoft Store product page (Store ID 9N9NR49QFBF4) — the recommended,
+/// code-signed install path. The direct/unsigned installer stays as a fallback.
+pub const STORE_URL: &str = "https://apps.microsoft.com/detail/9N9NR49QFBF4";
 pub const FLEET_URL: &str = "https://suite.raumdock.org/fleetplanner";
 
 impl Lang {
@@ -211,8 +214,9 @@ fn credits(l: Lang) -> String {
 <a href="https://twitch.tv/JustCallMeDeimos">twitch.tv/JustCallMeDeimos</a>
 <a href="https://twitch.tv/stormp00per89">twitch.tv/stormp00per89</a>
 <a href="https://twitch.tv/x_jazzz_x">twitch.tv/x_jazzz_x</a>
+<span>head87x</span>
 </p>
-<p class="muted">{concept} JustCallMeDeimos (Claude Code &amp; Codex for crosstesting). {ai}</p>"#
+<p class="muted">{concept} JustCallMeDeimos &amp; xhead87x (Claude Code &amp; Codex for crosstesting). {ai}</p>"#
     )
 }
 
@@ -297,12 +301,13 @@ pub fn license(l: Lang) -> (&'static str, String) {
 
 /// Share-link landing in the chosen language (`code` is already HTML-escaped).
 pub fn landing(l: Lang, base: &str, code: &str) -> String {
-    let (intro, codelbl, step1, step2, btn, foot) = match l {
-        Lang::En => ("You have been invited to a voice session.", "Session code:", "App not installed? Download here", "Open the app → Join → enter the code + the 6-digit PIN (from the host).", "Download SquadLink Lite", "Audio runs directly peer-to-peer (encrypted). The server only brokers."),
-        Lang::De => ("Du wurdest zu einer Voice-Session eingeladen.", "Session-Code:", "App noch nicht installiert? Hier herunterladen", "App öffnen → Beitreten → Code + die 6-stellige PIN (vom Host) eingeben.", "SquadLink Lite herunterladen", "Audio läuft direkt Peer-zu-Peer (verschlüsselt). Der Server vermittelt nur."),
-        Lang::It => ("Sei stato invitato a una sessione vocale.", "Codice sessione:", "App non installata? Scaricala qui", "Apri l'app → Partecipa → inserisci il codice + il PIN di 6 cifre (dall'host).", "Scarica SquadLink Lite", "L'audio è diretto peer-to-peer (cifrato). Il server fa solo da tramite."),
-        Lang::Es => ("Te han invitado a una sesión de voz.", "Código de sesión:", "¿App no instalada? Descárgala aquí", "Abre la app → Unirse → introduce el código + el PIN de 6 dígitos (del anfitrión).", "Descargar SquadLink Lite", "El audio es directo peer-to-peer (cifrado). El servidor solo intermedia."),
-        Lang::Fr => ("Vous avez été invité à une session vocale.", "Code de session :", "App non installée ? Téléchargez-la ici", "Ouvrez l'app → Rejoindre → saisissez le code + le PIN à 6 chiffres (de l'hôte).", "Télécharger SquadLink Lite", "L'audio est direct pair-à-pair (chiffré). Le serveur ne fait que l'intermédiaire."),
+    // (intro, codelbl, step_install, step2, store_btn, unsigned_btn, ss_note, foot)
+    let (intro, codelbl, step1, step2, store_btn, unsigned_btn, ss_note, foot) = match l {
+        Lang::En => ("You have been invited to a voice session.", "Session code:", "Install the app — Microsoft Store recommended.", "Open the app → Join → enter the code + the 6-digit PIN (from the host).", "Get it from Microsoft Store", "Direct download (unsigned installer)", "The direct installer is not code-signed, so Windows SmartScreen shows a warning. To install anyway: click \u{201c}More info\u{201d} \u{2192} \u{201c}Run anyway\u{201d}. The Microsoft Store version shows no warning.", "Audio runs directly peer-to-peer (encrypted). The server only brokers."),
+        Lang::De => ("Du wurdest zu einer Voice-Session eingeladen.", "Session-Code:", "App installieren \u{2014} Microsoft Store empfohlen.", "App \u{f6}ffnen \u{2192} Beitreten \u{2192} Code + die 6-stellige PIN (vom Host) eingeben.", "Im Microsoft Store holen", "Direkter Download (unsigniertes Installationsprogramm)", "Der direkte Installer ist nicht signiert, daher warnt Windows SmartScreen. Trotzdem installieren: auf \u{201e}Weitere Informationen\u{201c} \u{2192} \u{201e}Trotzdem ausf\u{fc}hren\u{201c} klicken. Die Microsoft-Store-Version warnt nicht.", "Audio l\u{e4}uft direkt Peer-zu-Peer (verschl\u{fc}sselt). Der Server vermittelt nur."),
+        Lang::It => ("Sei stato invitato a una sessione vocale.", "Codice sessione:", "Installa l'app \u{2014} Microsoft Store consigliato.", "Apri l'app \u{2192} Partecipa \u{2192} inserisci il codice + il PIN di 6 cifre (dall'host).", "Scarica dal Microsoft Store", "Download diretto (installer non firmato)", "L'installer diretto non \u{e8} firmato, quindi Windows SmartScreen mostra un avviso. Per installare comunque: \u{201c}Ulteriori informazioni\u{201d} \u{2192} \u{201c}Esegui comunque\u{201d}. La versione del Microsoft Store non mostra avvisi.", "L'audio \u{e8} diretto peer-to-peer (cifrato). Il server fa solo da tramite."),
+        Lang::Es => ("Te han invitado a una sesi\u{f3}n de voz.", "C\u{f3}digo de sesi\u{f3}n:", "Instala la app \u{2014} Microsoft Store recomendado.", "Abre la app \u{2192} Unirse \u{2192} introduce el c\u{f3}digo + el PIN de 6 d\u{ed}gitos (del anfitri\u{f3}n).", "Descargar de Microsoft Store", "Descarga directa (instalador sin firmar)", "El instalador directo no est\u{e1} firmado, por lo que Windows SmartScreen muestra una advertencia. Para instalar igualmente: \u{201c}M\u{e1}s informaci\u{f3}n\u{201d} \u{2192} \u{201c}Ejecutar de todas formas\u{201d}. La versi\u{f3}n de Microsoft Store no muestra advertencias.", "El audio es directo peer-to-peer (cifrado). El servidor solo intermedia."),
+        Lang::Fr => ("Vous avez \u{e9}t\u{e9} invit\u{e9} \u{e0} une session vocale.", "Code de session :", "Installez l'app \u{2014} Microsoft Store recommand\u{e9}.", "Ouvrez l'app \u{2192} Rejoindre \u{2192} saisissez le code + le PIN \u{e0} 6 chiffres (de l'h\u{f4}te).", "Obtenir sur le Microsoft Store", "T\u{e9}l\u{e9}chargement direct (installeur non sign\u{e9})", "L'installeur direct n'est pas sign\u{e9}, donc Windows SmartScreen affiche un avertissement. Pour installer quand m\u{ea}me : \u{ab} Informations compl\u{e9}mentaires \u{bb} \u{2192} \u{ab} Ex\u{e9}cuter quand m\u{ea}me \u{bb}. La version du Microsoft Store n'affiche aucun avertissement.", "L'audio est direct pair-\u{e0}-pair (chiffr\u{e9}). Le serveur ne fait que l'interm\u{e9}diaire."),
     };
     format!(
         r#"<h1>RDOC SquadLink Lite</h1>
@@ -310,10 +315,12 @@ pub fn landing(l: Lang, base: &str, code: &str) -> String {
 <p class="muted">{codelbl}</p>
 <p class="code">{code}</p>
 <ol>
-<li><a href="{base}/download/">{step1}</a></li>
+<li>{step1}</li>
 <li>{step2}</li>
 </ol>
-<p><a class="dl" href="{base}/download/">{btn}</a></p>
+<p><a class="dl store" href="{STORE_URL}">{store_btn}</a></p>
+<p><a class="dl" href="{base}/download/">{unsigned_btn}</a></p>
+<p class="muted">{ss_note}</p>
 <p class="muted">{foot}</p>"#
     )
 }
