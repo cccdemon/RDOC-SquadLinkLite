@@ -14,52 +14,234 @@ struct AppState {
     serverless: Mutex<Option<Arc<Serverless>>>,
 }
 
-// ── Configurable PTT via RAW global input (keyboard + mouse buttons) ──────────
+// ── Configurable PTT via Windows Raw Input (keyboard + mouse buttons) ─────────
+// Raw Input (RIDEV_INPUTSINK) is delivered straight off the device stack, so it
+// keeps firing while a fullscreen / elevated game (e.g. Star Citizen) holds the
+// foreground — unlike a WH_KEYBOARD_LL hook, which UIPI blocks for elevated apps.
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+// Deep link the app was *launched* with (cold start). The webview drains this
+// via `take_pending_deeplink` on mount, since a Rust-side emit at startup races
+// ahead of the JS event listener and would be dropped.
+static PENDING_DEEPLINK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PTT_BINDING: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PTT_CAPTURE: AtomicBool = AtomicBool::new(false);
+static PTT_DOWN: AtomicBool = AtomicBool::new(false);
 
 fn ptt_binding() -> &'static Mutex<Option<String>> {
     PTT_BINDING.get_or_init(|| Mutex::new(Some("F8".into())))
 }
 
-/// Stable string code for a raw key or mouse button (+ pressed flag).
-fn raw_code(ev: &rdev::EventType) -> Option<(String, bool)> {
-    use rdev::EventType::{ButtonPress, ButtonRelease, KeyPress, KeyRelease};
-    match ev {
-        KeyPress(k) => Some((format!("{k:?}"), true)),
-        KeyRelease(k) => Some((format!("{k:?}"), false)),
-        ButtonPress(b) => Some((format!("Mouse:{b:?}"), true)),
-        ButtonRelease(b) => Some((format!("Mouse:{b:?}"), false)),
-        _ => None,
+/// Process one raw key/mouse edge. In capture mode the next press becomes the
+/// new binding (emitted as `ptt-bound`); otherwise edges on the bound code
+/// toggle transmit via the `ptt` event. De-duped so key auto-repeat (and
+/// duplicate button flags in one packet) don't spam the IPC channel.
+fn handle_raw(code: String, down: bool) {
+    if PTT_CAPTURE.load(Ordering::SeqCst) {
+        if down {
+            PTT_CAPTURE.store(false, Ordering::SeqCst);
+            *ptt_binding().lock().unwrap() = Some(code.clone());
+            if let Some(app) = APP_HANDLE.get() {
+                let _ = app.emit("ptt-bound", code);
+            }
+        }
+        return;
+    }
+    let bound = ptt_binding().lock().unwrap().clone();
+    if bound.as_deref() != Some(code.as_str()) {
+        return;
+    }
+    if PTT_DOWN.swap(down, Ordering::SeqCst) == down {
+        return; // no edge
+    }
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit("ptt", down);
     }
 }
 
-/// Global raw-input listener. In capture mode the next press becomes the new
-/// binding (emitted as `ptt-bound`); otherwise the bound code toggles transmit
-/// via the `ptt` event. Runs on its own thread (rdev::listen blocks).
+#[cfg(windows)]
 fn start_raw_input() {
-    std::thread::spawn(|| {
-        let _ = rdev::listen(move |event| {
-            let Some((code, down)) = raw_code(&event.event_type) else { return };
-            if PTT_CAPTURE.load(Ordering::SeqCst) {
-                if down {
-                    PTT_CAPTURE.store(false, Ordering::SeqCst);
-                    *ptt_binding().lock().unwrap() = Some(code.clone());
-                    if let Some(app) = APP_HANDLE.get() {
-                        let _ = app.emit("ptt-bound", code);
+    std::thread::spawn(|| unsafe { raw_input::run() });
+}
+
+/// Global PTT capture is Windows-only; elsewhere the in-app PTT button still works.
+#[cfg(not(windows))]
+fn start_raw_input() {}
+
+#[cfg(windows)]
+mod raw_input {
+    use super::handle_raw;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Input::{
+        GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
+        RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
+        TranslateMessage, HWND_MESSAGE, MSG, WM_INPUT, WNDCLASSW,
+    };
+
+    const RI_KEY_BREAK: u16 = 0x01; // RAWKEYBOARD.Flags bit 0 = key up
+    const MOUSE_BTN: [(u16, &str, bool); 10] = [
+        (0x0001, "Mouse:Left", true),
+        (0x0002, "Mouse:Left", false),
+        (0x0004, "Mouse:Right", true),
+        (0x0008, "Mouse:Right", false),
+        (0x0010, "Mouse:Middle", true),
+        (0x0020, "Mouse:Middle", false),
+        (0x0040, "Mouse:Unknown(1)", true), // XBUTTON1 = Mouse4
+        (0x0080, "Mouse:Unknown(1)", false),
+        (0x0100, "Mouse:Unknown(2)", true), // XBUTTON2 = Mouse5
+        (0x0200, "Mouse:Unknown(2)", false),
+    ];
+
+    /// rdev-compatible labels so previously saved bindings (default "F8") match.
+    fn vk_label(vk: u16) -> Option<String> {
+        let s: &str = match vk {
+            0x08 => "Backspace",
+            0x09 => "Tab",
+            0x0D => "Return",
+            0x13 => "Pause",
+            0x14 => "CapsLock",
+            0x1B => "Escape",
+            0x20 => "Space",
+            0x21 => "PageUp",
+            0x22 => "PageDown",
+            0x23 => "End",
+            0x24 => "Home",
+            0x25 => "LeftArrow",
+            0x26 => "UpArrow",
+            0x27 => "RightArrow",
+            0x28 => "DownArrow",
+            0x2D => "Insert",
+            0x2E => "Delete",
+            0x10 => "ShiftLeft",
+            0x11 => "ControlLeft",
+            0x12 => "Alt",
+            0xA0 => "ShiftLeft",
+            0xA1 => "ShiftRight",
+            0xA2 => "ControlLeft",
+            0xA3 => "ControlRight",
+            0xA4 => "Alt",
+            0xA5 => "AltGr",
+            0x5B => "MetaLeft",
+            0x5C => "MetaRight",
+            0x90 => "NumLock",
+            0x91 => "ScrollLock",
+            0x6A => "KpMultiply",
+            0x6B => "KpPlus",
+            0x6D => "KpMinus",
+            0x6E => "KpDelete",
+            0x6F => "KpDivide",
+            0xBA => "SemiColon",
+            0xBB => "Equal",
+            0xBC => "Comma",
+            0xBD => "Minus",
+            0xBE => "Dot",
+            0xBF => "Slash",
+            0xC0 => "BackQuote",
+            0xDB => "LeftBracket",
+            0xDC => "BackSlash",
+            0xDD => "RightBracket",
+            0xDE => "Quote",
+            0x30..=0x39 => return Some(format!("Num{}", vk - 0x30)), // top-row digits
+            0x41..=0x5A => return Some(format!("Key{}", (vk as u8 - 0x41 + b'A') as char)),
+            0x60..=0x69 => return Some(format!("Kp{}", vk - 0x60)), // numpad digits
+            0x70..=0x87 => return Some(format!("F{}", vk - 0x70 + 1)), // F1..F24
+            _ => return Some(format!("Vk{vk}")),
+        };
+        Some(s.to_string())
+    }
+
+    pub unsafe fn run() {
+        let hinstance = GetModuleHandleW(null_mut());
+        let class_name: Vec<u16> = "SquadLinkRawInput\0".encode_utf16().collect();
+        let mut wc: WNDCLASSW = std::mem::zeroed();
+        wc.lpfnWndProc = Some(wndproc);
+        wc.hInstance = hinstance;
+        wc.lpszClassName = class_name.as_ptr();
+        RegisterClassW(&wc);
+
+        // Message-only window: receives WM_INPUT but never shows / takes focus.
+        let hwnd = CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            class_name.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            null_mut(),
+            hinstance,
+            null_mut(),
+        );
+        if hwnd.is_null() {
+            return;
+        }
+
+        let devices = [
+            // Generic-desktop / keyboard (usage page 0x01, usage 0x06).
+            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+            // Generic-desktop / mouse (usage page 0x01, usage 0x02).
+            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+        ];
+        RegisterRawInputDevices(
+            devices.as_ptr(),
+            devices.len() as u32,
+            std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+        );
+
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if msg == WM_INPUT {
+            process_input(lparam as HRAWINPUT);
+        }
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+
+    unsafe fn process_input(hri: HRAWINPUT) {
+        let header_size = std::mem::size_of::<RAWINPUTHEADER>() as u32;
+        let mut size: u32 = 0;
+        if GetRawInputData(hri, RID_INPUT, null_mut(), &mut size, header_size) != 0 || size == 0 {
+            return;
+        }
+        let mut buf = vec![0u8; size as usize];
+        let got = GetRawInputData(hri, RID_INPUT, buf.as_mut_ptr() as *mut _, &mut size, header_size);
+        if got == u32::MAX || (got as usize) < std::mem::size_of::<RAWINPUTHEADER>() {
+            return;
+        }
+        let ri = &*(buf.as_ptr() as *const RAWINPUT);
+        match ri.header.dwType {
+            t if t == RIM_TYPEKEYBOARD => {
+                let kb = &ri.data.keyboard;
+                if kb.VKey == 0 || kb.VKey == 0xFF {
+                    return; // fake / overrun key
+                }
+                let down = kb.Flags & RI_KEY_BREAK == 0;
+                if let Some(code) = vk_label(kb.VKey) {
+                    handle_raw(code, down);
+                }
+            }
+            t if t == RIM_TYPEMOUSE => {
+                let flags = ri.data.mouse.Anonymous.Anonymous.usButtonFlags;
+                for (mask, code, down) in MOUSE_BTN {
+                    if flags & mask != 0 {
+                        handle_raw(code.to_string(), down);
                     }
                 }
-                return;
             }
-            let bound = ptt_binding().lock().unwrap().clone();
-            if bound.as_deref() == Some(code.as_str()) {
-                if let Some(app) = APP_HANDLE.get() {
-                    let _ = app.emit("ptt", down);
-                }
-            }
-        });
-    });
+            _ => {}
+        }
+    }
 }
 
 #[tauri::command]
@@ -86,6 +268,11 @@ const MAX_CHAT_LEN: usize = 2000;
 /// Identifier guard: non-empty, bounded, safe charset.
 fn valid_id(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+/// Like `valid_id` but also allows '.' — a deep-link `user_id` may be a Discord
+/// name, which can contain a dot.
+fn valid_user_id(s: &str, max: usize) -> bool {
+    !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 fn valid_hex(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_hexdigit())
@@ -114,7 +301,7 @@ async fn connect(
     if !valid_id(&room, 64) {
         return Err("invalid room".into());
     }
-    if !valid_id(&user_id, 64) {
+    if !valid_user_id(&user_id, 64) {
         return Err("invalid user_id".into());
     }
     let name = name.trim().to_string();
@@ -231,7 +418,7 @@ fn set_master_volume(state: State<AppState>, volume: f32) {
 
 #[tauri::command]
 fn set_peer_volume(state: State<AppState>, user_id: String, volume: f32) -> Result<(), String> {
-    if !valid_id(&user_id, 64) {
+    if !valid_user_id(&user_id, 64) {
         return Err("invalid user_id".into());
     }
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -287,6 +474,24 @@ fn set_low_bandwidth(state: State<AppState>, on: bool) {
     }
 }
 
+/// Switch capture/playback device LIVE while connected (empty string = default).
+/// When not connected it's a no-op — the saved choice is applied on next connect.
+#[tauri::command]
+fn set_input_device(state: State<AppState>, name: Option<String>) {
+    let name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 256);
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_input_device(name);
+    }
+}
+
+#[tauri::command]
+fn set_output_device(state: State<AppState>, name: Option<String>) {
+    let name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 256);
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_output_device(name);
+    }
+}
+
 /// Leave the session: drop the engine (stops mesh + audio threads) → the engine
 /// task emits Status{connected:false}, returning the UI to the start screen.
 #[tauri::command]
@@ -306,20 +511,109 @@ async fn net_selfcheck(server: String) -> Result<companion_core::selfcheck::Self
     Ok(companion_core::selfcheck::run(&server, None).await)
 }
 
+fn pending_deeplink() -> &'static Mutex<Option<String>> {
+    PENDING_DEEPLINK.get_or_init(|| Mutex::new(None))
+}
+
+/// True when running inside an MSIX package (Microsoft Store build). Used to skip
+/// registry-based deep-link registration (the package manifest declares the
+/// `squadlink` protocol) and to hide the self-update UI (the Store updates the app).
+#[cfg(windows)]
+fn is_packaged() -> bool {
+    use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+    const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
+    let mut len: u32 = 0;
+    let rc = unsafe { GetCurrentPackageFullName(&mut len, std::ptr::null_mut()) };
+    rc != APPMODEL_ERROR_NO_PACKAGE
+}
+#[cfg(not(windows))]
+fn is_packaged() -> bool {
+    false
+}
+
+/// Webview reads this on mount to suppress the self-update prompt in Store builds.
+#[tauri::command]
+fn is_store_build() -> bool {
+    is_packaged()
+}
+
+/// Drained once by the webview on mount: the squadlink:// URL (if any) the app
+/// was cold-started with. Returns None on a normal launch.
+#[tauri::command]
+fn take_pending_deeplink() -> Option<String> {
+    pending_deeplink().lock().unwrap().take()
+}
+
 /// Open the public download page in the system browser (for the update prompt).
+/// Uses ShellExecuteW rather than shelling out to cmd.exe — the latter trips the
+/// Store's "blocked executable" check (a cmd.exe reference in the binary).
 #[tauri::command]
 fn open_download() {
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", "https://squadlink.raumdock.org/download/"])
-        .spawn();
+    open_url("https://squadlink.raumdock.org/download/");
+}
+
+#[cfg(windows)]
+fn open_url(url: &str) {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let op: Vec<u16> = "open\0".encode_utf16().collect();
+    let file: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 fn main() {
     tauri::Builder::default()
+        // Single-instance MUST be the first plugin: a second launch (e.g. clicking
+        // a squadlink:// link while running) forwards its argv here; we surface the
+        // deep link to the already-running window instead of opening a new one.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(url) = argv.iter().find(|a| a.starts_with("squadlink://")) {
+                let _ = app.emit("deeplink", url.clone());
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .manage(AppState { engine: Mutex::new(None), serverless: Mutex::new(None) })
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
             start_raw_input();
+            // Cold start: stash the launch URL for the webview to drain on mount
+            // (Windows delivers deep links via argv).
+            if let Some(url) = std::env::args().find(|a| a.starts_with("squadlink://")) {
+                *pending_deeplink().lock().unwrap() = Some(url);
+            }
+            // Register the squadlink:// scheme at runtime (dev + portable runs; the
+            // NSIS/MSI installer also registers it). In an MSIX/Store build the
+            // package manifest declares the protocol, so skip the registry write.
+            // on_open_url covers warm relaunch (macOS); a running instance is reached
+            // via single-instance above.
+            #[cfg(any(windows, target_os = "linux"))]
+            if !is_packaged() {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    if let Some(url) = event.urls().first() {
+                        let _ = handle.emit("deeplink", url.to_string());
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -338,9 +632,13 @@ fn main() {
             set_dsp,
             set_monitor,
             set_low_bandwidth,
+            set_input_device,
+            set_output_device,
             disconnect,
             net_selfcheck,
             open_download,
+            take_pending_deeplink,
+            is_store_build,
             set_ptt_binding,
             start_ptt_capture
         ])

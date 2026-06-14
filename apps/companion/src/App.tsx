@@ -35,7 +35,7 @@ function mdToText(s: string): string {
     .trim();
 }
 
-// Friendly label for raw rdev codes (e.g. "F8", "KeyR", "Mouse:Unknown(1)").
+// Friendly label for raw input codes (e.g. "F8", "KeyR", "Mouse:Unknown(1)").
 function pttLabel(code: string): string {
   if (code.startsWith("Mouse:")) {
     const b = code.slice(6);
@@ -171,7 +171,20 @@ export default function App() {
       return false;
     }
   });
+  // Fleetplanner-Modus: opt-in manual direct-link entry (squadlink:// deep links
+  // always auto-connect regardless of this toggle).
+  const [fpMode, setFpMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.fpmode") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [directLink, setDirectLink] = useState("");
   const [appVersion, setAppVersion] = useState("");
+  // MSIX/Store build → the Store updates the app, so the self-update prompt is
+  // hidden (Store policy). Detected once at startup via Rust.
+  const [storeBuild, setStoreBuild] = useState(false);
   const [update, setUpdate] = useState<{ version: string; notes: string } | null>(null);
   const [showUpdate, setShowUpdate] = useState(true);
   const [pttBinding, setPttBinding] = useState<string>(() => {
@@ -327,8 +340,8 @@ export default function App() {
     chatEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat]);
 
-  // Configurable PTT via RAW global input (rdev in Rust). The bound key/mouse
-  // button emits "ptt" (down/up); "ptt-bound" fires after a rebind capture.
+  // Configurable PTT via Windows Raw Input (Rust). The bound key/mouse button
+  // emits "ptt" (down/up); "ptt-bound" fires after a rebind capture.
   useEffect(() => {
     invoke("set_ptt_binding", { code: pttBinding }).catch(() => {});
     const offPtt = listen<boolean>("ptt", (e) => {
@@ -352,11 +365,14 @@ export default function App() {
   }, []);
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {});
+    invoke<boolean>("is_store_build").then(setStoreBuild).catch(() => {});
   }, []);
 
   // Update check: compare the newest GitHub release (prereleases included) to the
-  // running version; if newer, surface it with the changelog.
+  // running version; if newer, surface it with the changelog. Skipped in Store
+  // builds — the Microsoft Store handles updates (self-update violates policy).
   useEffect(() => {
+    if (storeBuild) return;
     (async () => {
       try {
         const cur = await getVersion();
@@ -391,7 +407,7 @@ export default function App() {
         /* offline / API error: silently skip */
       }
     })();
-  }, []);
+  }, [storeBuild]);
 
   // Push saved DSP settings to the engine once connected.
   useEffect(() => {
@@ -439,17 +455,22 @@ export default function App() {
     }
     return SESSION_BASE;
   };
-  const connectWith = async (ws: string, room: string, token: string | null) => {
+  const connectWith = async (ws: string, room: string, token: string | null, nameOverride?: string, userIdOverride?: string) => {
+    const name = (nameOverride ?? form.name).trim() || "Commander";
+    if (nameOverride) setForm((f: any) => ({ ...f, name }));
+    // Stable identity. From a deep link this is the player's Discord name; sanitize
+    // to the id charset the backend accepts ([A-Za-z0-9_.-]). Fallback: random.
+    const uid = (userIdOverride || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64);
     try {
-      localStorage.setItem("sa.form", JSON.stringify(form));
+      localStorage.setItem("sa.form", JSON.stringify({ ...form, name }));
     } catch {
       /* ignore */
     }
     await invoke("connect", {
       server: ws,
       room,
-      userId: crypto.randomUUID().slice(0, 8),
-      name: form.name.trim() || "Commander",
+      userId: uid || crypto.randomUUID().slice(0, 8),
+      name,
       token: token || null,
       certSha256: null,
       inputDevice: audioCfg.input || null,
@@ -509,6 +530,74 @@ export default function App() {
     }
   };
 
+  // ── Direct-link config (Fleetplanner / squadlink:// deep link) ──────────────
+  // Format: squadlink://connect?ws=<wss url>&room=<id>&token=<hex>&name=<>&uid=<>
+  // Carries the full creds so neither link nor PIN entry is needed. `uid` is the
+  // player's stable identity (e.g. Discord name); `name` is the display name.
+  const parseDirectLink = (raw: string): { ws: string; room: string; token: string | null; name?: string; uid?: string } | null => {
+    try {
+      const u = new URL(raw.trim());
+      if (u.protocol !== "squadlink:") return null;
+      const ws = u.searchParams.get("ws");
+      const room = u.searchParams.get("room");
+      if (!ws || !room) return null;
+      return {
+        ws,
+        room,
+        token: u.searchParams.get("token"),
+        name: u.searchParams.get("name") || undefined,
+        uid: u.searchParams.get("uid") || undefined,
+      };
+    } catch {
+      return null;
+    }
+  };
+  const connectDirect = async (raw: string) => {
+    const cfg = parseDirectLink(raw);
+    if (!cfg) {
+      setLog("Ungültiger SquadLink-Direktlink");
+      return;
+    }
+    setConnecting(true);
+    setLog("");
+    setChat([]);
+    setSessionInfo(null);
+    try {
+      await connectWith(cfg.ws, cfg.room, cfg.token, cfg.name, cfg.uid);
+    } catch (e) {
+      setLog(String(e));
+      setConnecting(false);
+    }
+  };
+  const toggleFpMode = () => {
+    setFpMode((v) => {
+      const nv = !v;
+      try {
+        localStorage.setItem("sa.fpmode", nv ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return nv;
+    });
+  };
+
+  // squadlink:// deep link (from Rust) → auto-connect with the carried creds.
+  const connectDirectRef = useRef(connectDirect);
+  connectDirectRef.current = connectDirect;
+  useEffect(() => {
+    const off = listen<string>("deeplink", (e) => connectDirectRef.current(e.payload));
+    // Cold start: app launched by a squadlink:// link (event fired before this
+    // listener existed) → drain the stashed URL from Rust.
+    invoke<string | null>("take_pending_deeplink")
+      .then((url) => {
+        if (url) connectDirectRef.current(url);
+      })
+      .catch(() => {});
+    return () => {
+      off.then((f) => f());
+    };
+  }, []);
+
   const ptt = () => invoke("toggle_transmit");
   const send = () => {
     const t = msg.trim();
@@ -538,12 +627,24 @@ export default function App() {
       {settingsTab === "simple" && (
         <>
           <label>🎤 Mikrofon</label>
-          <select value={audioCfg.input} onChange={(e) => saveAudioCfg({ ...audioCfg, input: e.target.value })}>
+          <select
+            value={audioCfg.input}
+            onChange={(e) => {
+              saveAudioCfg({ ...audioCfg, input: e.target.value });
+              invoke("set_input_device", { name: e.target.value || null }).catch(() => {});
+            }}
+          >
             <option value="">Standard-Gerät</option>
             {devices.inputs.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
           <label>🔊 Ausgabe</label>
-          <select value={audioCfg.output} onChange={(e) => saveAudioCfg({ ...audioCfg, output: e.target.value })}>
+          <select
+            value={audioCfg.output}
+            onChange={(e) => {
+              saveAudioCfg({ ...audioCfg, output: e.target.value });
+              invoke("set_output_device", { name: e.target.value || null }).catch(() => {});
+            }}
+          >
             <option value="">Standard-Gerät</option>
             {devices.outputs.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
@@ -553,7 +654,7 @@ export default function App() {
             <button className="btn sm" onClick={rebindPtt} disabled={capturing}>Neu belegen</button>
           </div>
           <div className="sub2" style={{ opacity: 0.7 }}>
-            Push-to-Talk: jede Taste oder Maustaste (RAW). Geräteänderung wird beim nächsten Verbinden aktiv.
+            Push-to-Talk: jede Taste oder Maustaste (RAW). Geräteänderung wirkt sofort (auch während eines Gesprächs).
           </div>
 
           <label>🎧 Mikrofon-Test</label>
@@ -676,7 +777,7 @@ export default function App() {
   );
 
   const updateBanner =
-    update && showUpdate ? (
+    update && showUpdate && !storeBuild ? (
       <div className="updbar">
         <div className="updhead">
           <b>⬆ Neue Version {update.version} verfügbar</b>
@@ -736,9 +837,34 @@ export default function App() {
               {connecting ? "VERBINDE…" : "BEITRETEN"}
             </button>
           </div>
+          {fpMode && (
+            <div className="fpbox">
+              <div className="sub2">
+                <b>Fleetplanner-Modus</b> — Direkt-Link einfügen und verbinden. Kein Code, keine PIN.
+              </div>
+              <label>SquadLink-Direktlink</label>
+              <input
+                value={directLink}
+                onChange={(e) => setDirectLink(e.target.value)}
+                placeholder="squadlink://connect?ws=…&room=…&token=…"
+                className="mono"
+                spellCheck={false}
+              />
+              <button className="btn primary" onClick={() => connectDirect(directLink)} disabled={connecting || !directLink.trim()}>
+                {connecting ? "VERBINDE…" : "DIREKT VERBINDEN"}
+              </button>
+            </div>
+          )}
           {log && <div className="err">{log}</div>}
           {encFooter}
         </div>
+        <button
+          className={`fpcorner ${fpMode ? "on" : ""}`}
+          title={fpMode ? "Fleetplanner-Modus: an" : "Fleetplanner-Modus"}
+          onClick={toggleFpMode}
+        >
+          ⛴
+        </button>
       </div>
     );
   }

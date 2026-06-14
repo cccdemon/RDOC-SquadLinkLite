@@ -96,6 +96,7 @@ pub struct Engine {
     stop: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
     dtx: Arc<AtomicBool>,
+    dev_tx: std::sync::mpsc::Sender<audio::DevCmd>,
 }
 impl Drop for Engine {
     fn drop(&mut self) {
@@ -132,6 +133,14 @@ impl Engine {
     /// Mic self-check: route the (processed) mic to local playback.
     pub fn set_monitor(&self, on: bool) {
         self.monitor.store(on, Ordering::SeqCst);
+    }
+    /// Switch the capture device LIVE (no reconnect). `None` = system default.
+    pub fn set_input_device(&self, name: Option<String>) {
+        let _ = self.dev_tx.send(audio::DevCmd::SetInput(name));
+    }
+    /// Switch the playback device LIVE (no reconnect). `None` = system default.
+    pub fn set_output_device(&self, name: Option<String>) {
+        let _ = self.dev_tx.send(audio::DevCmd::SetOutput(name));
     }
     /// Low-bandwidth mode: drop Opus to ~14 kbps + app-level DTX (silence = no
     /// packets). Off = Opus auto bitrate, DTX off.
@@ -174,6 +183,7 @@ pub(crate) fn setup_audio(
     Arc<AtomicBool>, // shutdown flag for the audio threads
     Arc<AtomicU32>,  // encoder bitrate (0 = auto; low-bw mode)
     Arc<AtomicBool>, // app-level DTX toggle
+    std::sync::mpsc::Sender<audio::DevCmd>, // live input/output device switch
 )> {
     let cap: Buf = Arc::new(Mutex::new(VecDeque::new()));
     let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
@@ -185,20 +195,28 @@ pub(crate) fn setup_audio(
     let stop = Arc::new(AtomicBool::new(false));
     let bitrate = Arc::new(AtomicU32::new(0)); // 0 = Opus auto
     let dtx = Arc::new(AtomicBool::new(false));
+    // Live device rates: the device thread publishes the active rate here and the
+    // encode/mixer resamplers retune when it changes (live device switch).
+    let in_rate = Arc::new(AtomicU32::new(audio::OPUS_SR));
+    let out_rate = Arc::new(AtomicU32::new(audio::OPUS_SR));
+    let (dev_tx, dev_rx) = std::sync::mpsc::channel::<audio::DevCmd>();
 
     let (rate_tx, rate_rx) = std::sync::mpsc::channel::<(u32, u32)>();
     {
-        let (cap, play, stop) = (cap.clone(), play.clone(), stop.clone());
-        std::thread::spawn(move || audio::run_devices(cap, play, rate_tx, in_name, out_name, stop));
+        let (cap, play, stop, in_rate, out_rate) =
+            (cap.clone(), play.clone(), stop.clone(), in_rate.clone(), out_rate.clone());
+        std::thread::spawn(move || {
+            audio::run_devices(cap, play, rate_tx, in_name, out_name, stop, in_rate, out_rate, dev_rx)
+        });
     }
-    let (in_rate, out_rate) = rate_rx.recv()?;
+    rate_rx.recv()?; // block until the devices are open (rates live in the atomics)
 
     let (opus_tx, opus_rx) = mpsc::unbounded_channel::<Bytes>();
     let (decode_tx, decode_rx) = mpsc::unbounded_channel::<(String, Bytes)>();
     {
-        let (cap, transmit, dsp_cfg, mix, monitor, stop, bitrate, dtx) = (
+        let (cap, transmit, dsp_cfg, mix, monitor, stop, bitrate, dtx, in_rate) = (
             cap.clone(), transmit.clone(), dsp_cfg.clone(), mix.clone(),
-            monitor.clone(), stop.clone(), bitrate.clone(), dtx.clone(),
+            monitor.clone(), stop.clone(), bitrate.clone(), dtx.clone(), in_rate.clone(),
         );
         std::thread::spawn(move || {
             audio::encode_loop(cap, in_rate, transmit, opus_tx, dsp_cfg, mix, monitor, stop, bitrate, dtx)
@@ -213,7 +231,7 @@ pub(crate) fn setup_audio(
         std::thread::spawn(move || audio::mixer_loop(mix, play, out_rate, gains, stop));
     }
 
-    Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx))
+    Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx))
 }
 
 struct Member {
@@ -256,7 +274,7 @@ fn emit_roster(
 pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx) =
+    let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx) =
         setup_audio(cfg.input_device.clone(), cfg.output_device.clone())?;
 
     let api = Arc::new(build_api()?);
@@ -486,5 +504,5 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         }
     });
 
-    Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, monitor, stop, bitrate, dtx })
+    Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, monitor, stop, bitrate, dtx, dev_tx })
 }

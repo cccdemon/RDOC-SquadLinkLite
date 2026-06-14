@@ -189,8 +189,21 @@ fn build_output(p: &Picked, play: Buf) -> Result<cpal::Stream> {
     })
 }
 
+/// Live device-switch request to the device thread. `None` = system default.
+pub enum DevCmd {
+    SetInput(Option<String>),
+    SetOutput(Option<String>),
+}
+
 /// Device thread: pick devices, build + play streams, report rates, then park
 /// (cpal streams must outlive the program and stay off the async runtime).
+///
+/// Stays alive and watches `dev_rx` so the input/output device can be switched
+/// LIVE (without a reconnect): on a request it drops the affected stream, re-
+/// opens the new device, and publishes its sample rate via `in_rate`/`out_rate`
+/// so the encode/mixer resamplers retune. A new device's rate can differ (e.g.
+/// 48k vs 192k), which is why the rates are shared atomics, not constructor args.
+#[allow(clippy::too_many_arguments)]
 pub fn run_devices(
     cap: Buf,
     play: Buf,
@@ -198,6 +211,9 @@ pub fn run_devices(
     in_name: Option<String>,
     out_name: Option<String>,
     stop: Arc<AtomicBool>,
+    in_rate: Arc<AtomicU32>,
+    out_rate: Arc<AtomicU32>,
+    dev_rx: std::sync::mpsc::Receiver<DevCmd>,
 ) {
     let host = cpal::default_host();
     let in_want = in_name.or_else(|| std::env::var("IN_DEVICE").ok());
@@ -211,13 +227,51 @@ pub fn run_devices(
         outp.device.name().unwrap_or_default(),
         outp.rate
     );
-    let _ = rate_tx.send((inp.rate, outp.rate));
-    let in_s = build_input(&inp, cap).expect("input stream");
-    let out_s = build_output(&outp, play).expect("output stream");
-    in_s.play().expect("play input");
-    out_s.play().expect("play output");
+    in_rate.store(inp.rate, Ordering::SeqCst);
+    out_rate.store(outp.rate, Ordering::SeqCst);
+    let _ = rate_tx.send((inp.rate, outp.rate)); // unblocks setup_audio once devices are open
+    let mut in_s = Some(build_input(&inp, cap.clone()).expect("input stream"));
+    let mut out_s = Some(build_output(&outp, play.clone()).expect("output stream"));
+    in_s.as_ref().unwrap().play().expect("play input");
+    out_s.as_ref().unwrap().play().expect("play output");
+
     // Hold the streams alive until shutdown; dropping them stops capture/playback.
     while !stop.load(Ordering::SeqCst) {
+        while let Ok(cmd) = dev_rx.try_recv() {
+            match cmd {
+                // Build + start the NEW stream before dropping the old one: if the
+                // new device fails (unsupported format, unplugged, …) the current
+                // device keeps running instead of going permanently silent.
+                DevCmd::SetInput(name) => {
+                    let want = name.or_else(|| std::env::var("IN_DEVICE").ok());
+                    match choose(&host, true, want.as_deref()) {
+                        Ok(p) => match build_input(&p, cap.clone()) {
+                            Ok(s) if s.play().is_ok() => {
+                                in_rate.store(p.rate, Ordering::SeqCst);
+                                in_s = Some(s); // replaces (drops) the old stream now that the new one runs
+                            }
+                            Ok(_) => eprintln!("input switch: new device won't start; keeping current"),
+                            Err(e) => eprintln!("input rebuild failed: {e}; keeping current"),
+                        },
+                        Err(e) => eprintln!("input switch failed: {e}; keeping current"),
+                    }
+                }
+                DevCmd::SetOutput(name) => {
+                    let want = name.or_else(|| std::env::var("OUT_DEVICE").ok());
+                    match choose(&host, false, want.as_deref()) {
+                        Ok(p) => match build_output(&p, play.clone()) {
+                            Ok(s) if s.play().is_ok() => {
+                                out_rate.store(p.rate, Ordering::SeqCst);
+                                out_s = Some(s); // replaces (drops) the old stream now that the new one runs
+                            }
+                            Ok(_) => eprintln!("output switch: new device won't start; keeping current"),
+                            Err(e) => eprintln!("output rebuild failed: {e}; keeping current"),
+                        },
+                        Err(e) => eprintln!("output switch failed: {e}; keeping current"),
+                    }
+                }
+            }
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -329,7 +383,7 @@ impl Dsp {
 #[allow(clippy::too_many_arguments)]
 pub fn encode_loop(
     cap: Buf,
-    in_rate: u32,
+    in_rate: Arc<AtomicU32>, // live capture rate (changes on a device switch)
     transmit: Arc<AtomicBool>,
     opus_tx: UnboundedSender<Bytes>,
     dsp_cfg: Arc<Mutex<DspConfig>>,
@@ -343,7 +397,8 @@ pub fn encode_loop(
     let mut enc = Encoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip)
         .expect("opus encoder");
     let mut last_br = u32::MAX;
-    let mut up = Resampler::new(in_rate, OPUS_SR);
+    let mut cur_rate = in_rate.load(Ordering::SeqCst);
+    let mut up = Resampler::new(cur_rate, OPUS_SR);
     let mut den = DenoiseState::new();
     let mut dsp = Dsp::new();
     let mut buf48: Vec<f32> = Vec::new(); // post-resample, −1..1
@@ -355,6 +410,12 @@ pub fn encode_loop(
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
+        }
+        // Capture device switched → its rate may differ; retune the resampler.
+        let r = in_rate.load(Ordering::SeqCst);
+        if r != cur_rate {
+            cur_rate = r;
+            up = Resampler::new(cur_rate, OPUS_SR);
         }
         let chunk: Vec<f32> = {
             let mut b = cap.lock().unwrap();
@@ -395,7 +456,9 @@ pub fn encode_loop(
                     b.pop_front(); // ~200ms cap
                 }
             }
-            if transmit.load(Ordering::SeqCst) {
+            // Mic self-check is a LOCAL loopback only: while monitoring, never
+            // encode/send to peers (otherwise the room hears the test).
+            if transmit.load(Ordering::SeqCst) && !monitor.load(Ordering::SeqCst) {
                 // Live bitrate (low-bandwidth mode).
                 let br = bitrate.load(Ordering::SeqCst);
                 if br != last_br {
@@ -444,13 +507,22 @@ pub fn decode_loop(mut rx: UnboundedReceiver<(String, Bytes)>, mix: MixMap) {
 /// granularity) → the ring drains → underrun crackle; producing on demand
 /// decouples from sleep precision. Sum is soft-limited (tanh) so several
 /// simultaneous speakers can't hard-clip.
-pub fn mixer_loop(mix: MixMap, play: Buf, out_rate: u32, gains: Arc<Gains>, stop: Arc<AtomicBool>) {
-    let mut down = Resampler::new(OPUS_SR, out_rate);
-    let target = out_rate as usize * 60 / 1000; // ~60ms buffered (absorbs OS jitter)
-    let cap = out_rate as usize / 2; // hard cap ~0.5s
+pub fn mixer_loop(mix: MixMap, play: Buf, out_rate: Arc<AtomicU32>, gains: Arc<Gains>, stop: Arc<AtomicBool>) {
+    let mut cur_rate = out_rate.load(Ordering::SeqCst);
+    let mut down = Resampler::new(OPUS_SR, cur_rate);
+    let mut target = cur_rate as usize * 60 / 1000; // ~60ms buffered (absorbs OS jitter)
+    let mut cap = cur_rate as usize / 2; // hard cap ~0.5s
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
+        }
+        // Output device switched → its rate may differ; retune the resampler.
+        let r = out_rate.load(Ordering::SeqCst);
+        if r != cur_rate {
+            cur_rate = r;
+            down = Resampler::new(OPUS_SR, cur_rate);
+            target = cur_rate as usize * 60 / 1000;
+            cap = cur_rate as usize / 2;
         }
         // Refill the playback ring up to `target`.
         loop {

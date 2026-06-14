@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX package manifest for RDOC SquadLink Lite (Microsoft Store, Weg B).
+  Tauri has no MSIX bundle target → this is packed manually with makeappx.
+  See docs/MSIX-PACKAGING.md.
+
+  PLACEHOLDERS to fill from Partner Center (App management → Product identity):
+    - Identity Name      → "Package/Identity/Name"
+    - Identity Publisher → "Package/Identity/Publisher" (CN=...)
+    - PublisherDisplayName
+  Version: 4 parts, last MUST be 0 (Store reserves the revision). Keep the first
+  three in sync with tauri.conf.json / Cargo.toml.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="raumdock.org.RDOC-SquadLinkLite"
+    Publisher="CN=1889C9C8-C357-4F28-BCFC-DFE786BD3996"
+    Version="0.1.27.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <!-- MUST exactly match a reserved app name in Partner Center. -->
+    <DisplayName>RDOC-SquadLink Lite</DisplayName>
+    <PublisherDisplayName>raumdock.org</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="de-DE" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application Id="SquadLinkLite"
+      Executable="rdoc-squadlink-lite.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="RDOC SquadLink Lite"
+        Description="P2P Voice + Chat für Crews — Ende-zu-Ende verschlüsselt."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- squadlink:// deep link. In a packaged build this REPLACES the registry
+             scheme; main.rs skips register_all() when running inside the package. -->
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="squadlink">
+            <uap:DisplayName>SquadLink Lite</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <!-- Schema requires Capability/rescap:Capability BEFORE DeviceCapability. -->
+  <Capabilities>
+    <!-- Full-trust Win32 desktop app. -->
+    <rescap:Capability Name="runFullTrust" />
+    <!-- WebRTC P2P + signaling: outbound + inbound over internet and LAN. -->
+    <Capability Name="internetClientServer" />
+    <Capability Name="privateNetworkClientServer" />
+    <!-- Microphone for voice chat (triggers the OS consent prompt). -->
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

@@ -1,0 +1,3 @@
+# MSIX build artifacts (produced by pack.ps1) — never commit.
+staging/
+*.msix

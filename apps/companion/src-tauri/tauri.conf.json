@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RDOC SquadLink Lite",
-  "version": "0.1.25",
+  "version": "0.1.27",
   "identifier": "org.raumdock.squadlink-lite",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -23,8 +23,16 @@
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://squadlink.raumdock.org wss://squadlink.raumdock.org https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["squadlink"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "publisher": "Raumdock",
     "targets": ["nsis", "msi"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.png"]
   }

@@ -2,6 +2,54 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.27 — 2026-06-11
+
+### Added
+- **Push-to-talk now works while a game is focused.** The global PTT listener moved from a
+  `WH_KEYBOARD_LL` hook (rdev) to the Windows **Raw Input** API (`RIDEV_INPUTSINK`), which is
+  delivered straight off the device stack and keeps firing under a fullscreen / elevated game
+  (e.g. Star Citizen) where the low-level hook was blocked by UIPI. Saved key/mouse bindings
+  (default `F8`) are unchanged.
+- **`squadlink://` deep link + Fleetplanner-Modus.** The app can be configured by a direct link
+  carrying the full connection creds (`squadlink://connect?ws=…&room=…&token=…&name=…&uid=…`) — no
+  code or PIN entry needed. `uid` sets the stable identity (e.g. the player's Discord name); `name`
+  is the display name. Links auto-connect on cold start (drained from Rust on mount) and while
+  running (single-instance forward). A hidden toggle bottom-right reveals a manual direct-link
+  field for testing. Link format documented in `docs/FLEETPLANNER-DEEPLINK.md`.
+
+### Fixed
+- **Switching audio device mid-session no longer risks going silent.** The new capture/playback
+  stream is now built and started **before** the old one is dropped; if the new device fails
+  (unsupported format, unplugged), the current device keeps running instead of leaving you muted.
+
+### Packaging (Microsoft Store)
+- **MSIX/Store build support.** The app detects at runtime whether it runs inside an MSIX package:
+  it then skips the registry-based deep-link registration (the package manifest declares the
+  `squadlink` protocol) and hides the self-update prompt (the Store handles updates). Added
+  `apps/companion/msix/AppxManifest.xml`, a one-command `pack.ps1` (build → assets → makeappx →
+  optional self-sign), and packaging/submission docs under `docs/`.
+- **MSI now writes a proper "Add/Remove Programs" entry** (Publisher "Raumdock" + app name +
+  version) so Microsoft Store package validation can identify the install.
+- **Open the download page via `ShellExecuteW` instead of shelling out to `cmd.exe`** — removes
+  the cmd.exe reference that tripped the Store's optional "blocked executable" check (WACK).
+
+## v0.1.26 — 2026-06-09
+
+### Changed
+- **Audio device selection now takes effect immediately** — picking a different microphone or
+  output switches the live capture/playback stream without a reconnect (previously the choice was
+  read only when (re)connecting, so changing it mid-session appeared to do nothing). The
+  encode/mixer resamplers retune to the new device's sample rate.
+
+### Fixed
+- **Mic self-check ("Eigenwiedergabe") is now a local loopback only.** While testing, the
+  processed mic is routed to your own playback and is no longer encoded/sent to peers, even
+  if PTT is held — the room no longer hears your test.
+- **Leaving and re-joining the same session restored two-way audio.** On a rejoin the existing
+  peer (the glare offerer) renegotiated on its old, dead PeerConnection — SDP swapped but ICE
+  never restarted, so no media flowed in either direction. The offerer now tears down and
+  rebuilds a fresh PC (restarting ICE), mirroring the rekey handshake.
+
 ## v0.1.25 — 2026-06-08
 
 ### Fixed

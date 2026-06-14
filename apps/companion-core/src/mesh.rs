@@ -191,12 +191,28 @@ impl Mesh {
         Ok(())
     }
 
-    /// Saw a peer (roster or peer-joined): ensure a PC; offer if we're the
-    /// smaller id (glare rule).
+    /// Saw a peer (roster or peer-joined): establish/refresh the link. Only the
+    /// smaller id offers (glare rule).
+    ///
+    /// A peer can appear here for a true (re)join — their process restarted, so
+    /// their old PC is gone — or for a bare signaling reconnect with the mesh
+    /// still alive. In both cases the offerer must REBUILD its PC: reusing the
+    /// old one only renegotiates SDP without restarting ICE, so after a rejoin
+    /// the offerer's half stays wired to a dead transport → no media. Tearing it
+    /// down first restarts ICE; on a signaling reconnect it's a harmless rebuild.
+    /// The answerer keeps/creates a PC and lets `on_offer` swap in a fresh one
+    /// when the offer arrives (it detects an already-negotiated PC). This mirrors
+    /// `rekey()`'s smaller-side-re-offers handshake, so each pair gets exactly
+    /// one offerer.
     pub async fn on_peer(&mut self, peer: &str) -> Result<()> {
-        self.ensure(peer).await?;
         if self.my_id.as_str() < peer {
+            if let Some(old) = self.peers.remove(peer) {
+                let _ = old.pc.close().await;
+            }
+            self.ensure(peer).await?;
             self.offer(peer).await?;
+        } else {
+            self.ensure(peer).await?;
         }
         Ok(())
     }

@@ -1,6 +1,6 @@
 [package]
 name = "rdoc-squadlink-lite"
-version = "0.1.25"
+version = "0.1.27"
 edition = "2021"
 
 [build-dependencies]
@@ -13,5 +13,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
-# Raw global input (keyboard + mouse buttons) for the configurable PTT key.
-rdev = "0.5"
+# Deep link (squadlink://) config + single-instance forwarding of the launch URL.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = "2"
+
+# Configurable PTT via Windows Raw Input — keeps firing while a fullscreen /
+# elevated game holds the foreground (a WH_KEYBOARD_LL hook does not).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input",
+  "Win32_UI_Shell",
+  "Win32_Storage_Packaging_Appx",
+] }
