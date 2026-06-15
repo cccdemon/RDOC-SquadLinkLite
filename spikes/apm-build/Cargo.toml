@@ -1,0 +1,9 @@
+[package]
+name = "apm-build-spike"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+webrtc-audio-processing = { version = "0.4", features = ["bundled"] }
+
+[workspace]

@@ -87,6 +87,14 @@ pub fn switcher(path: &str, cur: Lang) -> String {
 
 // ── Pages ────────────────────────────────────────────────────────────────────
 
+/// Primary "Get it from Microsoft Store" button with an inline Microsoft logo
+/// (inline SVG → no external image, works under the page CSP).
+fn store_badge(label: &str) -> String {
+    format!(
+        r##"<a class="dl store" href="{STORE_URL}"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="10" height="10" fill="#f25022"/><rect x="13" y="1" width="10" height="10" fill="#7fba00"/><rect x="1" y="13" width="10" height="10" fill="#00a4ef"/><rect x="13" y="13" width="10" height="10" fill="#ffb900"/></svg>{label}</a>"##
+    )
+}
+
 pub fn home(l: Lang, base: &str) -> (&'static str, String) {
     let links = |raumdock: &str, fleet: &str, src: &str, legal: &str, priv_: &str, lic: &str| {
         format!(
@@ -114,9 +122,11 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>Mates open the link, install the app, enter code and PIN.</li>
 <li>The session stays alive while members are connected (max. 24&nbsp;hours).</li>
 </ul>
-<p><a class="dl" href="{base}/download/">Download the app (Windows)</a></p>
-<p class="muted">Prototype, unsigned. Windows SmartScreen: "More info" then "Run anyway".</p>
+<p>{store}</p>
+<p><a class="dl" href="{base}/download/">Direct download (unsigned installer)</a></p>
+<p class="muted">The Microsoft Store version is signed and shows no warning. The direct installer is unsigned → Windows SmartScreen warns: "More info" then "Run anyway".</p>
 {links}"#,
+                store = store_badge("Get it from Microsoft Store"),
                 links = links("raumdock.org", "RDOC Fleet Manager", "Source on GitHub", "Legal notice", "Privacy", "License")
             ),
         ),
@@ -132,9 +142,11 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>Mitspieler öffnen den Link, installieren die App, geben Code und PIN ein.</li>
 <li>Die Session bleibt bestehen, solange Teilnehmer verbunden sind (maximal 24&nbsp;Stunden).</li>
 </ul>
-<p><a class="dl" href="{base}/download/">App herunterladen (Windows)</a></p>
-<p class="muted">Prototyp, unsigniert. Windows SmartScreen: „Weitere Informationen" und „Trotzdem ausführen".</p>
+<p>{store}</p>
+<p><a class="dl" href="{base}/download/">Direkter Download (unsigniertes Installationsprogramm)</a></p>
+<p class="muted">Die Microsoft-Store-Version ist signiert und warnt nicht. Der direkte Installer ist unsigniert → Windows SmartScreen warnt: „Weitere Informationen" → „Trotzdem ausführen".</p>
 {links}"#,
+                store = store_badge("Im Microsoft Store holen"),
                 links = links("raumdock.org", "RDOC Fleetmanager", "Quellcode auf GitHub", "Impressum", "Datenschutz", "Lizenz")
             ),
         ),
@@ -150,9 +162,11 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>I compagni aprono il link, installano l'app, inseriscono codice e PIN.</li>
 <li>La sessione resta attiva finché ci sono partecipanti connessi (max 24&nbsp;ore).</li>
 </ul>
-<p><a class="dl" href="{base}/download/">Scarica l'app (Windows)</a></p>
-<p class="muted">Prototipo, non firmato. Windows SmartScreen: "Ulteriori informazioni" e "Esegui comunque".</p>
+<p>{store}</p>
+<p><a class="dl" href="{base}/download/">Download diretto (installer non firmato)</a></p>
+<p class="muted">La versione del Microsoft Store è firmata e non mostra avvisi. L'installer diretto non è firmato → Windows SmartScreen avvisa: "Ulteriori informazioni" → "Esegui comunque".</p>
 {links}"#,
+                store = store_badge("Scarica dal Microsoft Store"),
                 links = links("raumdock.org", "RDOC Fleet Manager", "Codice su GitHub", "Note legali", "Privacy", "Licenza")
             ),
         ),
@@ -168,9 +182,11 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>Los compañeros abren el enlace, instalan la app e introducen código y PIN.</li>
 <li>La sesión permanece activa mientras haya participantes conectados (máx. 24&nbsp;horas).</li>
 </ul>
-<p><a class="dl" href="{base}/download/">Descargar la app (Windows)</a></p>
-<p class="muted">Prototipo, sin firmar. Windows SmartScreen: "Más información" y "Ejecutar de todas formas".</p>
+<p>{store}</p>
+<p><a class="dl" href="{base}/download/">Descarga directa (instalador sin firmar)</a></p>
+<p class="muted">La versión del Microsoft Store está firmada y no muestra avisos. El instalador directo no está firmado → Windows SmartScreen avisa: "Más información" → "Ejecutar de todas formas".</p>
 {links}"#,
+                store = store_badge("Descargar de Microsoft Store"),
                 links = links("raumdock.org", "RDOC Fleet Manager", "Código en GitHub", "Aviso legal", "Privacidad", "Licencia")
             ),
         ),
@@ -186,9 +202,11 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>Les coéquipiers ouvrent le lien, installent l'app, saisissent le code et le PIN.</li>
 <li>La session reste active tant que des participants sont connectés (max. 24&nbsp;heures).</li>
 </ul>
-<p><a class="dl" href="{base}/download/">Télécharger l'app (Windows)</a></p>
-<p class="muted">Prototype, non signé. Windows SmartScreen : « Informations complémentaires » puis « Exécuter quand même ».</p>
+<p>{store}</p>
+<p><a class="dl" href="{base}/download/">Téléchargement direct (installeur non signé)</a></p>
+<p class="muted">La version du Microsoft Store est signée et n'affiche aucun avertissement. L'installeur direct n'est pas signé → Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».</p>
 {links}"#,
+                store = store_badge("Obtenir sur le Microsoft Store"),
                 links = links("raumdock.org", "RDOC Fleet Manager", "Code sur GitHub", "Mentions légales", "Confidentialité", "Licence")
             ),
         ),

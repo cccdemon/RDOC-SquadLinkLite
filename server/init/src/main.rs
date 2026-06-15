@@ -373,7 +373,8 @@ ul{padding-left:1.25rem;margin:.5rem 0}
 .links a{display:block;margin:.25rem 0}
 .links span{display:block;margin:.25rem 0;color:#9aa3ad}
 .dl{display:inline-block;margin:.5rem 0;padding:.5rem .9rem;border:1px solid #3a414e;border-radius:5px;text-decoration:none;color:#dfe3e8}
-.dl.store{border-color:#7fb0ff;background:#13203a;color:#cfe0ff;font-weight:600}
+.dl.store{display:inline-flex;align-items:center;gap:.5rem;border-color:#7fb0ff;background:#13203a;color:#cfe0ff;font-weight:600;padding:.6rem 1.1rem;font-size:1.05rem}
+.dl.store svg{display:block}
 .code{font-size:1.5rem;font-weight:700;letter-spacing:.1em;background:#0b1626;border:1px solid #1e293b;border-radius:8px;padding:.5rem 1rem;display:inline-block}
 .lang{margin-left:auto;display:flex;gap:.45rem}
 .lang a{color:#9aa3ad;font-size:.78rem;text-decoration:none}
