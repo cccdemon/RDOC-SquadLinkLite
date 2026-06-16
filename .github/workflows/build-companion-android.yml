@@ -1,0 +1,141 @@
+name: Build SquadLink Lite (Android)
+
+# Builds the RDOC SquadLink Lite app for Android via Tauri 2 mobile.
+#
+# Strategy: `tauri android init` runs fresh in CI (the gen/android scaffold is
+# NOT committed), then the AndroidManifest is patched to request RECORD_AUDIO +
+# INTERNET (the voice client needs both), then we build a DEBUG-signed APK that
+# is directly installable for testing.
+#
+# Release signing (AAB for Play Store) needs a real keystore — see the commented
+# "release" section + the docs. Until then this produces an unsigned-for-store,
+# debug-signed-for-sideload APK artifact.
+
+on:
+  push:
+    branches: [main]
+    tags: ["squadlink-lite-v*"]
+    paths:
+      - "apps/companion/**"
+      - "apps/companion-core/**"
+      - "crates/**"
+      - ".github/workflows/build-companion-android.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      # Android API/build target ABIs. arm64 + armv7 cover phones; x86_64 covers
+      # the emulator. Drop i686 (legacy 32-bit emulator) to speed builds.
+      NDK_VERSION: "26.3.11579264"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/companion/pnpm-lock.yaml
+
+      - name: Setup Java (Temurin 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Setup Rust (stable) + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/companion/src-tauri -> target
+          key: android
+
+      - name: Install frontend deps (reproducible)
+        working-directory: apps/companion
+        run: pnpm install --frozen-lockfile
+
+      - name: Initialize Android project (gen/android)
+        working-directory: apps/companion
+        run: pnpm tauri android init
+
+      # The voice client needs the microphone and the network. Tauri's generated
+      # manifest has neither by default — inject them idempotently.
+      - name: Add RECORD_AUDIO + INTERNET permissions
+        working-directory: apps/companion
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          for perm in RECORD_AUDIO INTERNET MODIFY_AUDIO_SETTINGS; do
+            if ! grep -q "android.permission.$perm" "$MANIFEST"; then
+              sed -i "0,/<application/s//<uses-permission android:name=\"android.permission.$perm\" \/>\n\n    <application/" "$MANIFEST"
+            fi
+          done
+          echo "----- manifest permissions -----"
+          grep uses-permission "$MANIFEST" || true
+
+      - name: Build Android APK (debug-signed, installable)
+        working-directory: apps/companion
+        run: pnpm tauri android build --apk --debug --target aarch64 armv7 x86_64
+
+      # ── Release signing (uncomment + add secrets to ship to Play Store) ────────
+      # - name: Build Android AAB (release)
+      #   working-directory: apps/companion
+      #   env:
+      #     ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      #     ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      #     ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      #     ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      #   run: |
+      #     echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+      #     # configure src-tauri/gen/android/keystore.properties, then:
+      #     pnpm tauri android build --aab
+
+      # SHA-256 of every APK → users can verify the sideload matches CI.
+      - name: Generate SHA-256 checksums
+        if: always()
+        working-directory: apps/companion/src-tauri/gen/android/app/build/outputs/apk
+        run: |
+          : > SHA256SUMS-android.txt
+          find . -type f -name '*.apk' | sort | while read -r f; do
+            sha256sum "$f" | tee -a SHA256SUMS-android.txt
+            sha256sum "$f" | awk '{print $1}' > "$f.sha256"
+          done
+          echo "----- SHA256SUMS-android.txt -----"
+          cat SHA256SUMS-android.txt
+
+      - name: Attach checksums to Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: apps/companion/src-tauri/gen/android/app/build/outputs/apk
+        run: gh release upload "${{ github.ref_name }}" SHA256SUMS-android.txt --clobber --repo "${{ github.repository }}"
+
+      - name: Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdoc-squadlink-lite-android
+          if-no-files-found: warn
+          path: |
+            apps/companion/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            apps/companion/src-tauri/gen/android/app/build/outputs/apk/**/*.sha256
+            apps/companion/src-tauri/gen/android/app/build/outputs/apk/SHA256SUMS-android.txt
