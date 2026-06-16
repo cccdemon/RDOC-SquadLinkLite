@@ -2,7 +2,7 @@
 //! Tauri shell for RDOC SquadLink Lite. Thin layer over companion-core: commands
 //! drive the engine, engine state is forwarded to the webview as "ui" events.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use companion_core::serverless::Serverless;
@@ -23,12 +23,16 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 // via `take_pending_deeplink` on mount, since a Rust-side emit at startup races
 // ahead of the JS event listener and would be dropped.
 static PENDING_DEEPLINK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-static PTT_BINDING: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-static PTT_CAPTURE: AtomicBool = AtomicBool::new(false);
-static PTT_DOWN: AtomicBool = AtomicBool::new(false);
+// Two independent PTT bindings (slots 0 + 1). Holding EITHER transmits — some
+// users want a redundant key / mouse button / gamepad trigger. Default slot 0 =
+// F8, slot 1 unset. Codes: keyboard "F8"/"KeyR", "Mouse:Left", gamepad "Pad:N".
+static PTT_BINDINGS: OnceLock<Mutex<[Option<String>; 2]>> = OnceLock::new();
+static PTT_CAPTURE_SLOT: AtomicI32 = AtomicI32::new(-1); // -1 idle, 0/1 = capturing slot
+static PTT_SLOT_DOWN: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+static PTT_COMBINED: AtomicBool = AtomicBool::new(false); // last emitted transmit state
 
-fn ptt_binding() -> &'static Mutex<Option<String>> {
-    PTT_BINDING.get_or_init(|| Mutex::new(Some("F8".into())))
+fn ptt_bindings() -> &'static Mutex<[Option<String>; 2]> {
+    PTT_BINDINGS.get_or_init(|| Mutex::new([Some("F8".into()), None]))
 }
 
 /// Process one raw key/mouse edge. In capture mode the next press becomes the
@@ -36,25 +40,41 @@ fn ptt_binding() -> &'static Mutex<Option<String>> {
 /// toggle transmit via the `ptt` event. De-duped so key auto-repeat (and
 /// duplicate button flags in one packet) don't spam the IPC channel.
 fn handle_raw(code: String, down: bool) {
-    if PTT_CAPTURE.load(Ordering::SeqCst) {
+    let cap = PTT_CAPTURE_SLOT.load(Ordering::SeqCst);
+    if cap >= 0 {
+        // Capture mode: the next press becomes slot `cap`'s binding.
         if down {
-            PTT_CAPTURE.store(false, Ordering::SeqCst);
-            *ptt_binding().lock().unwrap() = Some(code.clone());
+            PTT_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
+            let slot = (cap as usize).min(1);
+            PTT_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
+            ptt_bindings().lock().unwrap()[slot] = Some(code.clone());
             if let Some(app) = APP_HANDLE.get() {
-                let _ = app.emit("ptt-bound", code);
+                let _ = app.emit("ptt-bound", serde_json::json!({ "slot": slot, "code": code }));
             }
         }
         return;
     }
-    let bound = ptt_binding().lock().unwrap().clone();
-    if bound.as_deref() != Some(code.as_str()) {
+    // Update the down-state of every slot bound to this code.
+    let mut changed = false;
+    {
+        let b = ptt_bindings().lock().unwrap();
+        for i in 0..2 {
+            if b[i].as_deref() == Some(code.as_str())
+                && PTT_SLOT_DOWN[i].swap(down, Ordering::SeqCst) != down
+            {
+                changed = true;
+            }
+        }
+    }
+    if !changed {
         return;
     }
-    if PTT_DOWN.swap(down, Ordering::SeqCst) == down {
-        return; // no edge
-    }
-    if let Some(app) = APP_HANDLE.get() {
-        let _ = app.emit("ptt", down);
+    // Transmit while EITHER bound trigger is held; emit only on the combined edge.
+    let combined = PTT_SLOT_DOWN[0].load(Ordering::SeqCst) || PTT_SLOT_DOWN[1].load(Ordering::SeqCst);
+    if PTT_COMBINED.swap(combined, Ordering::SeqCst) != combined {
+        if let Some(app) = APP_HANDLE.get() {
+            let _ = app.emit("ptt", combined);
+        }
     }
 }
 
@@ -70,13 +90,36 @@ fn start_raw_input() {}
 #[cfg(windows)]
 mod raw_input {
     use super::handle_raw;
+    use std::collections::HashMap;
     use std::ptr::null_mut;
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use std::sync::{Mutex, OnceLock};
+    use windows_sys::Win32::Devices::HumanInterfaceDevice::{
+        HidP_GetButtonCaps, HidP_GetCaps, HidP_GetUsages, HidP_MaxUsageListLength, HidP_Input,
+        HIDP_BUTTON_CAPS, HIDP_CAPS,
+    };
+    use windows_sys::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Input::{
-        GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
-        RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+        GetRawInputData, GetRawInputDeviceInfoW, RegisterRawInputDevices, HRAWINPUT, RAWINPUT,
+        RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEHID,
+        RIM_TYPEMOUSE,
     };
+
+    // NTSTATUS success + the GetRawInputDeviceInfoW command for preparsed HID data
+    // (defined locally to avoid depending on their exact windows-sys export path).
+    const HIDP_STATUS_SUCCESS: i32 = 0x0011_0000;
+    const RIDI_PREPARSEDDATA: u32 = 0x2000_0005;
+
+    // Per-device caches: HID preparsed descriptor + last-pressed button usages,
+    // keyed by the raw-input device HANDLE (as usize). Used to diff button edges.
+    static PREPARSED: OnceLock<Mutex<HashMap<usize, Vec<u8>>>> = OnceLock::new();
+    static HID_PRESSED: OnceLock<Mutex<HashMap<usize, Vec<u16>>>> = OnceLock::new();
+    fn preparsed_cache() -> &'static Mutex<HashMap<usize, Vec<u8>>> {
+        PREPARSED.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+    fn pressed_cache() -> &'static Mutex<HashMap<usize, Vec<u16>>> {
+        HID_PRESSED.get_or_init(|| Mutex::new(HashMap::new()))
+    }
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
         TranslateMessage, HWND_MESSAGE, MSG, WM_INPUT, WNDCLASSW,
@@ -187,6 +230,9 @@ mod raw_input {
             RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
             // Generic-desktop / mouse (usage page 0x01, usage 0x02).
             RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+            // Generic-desktop / joystick (0x01/0x04) + gamepad (0x01/0x05) for PTT.
+            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x04, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+            RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x05, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
         ];
         RegisterRawInputDevices(
             devices.as_ptr(),
@@ -239,21 +285,110 @@ mod raw_input {
                     }
                 }
             }
+            t if t == RIM_TYPEHID => process_hid(ri),
             _ => {}
         }
+    }
+
+    /// Fetch (and cache) the HID preparsed descriptor for a device.
+    unsafe fn get_preparsed(hdev: HANDLE) -> Vec<u8> {
+        let key = hdev as usize;
+        if let Some(v) = preparsed_cache().lock().unwrap().get(&key) {
+            return v.clone();
+        }
+        let mut size: u32 = 0;
+        if GetRawInputDeviceInfoW(hdev, RIDI_PREPARSEDDATA, null_mut(), &mut size) != 0 || size == 0 {
+            return Vec::new();
+        }
+        let mut buf = vec![0u8; size as usize];
+        let got = GetRawInputDeviceInfoW(hdev, RIDI_PREPARSEDDATA, buf.as_mut_ptr() as *mut _, &mut size);
+        if got == u32::MAX {
+            return Vec::new();
+        }
+        preparsed_cache().lock().unwrap().insert(key, buf.clone());
+        buf
+    }
+
+    /// Parse a gamepad/joystick HID packet: extract the currently-pressed button
+    /// usages via HidP and emit press/release edges as "Pad:<usage>" codes.
+    unsafe fn process_hid(ri: &RAWINPUT) {
+        let hdev = ri.header.hDevice;
+        let hid = &ri.data.hid;
+        let size = hid.dwSizeHid as usize;
+        let count = hid.dwCount as usize;
+        if size == 0 || count == 0 {
+            return;
+        }
+        let pp = get_preparsed(hdev);
+        if pp.is_empty() {
+            return;
+        }
+        let pp_ptr = pp.as_ptr();
+        let mut caps: HIDP_CAPS = std::mem::zeroed();
+        if HidP_GetCaps(pp_ptr as _, &mut caps) != HIDP_STATUS_SUCCESS || caps.NumberInputButtonCaps == 0 {
+            return;
+        }
+        let mut bcaps = vec![std::mem::zeroed::<HIDP_BUTTON_CAPS>(); caps.NumberInputButtonCaps as usize];
+        let mut blen = caps.NumberInputButtonCaps;
+        if HidP_GetButtonCaps(HidP_Input, bcaps.as_mut_ptr(), &mut blen, pp_ptr as _) != HIDP_STATUS_SUCCESS
+            || blen == 0
+        {
+            return;
+        }
+        let usage_page = bcaps[0].UsagePage;
+        let maxn = HidP_MaxUsageListLength(HidP_Input, usage_page, pp_ptr as _);
+        if maxn == 0 {
+            return;
+        }
+        let base = hid.bRawData.as_ptr();
+        for r in 0..count {
+            let report = base.add(r * size) as *mut u8;
+            let mut usages = vec![0u16; maxn as usize];
+            let mut ulen = maxn;
+            if HidP_GetUsages(HidP_Input, usage_page, 0, usages.as_mut_ptr(), &mut ulen, pp_ptr as _, report as _, size as u32)
+                != HIDP_STATUS_SUCCESS
+            {
+                continue;
+            }
+            usages.truncate(ulen as usize);
+            diff_buttons(hdev as usize, &usages);
+        }
+    }
+
+    /// Emit press/release edges by diffing this report's pressed usages against
+    /// the device's previous set.
+    fn diff_buttons(key: usize, now: &[u16]) {
+        let prev = pressed_cache().lock().unwrap().get(&key).cloned().unwrap_or_default();
+        for u in now {
+            if !prev.contains(u) {
+                handle_raw(format!("Pad:{u}"), true);
+            }
+        }
+        for u in &prev {
+            if !now.contains(u) {
+                handle_raw(format!("Pad:{u}"), false);
+            }
+        }
+        pressed_cache().lock().unwrap().insert(key, now.to_vec());
     }
 }
 
 #[tauri::command]
-fn set_ptt_binding(code: Option<String>) {
-    // Codes are rdev Debug strings like "F8" / "Mouse:Unknown(1)"; bound length.
+fn set_ptt_binding(slot: usize, code: Option<String>) {
+    if slot >= 2 {
+        return;
+    }
+    // Codes like "F8" / "Mouse:Left" / "Pad:3"; bound length.
     let code = code.filter(|c| !c.is_empty() && c.len() <= 64);
-    *ptt_binding().lock().unwrap() = code;
+    PTT_SLOT_DOWN[slot].store(false, Ordering::SeqCst); // clear any stuck state on rebind
+    ptt_bindings().lock().unwrap()[slot] = code;
 }
 
 #[tauri::command]
-fn start_ptt_capture() {
-    PTT_CAPTURE.store(true, Ordering::SeqCst);
+fn start_ptt_capture(slot: usize) {
+    if slot < 2 {
+        PTT_CAPTURE_SLOT.store(slot as i32, Ordering::SeqCst);
+    }
 }
 
 fn make_sink(app: &AppHandle) -> Sink {

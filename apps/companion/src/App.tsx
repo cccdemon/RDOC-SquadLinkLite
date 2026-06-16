@@ -40,6 +40,8 @@ function mdToText(s: string): string {
 
 // Friendly label for raw input codes (e.g. "F8", "KeyR", "Mouse:Unknown(1)").
 function pttLabel(code: string): string {
+  if (!code) return "—";
+  if (code.startsWith("Pad:")) return `Gamepad-Taste ${code.slice(4)}`;
   if (code.startsWith("Mouse:")) {
     const b = code.slice(6);
     const m = b.match(/Unknown\((\d+)\)/);
@@ -197,7 +199,16 @@ export default function App() {
       return "F8";
     }
   });
-  const [capturing, setCapturing] = useState(false);
+  // Optional second PTT trigger (key / mouse / gamepad). Holding either transmits.
+  const [pttBinding2, setPttBinding2] = useState<string>(() => {
+    try {
+      return localStorage.getItem("sa.ptt2") || "";
+    } catch {
+      return "";
+    }
+  });
+  // null = idle; 0 or 1 = currently capturing a new binding for that slot.
+  const [capturingSlot, setCapturingSlot] = useState<number | null>(null);
 
   // Load device list once (for the gear settings).
   useEffect(() => {
@@ -349,18 +360,21 @@ export default function App() {
   // Configurable PTT via Windows Raw Input (Rust). The bound key/mouse button
   // emits "ptt" (down/up); "ptt-bound" fires after a rebind capture.
   useEffect(() => {
-    invoke("set_ptt_binding", { code: pttBinding }).catch(() => {});
+    invoke("set_ptt_binding", { slot: 0, code: pttBinding }).catch(() => {});
+    invoke("set_ptt_binding", { slot: 1, code: pttBinding2 || null }).catch(() => {});
     const offPtt = listen<boolean>("ptt", (e) => {
       if (micMutedRef.current) return; // self-muted: ignore push-to-talk
       invoke("set_transmit", { on: e.payload }).catch(() => {});
     });
-    const offBound = listen<string>("ptt-bound", (e) => {
-      setPttBinding(e.payload);
-      setCapturing(false);
-      try {
-        localStorage.setItem("sa.ptt", e.payload);
-      } catch {
-        /* ignore */
+    const offBound = listen<{ slot: number; code: string }>("ptt-bound", (e) => {
+      const { slot, code } = e.payload;
+      setCapturingSlot(null);
+      if (slot === 1) {
+        setPttBinding2(code);
+        try { localStorage.setItem("sa.ptt2", code); } catch { /* ignore */ }
+      } else {
+        setPttBinding(code);
+        try { localStorage.setItem("sa.ptt", code); } catch { /* ignore */ }
       }
     });
     return () => {
@@ -423,9 +437,15 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
-  const rebindPtt = () => {
-    setCapturing(true);
-    invoke("start_ptt_capture").catch(() => {});
+  const rebindPtt = (slot: number) => {
+    setCapturingSlot(slot);
+    invoke("start_ptt_capture", { slot }).catch(() => {});
+  };
+  const clearPtt2 = () => {
+    setPttBinding2("");
+    setCapturingSlot(null);
+    invoke("set_ptt_binding", { slot: 1, code: null }).catch(() => {});
+    try { localStorage.removeItem("sa.ptt2"); } catch { /* ignore */ }
   };
   const rotateKey = () => {
     setRotating(true);
@@ -656,11 +676,16 @@ export default function App() {
           </select>
           <label>🎙 Push-to-Talk</label>
           <div className="pttrow">
-            <span className="pttcur">{capturing ? "Drücke Taste / Maustaste…" : pttLabel(pttBinding)}</span>
-            <button className="btn sm" onClick={rebindPtt} disabled={capturing}>Neu belegen</button>
+            <span className="pttcur">{capturingSlot === 0 ? "Drücke Taste / Maus / Gamepad…" : pttLabel(pttBinding)}</span>
+            <button className="btn sm" onClick={() => rebindPtt(0)} disabled={capturingSlot !== null}>Neu belegen</button>
+          </div>
+          <div className="pttrow">
+            <span className="pttcur">{capturingSlot === 1 ? "Drücke Taste / Maus / Gamepad…" : (pttBinding2 ? pttLabel(pttBinding2) : "— (optionale 2. Taste)")}</span>
+            <button className="btn sm" onClick={() => rebindPtt(1)} disabled={capturingSlot !== null}>{pttBinding2 ? "Neu belegen" : "2. Taste"}</button>
+            {pttBinding2 && <button className="btn sm" onClick={clearPtt2} disabled={capturingSlot !== null} title="Zweite Taste entfernen">✕</button>}
           </div>
           <div className="sub2" style={{ opacity: 0.7 }}>
-            Push-to-Talk: jede Taste oder Maustaste (RAW). Geräteänderung wirkt sofort (auch während eines Gesprächs).
+            Push-to-Talk: jede Taste, Maustaste oder Gamepad-/Joystick-Taste (RAW) — bis zu zwei, beide senden. Geräteänderung wirkt sofort (auch während eines Gesprächs).
           </div>
 
           <label>🎧 Mikrofon-Test</label>
@@ -987,7 +1012,7 @@ export default function App() {
           ))}
           <button className={`ptt ${transmitting ? "live" : ""} ${micMuted ? "muted" : ""}`} onClick={ptt} disabled={micMuted}>
             {micMuted ? "🔇 MIKRO STUMM" : transmitting ? "● SENDEN AKTIV" : "PUSH TO TALK"}
-            <span className="ptthint">{pttLabel(pttBinding)} halten · oder klick zum Umschalten</span>
+            <span className="ptthint">{pttBinding2 ? `${pttLabel(pttBinding)} / ${pttLabel(pttBinding2)}` : pttLabel(pttBinding)} halten · oder klick zum Umschalten</span>
           </button>
           <div className="selfctl">
             <button className={`ctl ${transmitting ? "on" : ""}`} onClick={ptt} disabled={micMuted} title="Dauersenden ein/aus">
