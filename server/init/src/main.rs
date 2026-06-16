@@ -22,6 +22,7 @@ use i18n::Lang;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, RawQuery, State};
@@ -63,6 +64,10 @@ const MAX_CODE: usize = 32;
 const MAX_PIN: usize = 12;
 /// Per-peer outbound queue depth before backpressure drops signaling messages.
 const PEER_CHAN: usize = 256;
+// Per-connection abuse limits. A member is authenticated but not trusted.
+const MSG_RATE_WINDOW: Duration = Duration::from_secs(1);
+const MSG_RATE_MAX: u32 = 50; // WS frames per window before excess is dropped
+const REKEY_COOLDOWN: Duration = Duration::from_secs(5); // min gap between rekeys
 
 fn len_ok(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max
@@ -455,6 +460,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // (room, user_id) once this socket has joined.
     let mut me: Option<(String, String)> = None;
+    // Sliding-window message rate limit + rekey cooldown, per connection.
+    let mut win_start = Instant::now();
+    let mut win_count: u32 = 0;
+    let mut last_rekey: Option<Instant> = None;
 
     while let Some(Ok(msg)) = stream.next().await {
         let text = match msg {
@@ -462,6 +471,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             Message::Close(_) => break,
             _ => continue,
         };
+        // Rate-limit: drop frames past the cap instead of growing relay queues.
+        let now = Instant::now();
+        if now.duration_since(win_start) > MSG_RATE_WINDOW {
+            win_start = now;
+            win_count = 0;
+        }
+        win_count += 1;
+        if win_count > MSG_RATE_MAX {
+            continue;
+        }
         let cmsg: ClientMsg = match serde_json::from_str(&text) {
             Ok(m) => m,
             Err(e) => {
@@ -581,6 +600,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
             ClientMsg::Rekey => {
+                // Throttle: a full-room rekey tears down every link, so one
+                // member must not be able to spam it and interrupt audio.
+                if let Some(t) = last_rekey {
+                    if now.duration_since(t) < REKEY_COOLDOWN {
+                        continue;
+                    }
+                }
+                last_rekey = Some(now);
                 // Broadcast a key-rotation request to the whole room (incl. the
                 // initiator) so every client re-handshakes together.
                 if let Some((room, from)) = &me {

@@ -59,6 +59,12 @@ pub enum UiEvent {
 
 pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
 
+/// Inbound chat hard limits. A DataChannel peer is authenticated but not
+/// trusted: drop oversized frames before deserializing and clamp text length so
+/// a malicious member can't grow native/webview memory with one giant message.
+pub(crate) const MAX_CHAT_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_CHAT_CHARS: usize = 2000;
+
 /// Internal events from the mesh layer back to the engine loop.
 pub(crate) enum MeshEvent {
     Chat { from: String, text: String },

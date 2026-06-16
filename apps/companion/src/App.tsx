@@ -6,6 +6,9 @@ import logo from "./Squad_Link_Lite.png";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
 
+// Cap retained chat lines so a flood of messages can't grow webview memory.
+const MAX_CHAT_LINES = 500;
+
 // Parse "0.1.10" → [0,1,10]; true if `a` is a newer version than `b`.
 function isNewer(a: string, b: string): boolean {
   const pa = a.split(".").map(Number);
@@ -312,7 +315,10 @@ export default function App() {
     const un = listen<UiEvent>("ui", (e) => {
       const p = e.payload;
       if (p.type === "roster") setParticipants(p.participants);
-      else if (p.type === "chat") setChat((c) => [...c, { from: p.from, text: p.text }]);
+      else if (p.type === "chat") setChat((c) => {
+        const next = [...c, { from: p.from, text: p.text }];
+        return next.length > MAX_CHAT_LINES ? next.slice(next.length - MAX_CHAT_LINES) : next;
+      });
       else if (p.type === "status") {
         setConnected(p.connected);
         setTransmitting(p.transmitting);

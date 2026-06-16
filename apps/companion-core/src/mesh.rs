@@ -30,6 +30,9 @@ use webrtc::track::track_remote::TrackRemote;
 pub type DecodeTx = UnboundedSender<(String, Bytes)>;
 type ChatSlot = Arc<Mutex<Option<Arc<RTCDataChannel>>>>;
 
+/// Max ICE candidates buffered per peer before the remote description is set.
+const MAX_PENDING_ICE: usize = 128;
+
 struct PeerConn {
     pc: Arc<RTCPeerConnection>,
     pending_ice: Mutex<Vec<String>>,
@@ -43,7 +46,12 @@ impl PeerConn {
                 let _ = self.pc.add_ice_candidate(init).await;
             }
         } else {
-            self.pending_ice.lock().unwrap().push(cand);
+            // Cap the pre-remote-description queue: a flood of ICE frames from a
+            // room member must not grow memory unbounded before flush_ice().
+            let mut q = self.pending_ice.lock().unwrap();
+            if q.len() < MAX_PENDING_ICE {
+                q.push(cand);
+            }
         }
     }
     async fn flush_ice(&self) {
@@ -65,7 +73,13 @@ fn wire_chat(peer: String, slot: ChatSlot, dc: Arc<RTCDataChannel>, events: Unbo
         let p = p.clone();
         let events = events.clone();
         Box::pin(async move {
-            if let Ok(c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
+            if msg.data.len() > crate::MAX_CHAT_BYTES {
+                return; // drop oversized frame before allocating a ChatMsg
+            }
+            if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
+                if c.text.chars().count() > crate::MAX_CHAT_CHARS {
+                    c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+                }
                 let _ = events.send(MeshEvent::Chat { from: p, text: c.text });
             }
         })

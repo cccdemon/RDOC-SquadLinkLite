@@ -34,7 +34,13 @@ fn wire_chat(slot: ChatSlot, dc: Arc<RTCDataChannel>, sink: Sink) {
     dc.on_message(Box::new(move |msg: DataChannelMessage| {
         let sink = sink.clone();
         Box::pin(async move {
-            if let Ok(c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
+            if msg.data.len() > crate::MAX_CHAT_BYTES {
+                return; // drop oversized frame before allocating a ChatMsg
+            }
+            if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
+                if c.text.chars().count() > crate::MAX_CHAT_CHARS {
+                    c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+                }
                 sink(UiEvent::Chat { from: "Peer".to_string(), text: c.text });
             }
         })

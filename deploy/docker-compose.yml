@@ -26,7 +26,9 @@ services:
       - "8080:8080"
 
   coturn:
-    image: coturn/coturn:latest
+    # Pinned: `:latest` lets upstream silently change the production relay.
+    # For full integrity append the digest: coturn/coturn:4.6.2@sha256:<digest>.
+    image: coturn/coturn:4.6.2
     restart: unless-stopped
     # Host networking: WebRTC/TURN relay needs the real source ports (docker
     # NAT rewrites them and breaks ICE). Same gotcha as LiveKit.
