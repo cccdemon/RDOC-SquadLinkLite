@@ -28,6 +28,12 @@ services:
       # Public URLs used to build share links + the ws URL returned on join.
       - PUBLIC_BASE=https://squadlink.raumdock.org
       - PUBLIC_WS=wss://squadlink.raumdock.org/ws
+      # Where pull-installer.sh writes manifest.json (the /get download page).
+      - DOWNLOADS_DIR=/srv/downloads/squadlink
+    # Read-only view of the Caddy download folder so /get can list artifacts +
+    # checksums. Same host path Caddy serves at /download/.
+    volumes:
+      - /opt/RDOC-Suite/downloads/squadlink:/srv/downloads/squadlink:ro
     # Loopback only — the host-network Caddy reaches it; not exposed directly.
     ports:
       - "127.0.0.1:8090:8080"

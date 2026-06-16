@@ -234,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(home))
+        .route("/get", get(downloads_page))
         .route("/privacy", get(privacy))
         .route("/legal", get(legal))
         .route("/license", get(license_page))
@@ -396,7 +397,7 @@ fn footer(base: &str, lang: Lang) -> String {
     let n = i18n::nav(lang);
     let lc = lang.code();
     format!(
-        r#"<a href="{base}/download/">{}</a><a href="/privacy?lang={lc}">{}</a><a href="/legal?lang={lc}">{}</a><a href="/license?lang={lc}">{}</a><a href="{gh}">GitHub</a><a href="{rd}">raumdock.org</a>"#,
+        r#"<a href="{base}/get?lang={lc}">{}</a><a href="/privacy?lang={lc}">{}</a><a href="/legal?lang={lc}">{}</a><a href="/license?lang={lc}">{}</a><a href="{gh}">GitHub</a><a href="{rd}">raumdock.org</a>"#,
         n[0], n[1], n[2], n[3], gh = i18n::GITHUB_URL, rd = i18n::RAUMDOCK_URL
     )
 }
@@ -440,6 +441,51 @@ async fn license_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String>
     let lang = lang_of(&q, &headers);
     let (title, body) = i18n::license(lang);
     shell(lang, "/license", title, &body)
+}
+
+/// Localized download page: lists every mirrored installer + its SHA-256, read
+/// from $DOWNLOADS_DIR/manifest.json (written by deploy/pull-installer.sh).
+async fn downloads_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+    let lang = lang_of(&q, &headers);
+    let (version, arts) = load_manifest();
+    let (title, body) = i18n::downloads(lang, &public_base(), version.as_deref(), &arts);
+    shell(lang, "/get", title, &body)
+}
+
+/// Parse the mirror manifest into (version, artifacts). Missing or invalid →
+/// empty, so the page degrades to a "no builds yet" notice instead of erroring.
+fn load_manifest() -> (Option<String>, Vec<i18n::Artifact>) {
+    let dir = std::env::var("DOWNLOADS_DIR").unwrap_or_else(|_| "/srv/downloads/squadlink".into());
+    let path = std::path::Path::new(&dir).join("manifest.json");
+    let Ok(txt) = std::fs::read_to_string(&path) else {
+        return (None, Vec::new());
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else {
+        return (None, Vec::new());
+    };
+    let version = v
+        .get("version")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let arts = v
+        .get("artifacts")
+        .and_then(|a| a.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| {
+                    Some(i18n::Artifact {
+                        platform: o.get("platform")?.as_str()?.to_string(),
+                        arch: o.get("arch").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                        file: o.get("file")?.as_str()?.to_string(),
+                        size: o.get("size").and_then(|x| x.as_u64()).unwrap_or(0),
+                        sha256: o.get("sha256").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (version, arts)
 }
 
 

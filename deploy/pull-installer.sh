@@ -1,63 +1,123 @@
 #!/usr/bin/env bash
-# Pull the newest published installer from GitHub Releases into the public
-# download folder served by Caddy at squadlink.raumdock.org/download.
+# Mirror the newest published release (all platforms) from GitHub Releases into
+# the public download folder served by Caddy at squadlink.raumdock.org/download,
+# and emit a manifest.json the signaling server renders on /get.
 # Public repo → no auth/token needed. Run by a systemd timer on LXC 103.
 set -euo pipefail
 
 REPO="cccdemon/RDOC-SquadLinkLite"
 DEST="/opt/RDOC-Suite/downloads/squadlink"
-# NOTE: the REST /releases order (created_at) is unreliable for force-pushed tags,
-# and /releases/latest excludes prereleases (ours are all prereleases). So fetch a
-# page and pick the HIGHEST semver ourselves (sort -V).
-API="https://api.github.com/repos/${REPO}/releases?per_page=30"
+API="https://api.github.com/repos/${REPO}"
 # Robust against transient GitHub/CDN 5xx right after a release is published.
 RETRY="--retry 6 --retry-delay 4 --retry-all-errors"
+CURL="curl -fsSL $RETRY -H Accept:application/vnd.github+json"
 
 mkdir -p "$DEST"
 
-# All asset URLs. Retry because tauri-action creates the release a moment before
-# it finishes uploading the installer (publish→attach race).
+# 1) Newest release by SEMVER. The REST order (created_at) is unreliable for
+#    force-pushed tags and /latest excludes prereleases (ours are all
+#    prereleases), so list a page and pick the highest version ourselves.
+tags="$($CURL "${API}/releases?per_page=30" \
+  | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
+TAG="$(printf '%s\n' "$tags" | sort -V | tail -1 || true)"
+[ -n "$TAG" ] || { echo "no releases yet"; exit 0; }
+echo "newest release: $TAG"
+
+# 2) All asset URLs for THAT release only (no cross-release version mixing).
+#    Retry: tauri-action creates the release a moment before the upload finishes.
 urls=""
 for attempt in 1 2 3 4 5 6 7 8; do
-  urls="$(curl -fsSL $RETRY -H 'Accept: application/vnd.github+json' "$API" \
+  urls="$($CURL "${API}/releases/tags/${TAG}" \
     | grep -oE '"browser_download_url": *"[^"]+"' | cut -d'"' -f4 || true)"
-  printf '%s\n' "$urls" | grep -qiE 'setup\.exe$' && break
+  printf '%s\n' "$urls" | grep -qiE '\.(exe|msi|deb|rpm|AppImage|apk)$' && break
   echo "no installer asset yet (attempt $attempt) — waiting"
   sleep 10
 done
-[ -n "$urls" ] || { echo "no releases yet"; exit 0; }
+[ -n "$urls" ] || { echo "no assets on $TAG"; exit 0; }
 
-fetch() {
-  # $1 = case-insensitive filename suffix to match, $2 = output filename.
-  # sort -V → pick the highest version, not whatever the API lists first.
-  local url
-  url="$(printf '%s\n' "$urls" | grep -iE "$1" | sort -V | tail -1 || true)"
-  [ -n "$url" ] || { echo "no asset for $1"; return 0; }
-  curl -fsSL $RETRY -o "$DEST/$2.tmp" "$url"
+# 3) Stage in a temp dir; only swap into DEST if everything verifies. A tampered
+#    asset aborts the whole run → the public folder is never half-updated.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
 
-  # Integrity: CI publishes a per-asset "<asset>.sha256" sidecar (just the hex
-  # digest) alongside each installer. Verify before publishing so a tampered or
-  # corrupted asset is never mirrored. Fail closed if the sidecar exists but the
-  # hash mismatches; skip (with a warning) only for legacy releases that predate
-  # the checksum step.
-  local sig_url expected actual
-  sig_url="$(printf '%s\n' "$urls" | grep -iF "${url}.sha256" | head -1 || true)"
-  if [ -n "$sig_url" ]; then
-    expected="$(curl -fsSL $RETRY "$sig_url" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
-    actual="$(sha256sum "$DEST/$2.tmp" | cut -d' ' -f1)"
-    if [ "$expected" != "$actual" ]; then
-      rm -f "$DEST/$2.tmp"
-      echo "CHECKSUM MISMATCH for $2 (expected $expected, got $actual) — refusing to publish" >&2
-      return 1
-    fi
-    echo "verified $2 sha256=$actual"
-  else
-    echo "WARNING: no .sha256 sidecar for $2 — publishing unverified" >&2
-  fi
+# Pull every SHA256SUMS-*.txt published with the release → combined lookup table
+# of "<hex>  <filename>". CI attaches these; older releases may lack them.
+sums="$STAGE/.sums"
+: > "$sums"
+for su in $(printf '%s\n' "$urls" | grep -iE '/SHA256SUMS[^/]*\.txt$' || true); do
+  $CURL "$su" >> "$sums" 2>/dev/null || true
+done
 
-  mv "$DEST/$2.tmp" "$DEST/$2"
-  echo "updated $2  <-  $url"
+# version digits for the manifest, e.g. squadlink-lite-v0.1.25 → 0.1.25
+VERSION="$(printf '%s' "$TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+
+# (platform, arch) for an asset filename. Echoes "platform arch".
+classify() {
+  local f; f="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  case "$f" in
+    *setup.exe|*.exe) echo "windows x64" ;;
+    *.msi)            echo "windows x64" ;;
+    *arm64*.deb|*aarch64*.deb)         echo "linux arm64" ;;
+    *.deb)                             echo "linux amd64" ;;
+    *aarch64*.rpm|*arm64*.rpm)         echo "linux arm64" ;;
+    *.rpm)                             echo "linux amd64" ;;
+    *aarch64*.appimage|*arm64*.appimage) echo "linux arm64" ;;
+    *.appimage)                        echo "linux amd64" ;;
+    *aarch64*.apk|*arm64*.apk)  echo "android arm64" ;;
+    *armv7*.apk|*armeabi*.apk)  echo "android armv7" ;;
+    *x86_64*.apk|*x86*.apk)     echo "android x86_64" ;;
+    *.apk)                      echo "android universal" ;;
+    *) echo "other -" ;;
+  esac
 }
 
-fetch 'setup\.exe$'        RDOC-SquadLink-Lite-Setup.exe
-fetch '_x64_en-US\.msi$|\.msi$'  RDOC-SquadLink-Lite.msi
+entries=""  # accumulated manifest JSON objects
+
+process_asset() {
+  local url fname expected actual size pa platform arch
+  url="$1"; fname="$(basename "$url")"
+  $CURL -o "$STAGE/$fname" "$url"
+
+  # Verify against the release's SHA256SUMS when available; fail closed on
+  # mismatch. With no published sums (legacy releases), compute + warn.
+  expected="$(awk -v f="$fname" '$2==f || $2=="*"f || $2=="./"f {print $1; exit}' "$sums" | tr 'A-F' 'a-f')"
+  actual="$(sha256sum "$STAGE/$fname" | cut -d' ' -f1)"
+  if [ -n "$expected" ]; then
+    if [ "$expected" != "$actual" ]; then
+      echo "CHECKSUM MISMATCH for $fname (expected $expected, got $actual) — aborting, DEST untouched" >&2
+      exit 1
+    fi
+    echo "verified $fname sha256=$actual"
+  else
+    echo "WARNING: no SHA256SUMS entry for $fname — mirroring with locally computed hash" >&2
+  fi
+
+  printf '%s' "$actual" > "$STAGE/$fname.sha256"
+  size="$(stat -c%s "$STAGE/$fname")"
+  pa="$(classify "$fname")"; platform="${pa% *}"; arch="${pa#* }"
+  entries="${entries:+$entries,}$(printf '{"platform":"%s","arch":"%s","file":"%s","size":%s,"sha256":"%s"}' \
+    "$platform" "$arch" "$fname" "$size" "$actual")"
+}
+
+# Mirror every installable artifact (skip the SHA256SUMS txt + signatures).
+for url in $(printf '%s\n' "$urls" | grep -iE '\.(exe|msi|deb|rpm|AppImage|apk)$'); do
+  process_asset "$url"
+done
+[ -n "$entries" ] || { echo "no installable assets on $TAG"; exit 0; }
+
+# manifest.json the server reads to render /get.
+printf '{"version":"%s","tag":"%s","generated":"%s","artifacts":[%s]}\n' \
+  "$VERSION" "$TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$entries" > "$STAGE/manifest.json"
+
+# Preserve the served logo across the swap.
+[ -f "$DEST/sl-logo.png" ] && cp -p "$DEST/sl-logo.png" "$STAGE/sl-logo.png"
+rm -f "$STAGE/.sums"
+
+# 4) Atomic-ish publish: replace DEST contents with the verified staging set.
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a --delete "$STAGE"/ "$DEST"/
+else
+  find "$DEST" -mindepth 1 ! -name 'sl-logo.png' -delete
+  cp -a "$STAGE"/. "$DEST"/
+fi
+echo "published $(printf '%s' "$entries" | grep -o '"file"' | wc -l) artifact(s) from $TAG to $DEST"

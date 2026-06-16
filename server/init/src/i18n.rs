@@ -123,7 +123,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>The session stays alive while members are connected (max. 24&nbsp;hours).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/download/">Direct download (unsigned installer)</a></p>
+<p><a class="dl" href="{base}/get">All downloads &amp; checksums (Windows, Linux, Android)</a></p>
 <p class="muted">The Microsoft Store version is signed and shows no warning. The direct installer is unsigned → Windows SmartScreen warns: "More info" then "Run anyway".</p>
 {links}"#,
                 store = store_badge("Get it from Microsoft Store"),
@@ -143,7 +143,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>Die Session bleibt bestehen, solange Teilnehmer verbunden sind (maximal 24&nbsp;Stunden).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/download/">Direkter Download (unsigniertes Installationsprogramm)</a></p>
+<p><a class="dl" href="{base}/get">Alle Downloads &amp; Prüfsummen (Windows, Linux, Android)</a></p>
 <p class="muted">Die Microsoft-Store-Version ist signiert und warnt nicht. Der direkte Installer ist unsigniert → Windows SmartScreen warnt: „Weitere Informationen" → „Trotzdem ausführen".</p>
 {links}"#,
                 store = store_badge("Im Microsoft Store holen"),
@@ -163,7 +163,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>La sessione resta attiva finché ci sono partecipanti connessi (max 24&nbsp;ore).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/download/">Download diretto (installer non firmato)</a></p>
+<p><a class="dl" href="{base}/get">Tutti i download e checksum (Windows, Linux, Android)</a></p>
 <p class="muted">La versione del Microsoft Store è firmata e non mostra avvisi. L'installer diretto non è firmato → Windows SmartScreen avvisa: "Ulteriori informazioni" → "Esegui comunque".</p>
 {links}"#,
                 store = store_badge("Scarica dal Microsoft Store"),
@@ -183,7 +183,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>La sesión permanece activa mientras haya participantes conectados (máx. 24&nbsp;horas).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/download/">Descarga directa (instalador sin firmar)</a></p>
+<p><a class="dl" href="{base}/get">Todas las descargas y checksums (Windows, Linux, Android)</a></p>
 <p class="muted">La versión del Microsoft Store está firmada y no muestra avisos. El instalador directo no está firmado → Windows SmartScreen avisa: "Más información" → "Ejecutar de todas formas".</p>
 {links}"#,
                 store = store_badge("Descargar de Microsoft Store"),
@@ -203,7 +203,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>La session reste active tant que des participants sont connectés (max. 24&nbsp;heures).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/download/">Téléchargement direct (installeur non signé)</a></p>
+<p><a class="dl" href="{base}/get">Tous les téléchargements et sommes de contrôle (Windows, Linux, Android)</a></p>
 <p class="muted">La version du Microsoft Store est signée et n'affiche aucun avertissement. L'installeur direct n'est pas signé → Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».</p>
 {links}"#,
                 store = store_badge("Obtenir sur le Microsoft Store"),
@@ -236,6 +236,172 @@ fn credits(l: Lang) -> String {
 </p>
 <p class="muted">{concept} JustCallMeDeimos &amp; xhead87x (Claude Code &amp; Codex for crosstesting). {ai}</p>"#
     )
+}
+
+// ── Download page (/get) ──────────────────────────────────────────────────────
+
+/// One downloadable artifact, parsed from the mirror's manifest.json.
+pub struct Artifact {
+    pub platform: String, // "windows" | "linux" | "android"
+    pub arch: String,     // "x64" | "amd64" | "arm64" | "armv7" | "x86_64" | "universal"
+    pub file: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// Minimal HTML escape for values interpolated into the page (defense in depth;
+/// manifest values are CI-controlled but never trust blindly).
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Human-readable byte size, e.g. 10973184 → "10.5 MB".
+fn human_size(bytes: u64) -> String {
+    let mb = bytes as f64 / 1_048_576.0;
+    if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    }
+}
+
+struct DlText {
+    title: &'static str,
+    intro: &'static str,
+    store_btn: &'static str,
+    store_note: &'static str,
+    win: &'static str,
+    win_note: &'static str,
+    linux: &'static str,
+    linux_note: &'static str,
+    android: &'static str,
+    android_note: &'static str,
+    verify: &'static str,
+    none: &'static str,
+}
+
+fn dl_text(l: Lang) -> DlText {
+    match l {
+        Lang::En => DlText {
+            title: "Downloads",
+            intro: "Recommended: the Microsoft Store build is code-signed and installs without any warning. The direct downloads below are unsigned — verify the SHA-256 after downloading.",
+            store_btn: "Get it from Microsoft Store",
+            store_note: "The Store version updates automatically and shows no SmartScreen warning.",
+            win: "Windows",
+            win_note: "Unsigned — Windows SmartScreen warns: \"More info\" then \"Run anyway\".",
+            linux: "Linux",
+            linux_note: "Unsigned .deb / .rpm / .AppImage. Make AppImages executable: chmod +x.",
+            android: "Android",
+            android_note: "Debug-signed APK for sideloading (testing). Enable \"install unknown apps\".",
+            verify: "SHA-256:",
+            none: "No builds available yet — check back after the next release.",
+        },
+        Lang::De => DlText {
+            title: "Downloads",
+            intro: "Empfohlen: Die Microsoft-Store-Version ist signiert und installiert ohne Warnung. Die direkten Downloads unten sind unsigniert — prüfe nach dem Download die SHA-256.",
+            store_btn: "Im Microsoft Store holen",
+            store_note: "Die Store-Version aktualisiert sich automatisch und zeigt keine SmartScreen-Warnung.",
+            win: "Windows",
+            win_note: "Unsigniert — Windows SmartScreen warnt: „Weitere Informationen\" → „Trotzdem ausführen\".",
+            linux: "Linux",
+            linux_note: "Unsigniertes .deb / .rpm / .AppImage. AppImage ausführbar machen: chmod +x.",
+            android: "Android",
+            android_note: "Debug-signierte APK zum Sideloaden (Test). „Unbekannte Apps installieren\" erlauben.",
+            verify: "SHA-256:",
+            none: "Noch keine Builds verfügbar — schau nach dem nächsten Release wieder vorbei.",
+        },
+        Lang::It => DlText {
+            title: "Download",
+            intro: "Consigliato: la versione del Microsoft Store è firmata e si installa senza avvisi. I download diretti qui sotto non sono firmati — verifica lo SHA-256 dopo il download.",
+            store_btn: "Scarica dal Microsoft Store",
+            store_note: "La versione dello Store si aggiorna da sola e non mostra avvisi SmartScreen.",
+            win: "Windows",
+            win_note: "Non firmato — Windows SmartScreen avvisa: \"Ulteriori informazioni\" → \"Esegui comunque\".",
+            linux: "Linux",
+            linux_note: ".deb / .rpm / .AppImage non firmati. Rendi eseguibile l'AppImage: chmod +x.",
+            android: "Android",
+            android_note: "APK con firma di debug per il sideload (test). Abilita \"installa app sconosciute\".",
+            verify: "SHA-256:",
+            none: "Nessuna build disponibile — torna dopo la prossima release.",
+        },
+        Lang::Es => DlText {
+            title: "Descargas",
+            intro: "Recomendado: la versión de Microsoft Store está firmada y se instala sin avisos. Las descargas directas de abajo no están firmadas — verifica el SHA-256 tras descargar.",
+            store_btn: "Descargar de Microsoft Store",
+            store_note: "La versión de la Store se actualiza sola y no muestra avisos de SmartScreen.",
+            win: "Windows",
+            win_note: "Sin firmar — Windows SmartScreen avisa: \"Más información\" → \"Ejecutar de todas formas\".",
+            linux: "Linux",
+            linux_note: ".deb / .rpm / .AppImage sin firmar. Haz ejecutable el AppImage: chmod +x.",
+            android: "Android",
+            android_note: "APK firmada en depuración para instalación manual (pruebas). Activa \"instalar apps desconocidas\".",
+            verify: "SHA-256:",
+            none: "Aún no hay compilaciones — vuelve tras la próxima versión.",
+        },
+        Lang::Fr => DlText {
+            title: "Téléchargements",
+            intro: "Recommandé : la version du Microsoft Store est signée et s'installe sans avertissement. Les téléchargements directs ci-dessous ne sont pas signés — vérifiez le SHA-256 après téléchargement.",
+            store_btn: "Obtenir sur le Microsoft Store",
+            store_note: "La version du Store se met à jour automatiquement et n'affiche aucun avertissement SmartScreen.",
+            win: "Windows",
+            win_note: "Non signé — Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».",
+            linux: "Linux",
+            linux_note: ".deb / .rpm / .AppImage non signés. Rendez l'AppImage exécutable : chmod +x.",
+            android: "Android",
+            android_note: "APK signé en debug pour le sideload (test). Activez « installer des applis inconnues ».",
+            verify: "SHA-256 :",
+            none: "Aucune version disponible pour l'instant — revenez après la prochaine release.",
+        },
+    }
+}
+
+/// One platform section: heading + note + a list of artifact rows. Empty string
+/// when no artifact matches `platform`, so the section is omitted entirely.
+fn dl_section(base: &str, head: &str, note: &str, verify: &str, platform: &str, arts: &[Artifact]) -> String {
+    let rows: String = arts
+        .iter()
+        .filter(|a| a.platform == platform)
+        .map(|a| {
+            format!(
+                r#"<li><a class="dl" href="{base}/download/{file}">{file}</a> <span class="muted">{size} · {arch}</span><br><span class="muted">{verify}</span> <code>{sha}</code></li>"#,
+                base = base,
+                file = esc(&a.file),
+                size = human_size(a.size),
+                arch = esc(&a.arch),
+                verify = verify,
+                sha = esc(&a.sha256),
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        String::new()
+    } else {
+        format!("<h2>{head}</h2>\n<p class=\"muted\">{note}</p>\n<ul>{rows}</ul>\n")
+    }
+}
+
+/// Localized download page: MS Store badge + per-platform artifact lists with
+/// SHA-256, fed by the mirror's manifest.json (`arts`). `version` is shown in
+/// the heading when known.
+pub fn downloads(l: Lang, base: &str, version: Option<&str>, arts: &[Artifact]) -> (&'static str, String) {
+    let t = dl_text(l);
+    let ver = version.map(|v| format!(" <span class=\"muted\">v{}</span>", esc(v))).unwrap_or_default();
+    let mut body = format!(
+        "<h1>{title}{ver}</h1>\n<p>{intro}</p>\n<p>{store}</p>\n<p class=\"muted\">{store_note}</p>\n",
+        title = t.title,
+        ver = ver,
+        intro = t.intro,
+        store = store_badge(t.store_btn),
+        store_note = t.store_note,
+    );
+    if arts.is_empty() {
+        body.push_str(&format!("<p class=\"muted\">{}</p>", t.none));
+        return (t.title, body);
+    }
+    body.push_str(&dl_section(base, t.win, t.win_note, t.verify, "windows", arts));
+    body.push_str(&dl_section(base, t.linux, t.linux_note, t.verify, "linux", arts));
+    body.push_str(&dl_section(base, t.android, t.android_note, t.verify, "android", arts));
+    (t.title, body)
 }
 
 pub fn privacy(l: Lang) -> (&'static str, String) {
