@@ -1,0 +1,30 @@
+# Dependabot: automated dependency-update PRs across the project's ecosystems.
+# Security updates are always on; these blocks add scheduled version bumps too.
+version: 2
+updates:
+  # Frontend (pnpm) — the Tauri app's web deps, where the esbuild advisory lived.
+  - package-ecosystem: npm
+    directory: /apps/companion
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # Rust workspace (companion-core, server, crates) — Cargo.lock at the root.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust:
+        patterns: ["*"]
+
+  # GitHub Actions used by the build/release workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
