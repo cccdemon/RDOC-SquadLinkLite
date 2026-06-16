@@ -1,8 +1,10 @@
 # InitConnection signaling server. Build context = repo root.
 # Pin fixed versions so a deploy is reproducible and not silently moved by an
 # upstream `:1` / `:bookworm-slim` tag. For full integrity, append the manifest
-# digest too, e.g. `FROM rust:1.83.0-bookworm@sha256:<digest> AS build`.
-FROM rust:1.83.0-bookworm AS build
+# digest too, e.g. `FROM rust:1.90-bookworm@sha256:<digest> AS build`.
+# Must be >= 1.85: transitive deps (e.g. time 0.3.47) require the edition2024
+# Cargo feature.
+FROM rust:1.90-bookworm AS build
 WORKDIR /app
 COPY . .
 RUN cargo build --release -p init-connection
