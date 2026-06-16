@@ -29,3 +29,12 @@ windows-sys = { version = "0.59", features = [
   "Win32_Storage_Packaging_Appx",
   "Win32_Devices_HumanInterfaceDevice",
 ] }
+# Ergonomic COM for WASAPI per-session audio ducking (lower other apps' volume
+# while SquadLink voice is active). windows-sys raw vtable calls would be far
+# more error-prone for COM.
+windows = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_Media_Audio",
+] }

@@ -373,6 +373,80 @@ mod raw_input {
     }
 }
 
+// ── Audio ducking: lower other apps' volume while SquadLink voice is active ───
+// Windows-only (WASAPI per-session volume). The frontend drives `set_ducking`
+// from the combined "I'm transmitting OR a peer is speaking" state.
+#[cfg(windows)]
+mod ducking {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use windows::core::Interface;
+    use windows::Win32::Media::Audio::{
+        eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
+        ISimpleAudioVolume, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    const DUCK_FACTOR: f32 = 0.25; // other apps drop to 25% while voice is active
+
+    // pid -> original master volume, captured the moment ducking turns on.
+    fn saved() -> &'static Mutex<HashMap<u32, f32>> {
+        static S: OnceLock<Mutex<HashMap<u32, f32>>> = OnceLock::new();
+        S.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Lower (active) or restore (inactive) every OTHER app's audio session.
+    /// Runs on a short-lived MTA thread so it never disturbs Tauri's apartment.
+    pub fn set(active: bool) {
+        std::thread::spawn(move || unsafe {
+            let _ = run(active);
+        });
+    }
+
+    unsafe fn run(active: bool) -> windows::core::Result<()> {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumr: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let dev = enumr.GetDefaultAudioEndpoint(eRender, eMultimedia)?;
+        let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None)?;
+        let sessions = mgr.GetSessionEnumerator()?;
+        let count = sessions.GetCount()?;
+        let me = std::process::id();
+        for i in 0..count {
+            let ctrl = sessions.GetSession(i)?;
+            let ctrl2: IAudioSessionControl2 = ctrl.cast()?;
+            let pid = ctrl2.GetProcessId().unwrap_or(0);
+            if pid == 0 || pid == me {
+                continue; // skip the system session and our own
+            }
+            let vol: ISimpleAudioVolume = ctrl.cast()?;
+            if active {
+                let cur = vol.GetMasterVolume()?;
+                let orig = *saved().lock().unwrap().entry(pid).or_insert(cur);
+                let _ = vol.SetMasterVolume(orig * DUCK_FACTOR, std::ptr::null());
+            } else if let Some(orig) = saved().lock().unwrap().remove(&pid) {
+                let _ = vol.SetMasterVolume(orig, std::ptr::null());
+            }
+        }
+        if !active {
+            saved().lock().unwrap().clear();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+mod ducking {
+    pub fn set(_active: bool) {}
+}
+
+/// Duck/restore other apps' audio. No-op off Windows.
+#[tauri::command]
+fn set_ducking(active: bool) {
+    ducking::set(active);
+}
+
 #[tauri::command]
 fn set_ptt_binding(slot: usize, code: Option<String>) {
     if slot >= 2 {
@@ -775,7 +849,8 @@ fn main() {
             take_pending_deeplink,
             is_store_build,
             set_ptt_binding,
-            start_ptt_capture
+            start_ptt_capture,
+            set_ducking
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

@@ -209,6 +209,14 @@ export default function App() {
   });
   // null = idle; 0 or 1 = currently capturing a new binding for that slot.
   const [capturingSlot, setCapturingSlot] = useState<number | null>(null);
+  // Auto-duck other apps (game etc.) while SquadLink voice is active (Windows).
+  const [duckOthers, setDuckOthers] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.duck") !== "0";
+    } catch {
+      return true;
+    }
+  });
 
   // Load device list once (for the gear settings).
   useEffect(() => {
@@ -447,6 +455,15 @@ export default function App() {
     invoke("set_ptt_binding", { slot: 1, code: null }).catch(() => {});
     try { localStorage.removeItem("sa.ptt2"); } catch { /* ignore */ }
   };
+  // Duck other apps while I transmit or any peer is speaking; restore on silence.
+  const duckActive = duckOthers && (transmitting || participants.some((p) => !p.you && p.speaking));
+  const duckRef = useRef(false);
+  useEffect(() => {
+    if (duckRef.current !== duckActive) {
+      duckRef.current = duckActive;
+      invoke("set_ducking", { active: duckActive }).catch(() => {});
+    }
+  }, [duckActive]);
   const rotateKey = () => {
     setRotating(true);
     invoke("rotate_key").catch(() => setRotating(false));
@@ -687,6 +704,19 @@ export default function App() {
           <div className="sub2" style={{ opacity: 0.7 }}>
             Push-to-Talk: jede Taste, Maustaste oder Gamepad-/Joystick-Taste (RAW) — bis zu zwei, beide senden. Geräteänderung wirkt sofort (auch während eines Gesprächs).
           </div>
+          <label className="ckrow">
+            <input
+              type="checkbox"
+              checked={duckOthers}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setDuckOthers(on);
+                try { localStorage.setItem("sa.duck", on ? "1" : "0"); } catch { /* ignore */ }
+                if (!on) invoke("set_ducking", { active: false }).catch(() => {});
+              }}
+            />{" "}
+            Andere Apps automatisch leiser, wenn im SquadLink gesprochen wird (Windows)
+          </label>
 
           <label>🎧 Mikrofon-Test</label>
           <button className={`btn sm ${monitoring ? "primary" : ""}`} onClick={toggleMonitor}>
