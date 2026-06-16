@@ -78,18 +78,23 @@ process_asset() {
   url="$1"; fname="$(basename "$url")"
   $CURL -o "$STAGE/$fname" "$url"
 
-  # Verify against the release's SHA256SUMS when available; fail closed on
-  # mismatch. With no published sums (legacy releases), compute + warn.
-  expected="$(awk -v f="$fname" '$2==f || $2=="*"f || $2=="./"f {print $1; exit}' "$sums" | tr 'A-F' 'a-f')"
+  # Verify against the release's SHA256SUMS when available. Match by HASH
+  # presence, not filename: CI generates the sums from the on-disk bundle names
+  # ("RDOC SquadLink Lite_…") but GitHub serves the assets renamed with dots
+  # ("RDOC.SquadLink.Lite_…"), so filenames never line up — the content (hash)
+  # does. SHA-256 is collision-resistant, so a hash hit is a sound verification.
+  # Fail closed when sums exist but the hash is absent (tamper); with no
+  # published sums (legacy releases) compute + warn.
   actual="$(sha256sum "$STAGE/$fname" | cut -d' ' -f1)"
-  if [ -n "$expected" ]; then
-    if [ "$expected" != "$actual" ]; then
-      echo "CHECKSUM MISMATCH for $fname (expected $expected, got $actual) — aborting, DEST untouched" >&2
+  if [ -s "$sums" ]; then
+    if grep -qi -- "$actual" "$sums"; then
+      echo "verified $fname sha256=$actual"
+    else
+      echo "CHECKSUM MISMATCH for $fname (sha256 $actual not in published SHA256SUMS) — aborting, DEST untouched" >&2
       exit 1
     fi
-    echo "verified $fname sha256=$actual"
   else
-    echo "WARNING: no SHA256SUMS entry for $fname — mirroring with locally computed hash" >&2
+    echo "WARNING: no SHA256SUMS published for this release — mirroring with locally computed hash" >&2
   fi
 
   printf '%s' "$actual" > "$STAGE/$fname.sha256"
