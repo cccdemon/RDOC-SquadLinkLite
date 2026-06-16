@@ -10,16 +10,14 @@ name: Build SquadLink Lite (Android)
 # Release signing (AAB for Play Store) needs a real keystore — see the commented
 # "release" section + the docs. Until then this produces an unsigned-for-store,
 # debug-signed-for-sideload APK artifact.
+#
+# MANUAL-ONLY for now: Android needs the Tauri mobile lib setup in src-tauri
+# (a [lib] cdylib/staticlib target + a #[tauri::mobile_entry_point] run() and
+# desktop-only plugins gated behind cfg(desktop)). Until that lands, `cargo
+# build --lib` fails with "no library targets found", so we don't auto-run this
+# on every push — trigger it by hand once the mobile entry point exists.
 
 on:
-  push:
-    branches: [main]
-    tags: ["squadlink-lite-v*"]
-    paths:
-      - "apps/companion/**"
-      - "apps/companion-core/**"
-      - "crates/**"
-      - ".github/workflows/build-companion-android.yml"
   workflow_dispatch:
 
 jobs:

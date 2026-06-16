@@ -57,7 +57,9 @@ jobs:
             file \
             wget \
             build-essential \
-            curl
+            curl \
+            xdg-utils \
+            desktop-file-utils
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
