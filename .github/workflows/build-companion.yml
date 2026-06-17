@@ -119,6 +119,86 @@ jobs:
             apps/companion/src-tauri/target/release/bundle/**/*.sha256
             apps/companion/src-tauri/target/release/bundle/SHA256SUMS-windows.txt
 
+      # Raw exe (+ WebView2 loader if emitted) handed to the MSIX job below.
+      - name: Upload raw exe for MSIX packaging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: squadlink-exe
+          if-no-files-found: warn
+          path: |
+            apps/companion/src-tauri/target/release/rdoc-squadlink-lite.exe
+            apps/companion/src-tauri/target/release/WebView2Loader.dll
+
+  # Pack an UNSIGNED MSIX for Microsoft Store upload (Partner Center re-signs).
+  # Isolated from notify-pull (which only `needs: build`), so an MSIX failure
+  # never blocks the deploy. Reuses the raw exe from the build job — no rebuild.
+  msix:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write # gh release upload on a tag
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built exe
+        uses: actions/download-artifact@v4
+        with:
+          name: squadlink-exe
+          path: apps/companion/src-tauri/target/release
+
+      # Manifest carries a hardcoded version; sync it to the app version so the
+      # package version matches the release.
+      - name: Sync AppxManifest version to app version
+        shell: pwsh
+        run: |
+          $ver = (Get-Content apps/companion/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $manifest = Resolve-Path apps/companion/msix/AppxManifest.xml
+          [xml]$m = Get-Content $manifest
+          $m.Package.Identity.Version = "$ver.0"
+          $m.Save($manifest)
+          Write-Host "MSIX version -> $ver.0"
+
+      # Run via Windows PowerShell 5.1 (pack.ps1 uses System.Drawing for the
+      # visual assets). No -SelfSign → unsigned package for the Store.
+      - name: Pack MSIX (unsigned)
+        run: powershell -ExecutionPolicy Bypass -File apps/companion/msix/pack.ps1 -NoBuild
+
+      - name: Generate SHA-256 checksum
+        if: always()
+        shell: pwsh
+        working-directory: apps/companion/msix
+        run: |
+          $sum = 'SHA256SUMS-msix.txt'
+          Remove-Item $sum -ErrorAction SilentlyContinue
+          Get-ChildItem -Filter *.msix | Sort-Object Name | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)" | Tee-Object -FilePath $sum -Append
+            $h | Out-File -FilePath "$($_.FullName).sha256" -Encoding ascii -NoNewline
+          }
+          Get-Content $sum
+
+      - name: Attach MSIX to Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: apps/companion/msix
+        run: |
+          $msix = (Get-ChildItem -Filter *.msix | Select-Object -First 1).Name
+          gh release upload "${{ github.ref_name }}" $msix SHA256SUMS-msix.txt --clobber --repo "${{ github.repository }}"
+
+      - name: Upload MSIX artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdoc-squadlink-lite-msix
+          if-no-files-found: warn
+          path: |
+            apps/companion/msix/*.msix
+            apps/companion/msix/*.sha256
+            apps/companion/msix/SHA256SUMS-msix.txt
+
   # On a tag release, immediately tell the server to pull the new installer
   # (push trigger, instead of waiting for the hourly systemd timer). The SSH
   # key is locked to a forced command on the host: it can ONLY run
