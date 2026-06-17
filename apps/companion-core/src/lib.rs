@@ -488,6 +488,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         Some(Cmd::ToggleTx) => {
                             let n = !transmit.load(Ordering::SeqCst);
                             transmit.store(n, Ordering::SeqCst);
+                            // Local self-feedback: click on our own transmit-onset too
+                            // (the server doesn't echo our PTT back to us).
+                            if n { earcon_loop.click(); }
                             if let Some(o) = &cur_out { let _ = o.send(ClientMsg::Ptt { active: n }); }
                             sink(UiEvent::Status { connected: true, transmitting: n });
                             emit_roster(&sink, &members, &me_id, &me_name, n);
@@ -495,6 +498,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         Some(Cmd::SetTx(on)) => {
                             if transmit.load(Ordering::SeqCst) != on {
                                 transmit.store(on, Ordering::SeqCst);
+                                if on { earcon_loop.click(); }
                                 if let Some(o) = &cur_out { let _ = o.send(ClientMsg::Ptt { active: on }); }
                                 sink(UiEvent::Status { connected: true, transmitting: on });
                                 emit_roster(&sink, &members, &me_id, &me_name, on);
