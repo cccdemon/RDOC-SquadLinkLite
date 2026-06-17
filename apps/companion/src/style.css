@@ -93,6 +93,9 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .hsec { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); margin-bottom: 10px; }
 
 .roster { gap: 6px; }
+/* Participant list scrolls on its own so PTT + self-controls stay visible no
+   matter how many peers (or how small the window). */
+.peerlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .peer {
   display: flex; align-items: center; gap: 8px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px;

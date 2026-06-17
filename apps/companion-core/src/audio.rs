@@ -47,6 +47,61 @@ impl Gains {
     }
 }
 
+/// Mix key for the local "Funk-Klick" earcon. Not a real peer → `peer_v` returns
+/// the 1.0 default, so the click bypasses per-peer gain and just rides the master
+/// bus and tanh limiter like any other source.
+pub const EARCON_KEY: &str = "__earcon__";
+
+/// A short "radio click" played LOCALLY through the SquadLink output device at the
+/// start of an incoming transmission, so the listener can tell SquadLink voice
+/// apart from game/other audio. Toggleable; off = `click()` is a no-op.
+pub struct Earcon {
+    mix: MixMap,
+    enabled: Arc<AtomicBool>,
+    samples: Vec<i16>,
+}
+impl Earcon {
+    pub fn new(mix: MixMap, enabled: Arc<AtomicBool>) -> Self {
+        Earcon { mix, enabled, samples: render_click() }
+    }
+    pub fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::SeqCst);
+    }
+    /// Queue one click into the mixer (no-op when disabled). Cheap + non-blocking;
+    /// safe to call from the async engine loop on a peer's PTT-onset.
+    pub fn click(&self) {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut m = self.mix.lock().unwrap();
+        let b = m.entry(EARCON_KEY.to_string()).or_default();
+        b.clear(); // drop any un-played click so rapid PTT toggling can't pile up
+        b.extend(self.samples.iter().copied());
+    }
+}
+
+/// Render the click once: two short decaying ticks ("k-chk", ~28 ms total) at
+/// 48 kHz mono i16 — the familiar push-to-talk key sound.
+fn render_click() -> Vec<i16> {
+    let sr = OPUS_SR as f32;
+    let mut out: Vec<i16> = Vec::new();
+    // (gap-before-tick ms, frequency Hz, amplitude 0..1, decay time-constant ms)
+    for (start_ms, freq, amp, tau_ms) in [(0.0f32, 1800.0f32, 0.28f32, 1.5f32), (18.0, 1300.0, 0.20, 2.0)] {
+        let gap = (start_ms / 1000.0 * sr) as usize;
+        while out.len() < gap {
+            out.push(0);
+        }
+        let n = (tau_ms * 5.0 / 1000.0 * sr) as usize; // ~5 time-constants of decay
+        for i in 0..n {
+            let t = i as f32 / sr;
+            let env = (-t / (tau_ms / 1000.0)).exp();
+            let s = (2.0 * std::f32::consts::PI * freq * t).sin() * env * amp;
+            out.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+        }
+    }
+    out
+}
+
 /// List input + output device names for the settings UI.
 pub fn list_devices() -> (Vec<String>, Vec<String>) {
     let host = cpal::default_host();

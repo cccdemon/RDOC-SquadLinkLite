@@ -103,6 +103,7 @@ pub struct Engine {
     bitrate: Arc<AtomicU32>,
     dtx: Arc<AtomicBool>,
     dev_tx: std::sync::mpsc::Sender<audio::DevCmd>,
+    earcon: Arc<audio::Earcon>,
 }
 impl Drop for Engine {
     fn drop(&mut self) {
@@ -162,6 +163,10 @@ impl Engine {
     pub fn set_peer_volume(&self, user_id: &str, v: f32) {
         self.gains.set_peer(user_id, v);
     }
+    /// Toggle the local "Funk-Klick" earcon at the start of incoming transmissions.
+    pub fn set_earcon(&self, on: bool) {
+        self.earcon.set_enabled(on);
+    }
 }
 
 pub(crate) fn build_api() -> Result<API> {
@@ -190,6 +195,7 @@ pub(crate) fn setup_audio(
     Arc<AtomicU32>,  // encoder bitrate (0 = auto; low-bw mode)
     Arc<AtomicBool>, // app-level DTX toggle
     std::sync::mpsc::Sender<audio::DevCmd>, // live input/output device switch
+    Arc<audio::Earcon>, // local "Funk-Klick" on incoming transmission start
 )> {
     let cap: Buf = Arc::new(Mutex::new(VecDeque::new()));
     let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
@@ -201,6 +207,9 @@ pub(crate) fn setup_audio(
     let stop = Arc::new(AtomicBool::new(false));
     let bitrate = Arc::new(AtomicU32::new(0)); // 0 = Opus auto
     let dtx = Arc::new(AtomicBool::new(false));
+    // Local earcon (default on): fires through the mixer, so it plays out the same
+    // output device as voice. The frontend pushes the saved on/off after connect.
+    let earcon = Arc::new(audio::Earcon::new(mix.clone(), Arc::new(AtomicBool::new(true))));
     // Live device rates: the device thread publishes the active rate here and the
     // encode/mixer resamplers retune when it changes (live device switch).
     let in_rate = Arc::new(AtomicU32::new(audio::OPUS_SR));
@@ -237,7 +246,7 @@ pub(crate) fn setup_audio(
         std::thread::spawn(move || audio::mixer_loop(mix, play, out_rate, gains, stop));
     }
 
-    Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx))
+    Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon))
 }
 
 struct Member {
@@ -280,8 +289,11 @@ fn emit_roster(
 pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx) =
+    let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon) =
         setup_audio(cfg.input_device.clone(), cfg.output_device.clone())?;
+    // Cloned into the mesh loop (fires the click); the original stays in Engine
+    // so the frontend can toggle it on/off.
+    let earcon_loop = earcon.clone();
 
     let api = Arc::new(build_api()?);
     let local = Arc::new(TrackLocalStaticSample::new(
@@ -434,7 +446,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         ServerMsg::Answer { from, sdp } => { let _ = mesh.on_answer(&from, sdp).await; }
                         ServerMsg::Ice { from, candidate } => { mesh.on_ice(&from, candidate).await; }
                         ServerMsg::Ptt { user_id, active } => {
+                            let was = members.get(&user_id).map(|m| m.speaking).unwrap_or(false);
                             if let Some(m) = members.get_mut(&user_id) { m.speaking = active; }
+                            // Onset of an incoming transmission → local "Funk-Klick".
+                            if active && !was { earcon_loop.click(); }
                             emit_roster(&sink, &members, &me_id, &me_name, transmit.load(Ordering::SeqCst));
                         }
                         ServerMsg::Rekey { by } => {
@@ -510,5 +525,5 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         }
     });
 
-    Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, monitor, stop, bitrate, dtx, dev_tx })
+    Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon })
 }

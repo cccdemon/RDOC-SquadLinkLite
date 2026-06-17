@@ -676,6 +676,14 @@ fn set_monitor(state: State<AppState>, on: bool) {
     }
 }
 
+/// Toggle the local "Funk-Klick" earcon played at the start of incoming transmissions.
+#[tauri::command]
+fn set_earcon(state: State<AppState>, on: bool) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_earcon(on);
+    }
+}
+
 #[tauri::command]
 fn set_low_bandwidth(state: State<AppState>, on: bool) {
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -850,7 +858,8 @@ fn main() {
             is_store_build,
             set_ptt_binding,
             start_ptt_capture,
-            set_ducking
+            set_ducking,
+            set_earcon
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

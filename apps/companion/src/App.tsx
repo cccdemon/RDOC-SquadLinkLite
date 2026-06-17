@@ -217,6 +217,15 @@ export default function App() {
       return true;
     }
   });
+  // Local "Funk-Klick" earcon at the start of an incoming transmission, so you can
+  // hear that audio is coming from SquadLink. Default on.
+  const [earcon, setEarcon] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.earcon") !== "0";
+    } catch {
+      return true;
+    }
+  });
 
   // Load device list once (for the gear settings).
   useEffect(() => {
@@ -442,6 +451,7 @@ export default function App() {
     if (connected) {
       invoke("set_dsp", { cfg: dsp }).catch(() => {});
       invoke("set_low_bandwidth", { on: lowBw }).catch(() => {});
+      invoke("set_earcon", { on: earcon }).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
@@ -716,6 +726,19 @@ export default function App() {
               }}
             />{" "}
             Andere Apps automatisch leiser, wenn im SquadLink gesprochen wird (Windows)
+          </label>
+          <label className="ckrow">
+            <input
+              type="checkbox"
+              checked={earcon}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setEarcon(on);
+                try { localStorage.setItem("sa.earcon", on ? "1" : "0"); } catch { /* ignore */ }
+                invoke("set_earcon", { on }).catch(() => {});
+              }}
+            />{" "}
+            Funk-Klick abspielen, wenn jemand zu sprechen beginnt (akustische SquadLink-Kennung)
           </label>
 
           <label>🎧 Mikrofon-Test</label>
@@ -992,7 +1015,7 @@ export default function App() {
 
       <div className="volrow">
         <span className="vlabel">🔊 Gesamt</span>
-        <input type="range" min={0} max={100} value={masterVol} onChange={(e) => onMaster(Number(e.target.value))} />
+        <input type="range" min={0} max={200} value={masterVol} onChange={(e) => onMaster(Number(e.target.value))} />
         <span className="vval">{masterVol}%</span>
       </div>
 
@@ -1011,6 +1034,7 @@ export default function App() {
             </div>
           )}
           <div className="hsec">Teilnehmer · {participants.length}</div>
+          <div className="peerlist">
           {participants.map((p) => (
             <div key={p.user_id} className={`peer ${p.speaking ? "speaking" : ""}`}>
               <div className="peerhead">
@@ -1031,7 +1055,7 @@ export default function App() {
                   <input
                     type="range"
                     min={0}
-                    max={100}
+                    max={200}
                     value={peerVol[p.user_id] ?? 100}
                     onChange={(e) => onPeerVol(p.user_id, Number(e.target.value))}
                   />
@@ -1040,6 +1064,7 @@ export default function App() {
               )}
             </div>
           ))}
+          </div>
           <button className={`ptt ${transmitting ? "live" : ""} ${micMuted ? "muted" : ""}`} onClick={ptt} disabled={micMuted}>
             {micMuted ? "🔇 MIKRO STUMM" : transmitting ? "● SENDEN AKTIV" : "PUSH TO TALK"}
             <span className="ptthint">{pttBinding2 ? `${pttLabel(pttBinding)} / ${pttLabel(pttBinding2)}` : pttLabel(pttBinding)} halten · oder klick zum Umschalten</span>

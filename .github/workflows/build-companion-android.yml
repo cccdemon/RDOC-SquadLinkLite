@@ -30,6 +30,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # audiopus_sys cross-compiles vendored libopus for each Android ABI
+      # (host libopus-dev is the wrong arch) → needs autotools + clang/bindgen.
+      - name: Install opus cross-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool clang
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
