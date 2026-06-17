@@ -28,7 +28,7 @@ jobs:
       # the emulator. Drop i686 (legacy 32-bit emulator) to speed builds.
       NDK_VERSION: "26.3.11579264"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # audiopus_sys cross-compiles vendored libopus for each Android ABI
       # (host libopus-dev is the wrong arch) → needs autotools + clang/bindgen.
