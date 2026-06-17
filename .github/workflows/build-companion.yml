@@ -109,7 +109,7 @@ jobs:
 
       - name: Upload installer artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdoc-squadlink-lite-windows
           if-no-files-found: warn
@@ -122,7 +122,7 @@ jobs:
       # Raw exe (+ WebView2 loader if emitted) handed to the MSIX job below.
       - name: Upload raw exe for MSIX packaging
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: squadlink-exe
           if-no-files-found: warn
@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload MSIX artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdoc-squadlink-lite-msix
           if-no-files-found: warn

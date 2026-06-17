@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload APK artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rdoc-squadlink-lite-android
           if-no-files-found: warn
