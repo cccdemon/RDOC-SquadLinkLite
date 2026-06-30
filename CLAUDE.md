@@ -30,7 +30,14 @@ builds (Linux multi-arch, Android, macOS, iOS) are planned as a GitHub Actions m
 - `apps/companion-core` — headless engine: cpal + opus audio over webrtc-rs P2P mesh.
 - Windows-only code is gated `#[cfg(windows)]`; Linux fallbacks exist. Global PTT
   (Raw Input) is Windows-only; the in-app PTT button works everywhere.
-- `tauri.conf.json` bundle targets are `nsis,msi` (Windows-only) — Linux/mobile
-  builds need their own bundle targets.
+- `tauri.conf.json` bundle target is `"all"`: each host builds its natives —
+  Windows → `nsis`+`msi`, Linux → `deb`+`rpm`+`appimage`, macOS → `dmg`+`app`.
+  Linux AppImage bundles webkit2gtk/GTK/libsoup internally (via
+  linuxdeploy-plugin-gtk) → runs on rolling distros (Arch) with no system webkit.
+  `bundle.linux.deb.depends` declares deb runtime deps. Mobile still needs its own
+  targets.
+- Linux runtime: `main()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` +
+  `WEBKIT_DISABLE_COMPOSITING_MODE=1` (if unset) — webkitgtk 2.42+ DMABUF renderer
+  gives a blank window on many GPU/driver combos.
 
 Git remote: `https://github.com/cccdemon/RDOC-SquadLinkLite.git`
