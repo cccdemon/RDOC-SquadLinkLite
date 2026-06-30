@@ -38,6 +38,9 @@ pub struct Participant {
     /// "DIREKT" | "RELAY (TURN)" once the link is up; None while connecting.
     pub badge: Option<String>,
     pub speaking: bool,
+    /// Current channel (frequency) name this member is tuned to. Members on a
+    /// different channel than you are shown dimmed and you don't hear them.
+    pub channel: String,
 }
 
 /// Events the engine pushes to the frontend.
@@ -55,6 +58,8 @@ pub enum UiEvent {
     /// Signaling link up/down. P2P audio is independent and keeps running while
     /// down; `up:false` should offer a "resume session" action.
     Signaling { up: bool },
+    /// Confirms MY current channel (frequency) name after a switch / on connect.
+    Channel { mine: String },
 }
 
 pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
@@ -69,6 +74,62 @@ pub(crate) const MAX_CHAT_CHARS: usize = 2000;
 pub(crate) enum MeshEvent {
     Chat { from: String, text: String },
     Badge { peer: String, badge: String },
+    /// A peer announced (over its DataChannel) the channel it's tuned to.
+    PeerChannel { peer: String, name: String },
+}
+
+/// Default channel (frequency) every client starts on.
+pub(crate) const DEFAULT_CHANNEL: &str = "Funk 1";
+/// Max channel-name length accepted at the IPC boundary.
+pub const MAX_CHANNEL_LEN: usize = 32;
+
+/// Canonical form for channel matching: trim + lowercase (case-insensitive).
+pub(crate) fn canon_channel(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+/// Shared channel (frequency) state: my tuned channel + each peer's announced
+/// channel. Lives behind an `Arc`; the mesh RX-gate consults it on the hot
+/// audio path, the engine updates it on switch / peer announce. Names are stored
+/// raw (display form); matching canonicalizes both sides.
+pub struct ChanState {
+    mine: Mutex<String>,
+    peers: Mutex<HashMap<String, String>>,
+}
+impl ChanState {
+    fn new() -> Self {
+        Self { mine: Mutex::new(DEFAULT_CHANNEL.to_string()), peers: Mutex::new(HashMap::new()) }
+    }
+    /// My current channel (raw display form).
+    pub fn mine(&self) -> String {
+        self.mine.lock().unwrap().clone()
+    }
+    pub fn set_mine(&self, name: String) {
+        *self.mine.lock().unwrap() = name;
+    }
+    pub fn set_peer(&self, peer: &str, name: String) {
+        self.peers.lock().unwrap().insert(peer.to_string(), name);
+    }
+    pub fn remove_peer(&self, peer: &str) {
+        self.peers.lock().unwrap().remove(peer);
+    }
+    /// A peer's last-announced channel (raw display form), if any.
+    pub fn peer(&self, peer: &str) -> Option<String> {
+        self.peers.lock().unwrap().get(peer).cloned()
+    }
+    /// True if `peer`'s announced channel matches mine. An unannounced peer is
+    /// assumed to be on the default channel (so initial audio isn't lost).
+    pub fn hears(&self, peer: &str) -> bool {
+        let mine = canon_channel(&self.mine.lock().unwrap());
+        let theirs = self
+            .peers
+            .lock()
+            .unwrap()
+            .get(peer)
+            .map(|s| canon_channel(s))
+            .unwrap_or_else(|| canon_channel(DEFAULT_CHANNEL));
+        mine == theirs
+    }
 }
 
 pub struct EngineConfig {
@@ -91,6 +152,7 @@ enum Cmd {
     Chat(String),
     Rekey,
     Reconnect,
+    SetChannel(String),
 }
 
 /// Handle to the running engine; methods are non-blocking.
@@ -132,6 +194,11 @@ impl Engine {
     /// down the live P2P mesh.
     pub fn reconnect(&self) {
         let _ = self.cmd_tx.send(Cmd::Reconnect);
+    }
+    /// Switch to a named channel (frequency). Announced to all peers over the
+    /// mesh DataChannels; you then only hear peers on the same channel.
+    pub fn set_channel(&self, name: String) {
+        let _ = self.cmd_tx.send(Cmd::SetChannel(name));
     }
     /// Live capture-path DSP config (noise gate / compressor / limiter).
     pub fn set_dsp(&self, cfg: audio::DspConfig) {
@@ -253,6 +320,7 @@ struct Member {
     name: String,
     badge: Option<String>,
     speaking: bool,
+    channel: String,
 }
 
 fn emit_roster(
@@ -260,6 +328,7 @@ fn emit_roster(
     members: &HashMap<String, Member>,
     me_id: &str,
     me_name: &str,
+    me_channel: &str,
     transmitting: bool,
 ) {
     let mut participants = vec![Participant {
@@ -268,6 +337,7 @@ fn emit_roster(
         you: true,
         badge: None,
         speaking: transmitting,
+        channel: me_channel.to_string(),
     }];
     let mut others: Vec<Participant> = members
         .iter()
@@ -277,6 +347,7 @@ fn emit_roster(
             you: false,
             badge: m.badge.clone(),
             speaking: m.speaking,
+            channel: m.channel.clone(),
         })
         .collect();
     others.sort_by(|a, b| a.name.cmp(&b.name));
@@ -332,7 +403,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     // Uplink: the mesh sends ClientMsg here; the loop forwards to the CURRENT
     // signaling connection, so the mesh survives a signaling reconnect.
     let (up_tx, mut up_rx) = mpsc::unbounded_channel::<ClientMsg>();
-    let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx);
+    // Shared channel (frequency) state: the mesh RX-gate reads it on the hot
+    // audio path; the engine loop updates it on switch / peer announce.
+    let chan = Arc::new(ChanState::new());
+    let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx, chan.clone());
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Cmd>();
 
@@ -348,6 +422,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let rc_name = cfg.name.clone();
     tokio::spawn(async move {
         let mut members: HashMap<String, Member> = HashMap::new();
+        // My current channel (display form). Mirrors `chan.mine()`; kept here so
+        // the roster + UiEvent::Channel show the exact name I typed.
+        let mut my_channel = DEFAULT_CHANNEL.to_string();
+        sink(UiEvent::Channel { mine: my_channel.clone() }); // tell the UI our start channel
         let mut key_gen: u32 = 1; // generation #1 = the initial DTLS-SRTP keys
         let mut cur_in = Some(incoming);
         let mut cur_out = Some(out);
@@ -428,19 +506,32 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                     };
                     match msg {
                         ServerMsg::Roster { peers } => {
-                            members = peers.iter().map(|p| (p.user_id.clone(), Member { name: p.name.clone(), badge: None, speaking: false })).collect();
+                            // Seed each member's channel from any announce already
+                            // received (DC may outlive a signaling reconnect).
+                            members = peers.iter().map(|p| (p.user_id.clone(), Member {
+                                name: p.name.clone(),
+                                badge: None,
+                                speaking: false,
+                                channel: chan.peer(&p.user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                            })).collect();
                             for p in &peers { let _ = mesh.on_peer(&p.user_id).await; }
-                            emit_roster(&sink, &members, &me_id, &me_name, transmit.load(Ordering::SeqCst));
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         ServerMsg::PeerJoined { user_id, name } => {
-                            members.insert(user_id.clone(), Member { name, badge: None, speaking: false });
+                            members.insert(user_id.clone(), Member {
+                                name,
+                                badge: None,
+                                speaking: false,
+                                channel: chan.peer(&user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                            });
                             let _ = mesh.on_peer(&user_id).await;
-                            emit_roster(&sink, &members, &me_id, &me_name, transmit.load(Ordering::SeqCst));
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         ServerMsg::PeerLeft { user_id } => {
                             members.remove(&user_id);
+                            chan.remove_peer(&user_id);
                             mesh.on_left(&user_id).await;
-                            emit_roster(&sink, &members, &me_id, &me_name, transmit.load(Ordering::SeqCst));
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         ServerMsg::Offer { from, sdp } => { let _ = mesh.on_offer(&from, sdp).await; }
                         ServerMsg::Answer { from, sdp } => { let _ = mesh.on_answer(&from, sdp).await; }
@@ -448,9 +539,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         ServerMsg::Ptt { user_id, active } => {
                             let was = members.get(&user_id).map(|m| m.speaking).unwrap_or(false);
                             if let Some(m) = members.get_mut(&user_id) { m.speaking = active; }
-                            // Onset of an incoming transmission → local "Funk-Klick".
-                            if active && !was { earcon_loop.click(); }
-                            emit_roster(&sink, &members, &me_id, &me_name, transmit.load(Ordering::SeqCst));
+                            // Onset of an incoming transmission → local "Funk-Klick",
+                            // but only for peers on MY channel (off-channel is muted).
+                            if active && !was && chan.hears(&user_id) { earcon_loop.click(); }
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         ServerMsg::Rekey { by } => {
                             let _ = mesh.rekey().await;
@@ -478,7 +570,13 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         }
                         Some(MeshEvent::Badge { peer, badge }) => {
                             if let Some(m) = members.get_mut(&peer) { m.badge = Some(badge); }
-                            emit_roster(&sink, &members, &me_id, &me_name, transmit.load(Ordering::SeqCst));
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                        }
+                        Some(MeshEvent::PeerChannel { peer, name }) => {
+                            // A peer announced its channel; reflect it in the roster.
+                            // (ChanState was already updated in the mesh RX path.)
+                            if let Some(m) = members.get_mut(&peer) { m.channel = name; }
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         None => {}
                     }
@@ -493,7 +591,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             if n { earcon_loop.click(); }
                             if let Some(o) = &cur_out { let _ = o.send(ClientMsg::Ptt { active: n }); }
                             sink(UiEvent::Status { connected: true, transmitting: n });
-                            emit_roster(&sink, &members, &me_id, &me_name, n);
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, n);
                         }
                         Some(Cmd::SetTx(on)) => {
                             if transmit.load(Ordering::SeqCst) != on {
@@ -501,7 +599,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 if on { earcon_loop.click(); }
                                 if let Some(o) = &cur_out { let _ = o.send(ClientMsg::Ptt { active: on }); }
                                 sink(UiEvent::Status { connected: true, transmitting: on });
-                                emit_roster(&sink, &members, &me_id, &me_name, on);
+                                emit_roster(&sink, &members, &me_id, &me_name, &my_channel, on);
                             }
                         }
                         Some(Cmd::Chat(t)) => {
@@ -518,6 +616,18 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 backoff = 2;
                                 next_try = Some(tokio::time::Instant::now());
                             }
+                        }
+                        Some(Cmd::SetChannel(name)) => {
+                            // Switch frequency: store raw display name, update the
+                            // shared gate state, and announce to all peers. From now
+                            // on I only hear peers on `name`.
+                            let name: String = name.trim().chars().take(MAX_CHANNEL_LEN).collect();
+                            let name = if name.is_empty() { DEFAULT_CHANNEL.to_string() } else { name };
+                            my_channel = name.clone();
+                            chan.set_mine(name.clone());
+                            mesh.broadcast_channel(&name).await;
+                            sink(UiEvent::Channel { mine: name });
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         None => {
                             sink(UiEvent::Status { connected: false, transmitting: false });

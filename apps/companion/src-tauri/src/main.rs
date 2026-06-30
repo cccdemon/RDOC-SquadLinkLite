@@ -655,6 +655,23 @@ fn reconnect_session(state: State<AppState>) {
     }
 }
 
+/// Switch to a named channel (frequency). Validated at the IPC boundary; the
+/// engine announces it to all peers and re-gates incoming audio.
+#[tauri::command]
+fn set_channel(state: State<AppState>, name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty()
+        || name.chars().count() > companion_core::MAX_CHANNEL_LEN
+        || name.chars().any(|c| c.is_control())
+    {
+        return Err("invalid channel (1–32 chars, no control chars)".into());
+    }
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_channel(name);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_dsp(state: State<AppState>, mut cfg: companion_core::audio::DspConfig) {
     // Normalize at the IPC boundary: reject NaN/inf, clamp to sane ranges.
@@ -793,6 +810,20 @@ fn open_url(url: &str) {
 }
 
 fn main() {
+    // WebKitGTK 2.42+ (shipped by rolling distros like Arch) defaults to a DMABUF
+    // renderer that fails under many GPU/driver/Xwayland combos, leaving the Tauri
+    // window blank/white or crashing on launch. Disabling it forces the stable GL
+    // path. Set before any webview is created; only if the user hasn't overridden it.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
+    }
+
     tauri::Builder::default()
         // Single-instance MUST be the first plugin: a second launch (e.g. clicking
         // a squadlink:// link while running) forwards its argv here; we surface the
@@ -846,6 +877,7 @@ fn main() {
             list_audio_devices,
             rotate_key,
             reconnect_session,
+            set_channel,
             set_dsp,
             set_monitor,
             set_low_bandwidth,

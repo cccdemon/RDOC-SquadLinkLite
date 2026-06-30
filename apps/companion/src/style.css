@@ -112,6 +112,31 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 }
 .badge.direct { color: var(--green); border: 1px solid var(--green); }
 .badge.relay { color: var(--yellow); border: 1px solid var(--yellow); }
+/* Channel (frequency) badge on each peer. The chan badge takes the margin-auto
+   so it right-aligns; a following connection badge trails it. */
+.badge.chan { margin-left: auto; }
+.badge.chan.same { color: var(--cyan); border: 1px solid var(--cyan-dim); }
+.badge.chan.other { color: var(--dim); border: 1px solid var(--line); }
+.badge.chan + .badge { margin-left: 6px; }
+/* Off-channel peers: dimmed (you don't hear them). */
+.peer.offchannel { opacity: 0.45; }
+
+/* Channel switcher bar above the roster. */
+.chanbar { margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+.chanchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chanchip {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 5px 10px; border-radius: 14px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+}
+.chanchip:hover { border-color: var(--cyan-dim); color: var(--txt); }
+.chanchip.active { background: var(--panel2); border-color: var(--cyan); color: var(--cyan); }
+.channew { display: flex; gap: 6px; }
+.channew input {
+  flex: 1; min-width: 0; padding: 6px 9px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--txt);
+}
+.channew .btn.sm { margin-top: 0; flex: none; }
 
 .ptt {
   margin-top: auto;

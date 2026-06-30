@@ -164,6 +164,7 @@ async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc
                                 you: true,
                                 badge: None,
                                 speaking: false,
+                                channel: crate::DEFAULT_CHANNEL.into(),
                             },
                             Participant {
                                 user_id: "peer".into(),
@@ -171,6 +172,7 @@ async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc
                                 you: false,
                                 badge: Some(badge),
                                 speaking: false,
+                                channel: crate::DEFAULT_CHANNEL.into(),
                             },
                         ],
                     });

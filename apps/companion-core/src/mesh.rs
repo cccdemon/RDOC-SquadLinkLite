@@ -10,10 +10,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use bytes::Bytes;
-use protocol::{ChatMsg, ClientMsg};
+use protocol::{ChatMsg, ClientMsg, CtrlMsg};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::MeshEvent;
+use crate::{ChanState, MeshEvent};
 use webrtc::api::API;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
@@ -65,26 +65,61 @@ impl PeerConn {
     }
 }
 
-/// Forward incoming chat (sender = the channel's peer) to the engine and stash
-/// the channel.
-fn wire_chat(peer: String, slot: ChatSlot, dc: Arc<RTCDataChannel>, events: UnboundedSender<MeshEvent>) {
+/// Wire a peer's DataChannel: route inbound control messages (chat + channel
+/// announces) to the engine and stash the channel for outbound sends. `from` =
+/// the peer owning this channel (sender identity is implicit).
+fn wire_ctrl(
+    peer: String,
+    slot: ChatSlot,
+    dc: Arc<RTCDataChannel>,
+    events: UnboundedSender<MeshEvent>,
+    chan: Arc<ChanState>,
+) {
     let p = peer.clone();
     dc.on_message(Box::new(move |msg: DataChannelMessage| {
         let p = p.clone();
         let events = events.clone();
+        let chan = chan.clone();
         Box::pin(async move {
             if msg.data.len() > crate::MAX_CHAT_BYTES {
-                return; // drop oversized frame before allocating a ChatMsg
+                return; // drop oversized frame before deserializing
             }
-            if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
-                if c.text.chars().count() > crate::MAX_CHAT_CHARS {
-                    c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+            // New clients send a tagged CtrlMsg; fall back to a bare ChatMsg so
+            // one prior version's plain chat still reads.
+            match serde_json::from_slice::<CtrlMsg>(&msg.data) {
+                Ok(CtrlMsg::Chat(mut c)) => {
+                    if c.text.chars().count() > crate::MAX_CHAT_CHARS {
+                        c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+                    }
+                    let _ = events.send(MeshEvent::Chat { from: p, text: c.text });
                 }
-                let _ = events.send(MeshEvent::Chat { from: p, text: c.text });
+                Ok(CtrlMsg::Channel { name }) => {
+                    let name: String = name.chars().take(crate::MAX_CHANNEL_LEN).collect();
+                    chan.set_peer(&p, name.clone());
+                    let _ = events.send(MeshEvent::PeerChannel { peer: p, name });
+                }
+                Err(_) => {
+                    if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
+                        if c.text.chars().count() > crate::MAX_CHAT_CHARS {
+                            c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+                        }
+                        let _ = events.send(MeshEvent::Chat { from: p, text: c.text });
+                    }
+                }
             }
         })
     }));
     *slot.lock().unwrap() = Some(dc);
+}
+
+/// Announce my current channel over a freshly-opened DataChannel so the peer
+/// learns where I'm tuned without waiting for a switch.
+fn announce_channel(dc: Arc<RTCDataChannel>, chan: Arc<ChanState>) {
+    tokio::spawn(async move {
+        if let Ok(j) = serde_json::to_string(&CtrlMsg::Channel { name: chan.mine() }) {
+            let _ = dc.send_text(j).await;
+        }
+    });
 }
 
 pub struct Mesh {
@@ -96,6 +131,7 @@ pub struct Mesh {
     ice_servers: Vec<RTCIceServer>,
     peers: HashMap<String, PeerConn>,
     events: UnboundedSender<MeshEvent>,
+    chan: Arc<ChanState>,
 }
 
 impl Mesh {
@@ -106,12 +142,13 @@ impl Mesh {
         out: UnboundedSender<ClientMsg>,
         decode_tx: DecodeTx,
         events: UnboundedSender<MeshEvent>,
+        chan: Arc<ChanState>,
     ) -> Self {
         let ice_servers = vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
             ..Default::default()
         }];
-        Self { api, local, my_id, out, decode_tx, ice_servers, peers: HashMap::new(), events }
+        Self { api, local, my_id, out, decode_tx, ice_servers, peers: HashMap::new(), events, chan }
     }
 
     pub fn add_turn(&mut self, urls: Vec<String>, username: String, credential: String) {
@@ -168,14 +205,16 @@ impl Mesh {
             })
         }));
 
-        // Remote audio track → decode pipeline.
+        // Remote audio track → decode pipeline (channel RX-gate inside read_track).
         let dtx = self.decode_tx.clone();
         let pid = peer.to_string();
+        let chan_rt = self.chan.clone();
         pc.on_track(Box::new(move |track: Arc<TrackRemote>, _, _| {
             let dtx = dtx.clone();
             let pid = pid.clone();
+            let chan_rt = chan_rt.clone();
             Box::pin(async move {
-                tokio::spawn(read_track(track, pid, dtx));
+                tokio::spawn(read_track(track, pid, dtx, chan_rt));
             })
         }));
 
@@ -184,12 +223,15 @@ impl Mesh {
         let chat_h = chat.clone();
         let pid2 = peer.to_string();
         let ev_chat = self.events.clone();
+        let chan_dc = self.chan.clone();
         pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
             let chat_h = chat_h.clone();
             let pid2 = pid2.clone();
             let ev_chat = ev_chat.clone();
+            let chan_dc = chan_dc.clone();
             Box::pin(async move {
-                wire_chat(pid2, chat_h, dc, ev_chat);
+                announce_channel(dc.clone(), chan_dc.clone());
+                wire_ctrl(pid2, chat_h, dc, ev_chat, chan_dc);
             })
         }));
 
@@ -235,7 +277,8 @@ impl Mesh {
         let p = self.peers.get(peer).unwrap();
         // Offerer creates the chat channel (must exist before the offer).
         let dc = p.pc.create_data_channel("chat", None).await?;
-        wire_chat(peer.to_string(), p.chat.clone(), dc, self.events.clone());
+        announce_channel(dc.clone(), self.chan.clone());
+        wire_ctrl(peer.to_string(), p.chat.clone(), dc, self.events.clone(), self.chan.clone());
 
         let offer = p.pc.create_offer(None).await?;
         p.pc.set_local_description(offer.clone()).await?;
@@ -324,6 +367,20 @@ impl Mesh {
         (up, down)
     }
 
+    /// Announce my (just-switched) channel to every connected peer's DataChannel.
+    pub async fn broadcast_channel(&self, name: &str) {
+        let json = match serde_json::to_string(&CtrlMsg::Channel { name: name.to_string() }) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        for p in self.peers.values() {
+            let dc = p.chat.lock().unwrap().clone();
+            if let Some(dc) = dc {
+                let _ = dc.send_text(json.clone()).await;
+            }
+        }
+    }
+
     /// Broadcast a chat line over every peer's DataChannel.
     pub async fn broadcast_chat(&self, text: &str) {
         let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -359,11 +416,13 @@ async fn selected_kind(pc: &RTCPeerConnection) -> Option<&'static str> {
     None
 }
 
-async fn read_track(track: Arc<TrackRemote>, peer: String, dtx: DecodeTx) {
+async fn read_track(track: Arc<TrackRemote>, peer: String, dtx: DecodeTx, chan: Arc<ChanState>) {
     loop {
         match track.read_rtp().await {
             Ok((pkt, _)) => {
-                if !pkt.payload.is_empty() {
+                // Channel RX-gate: only feed the decoder when this peer is tuned
+                // to the same channel as me. Off-channel audio is dropped here.
+                if !pkt.payload.is_empty() && chan.hears(&peer) {
                     let _ = dtx.send((peer.clone(), pkt.payload));
                 }
             }
@@ -425,9 +484,11 @@ mod rekey_tests {
 
         let a = Arc::new(AsyncMutex::new(Mesh::new(
             Arc::new(build_api().unwrap()), track(), "a".into(), out_a_tx, dec_a, ev_a,
+            Arc::new(ChanState::new()),
         )));
         let b = Arc::new(AsyncMutex::new(Mesh::new(
             Arc::new(build_api().unwrap()), track(), "b".into(), out_b_tx, dec_b, ev_b,
+            Arc::new(ChanState::new()),
         )));
 
         // Mock relay: forward each side's outbound to the other (stamped `from`).

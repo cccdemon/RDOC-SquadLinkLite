@@ -57,6 +57,7 @@ type Participant = {
   you: boolean;
   badge: string | null;
   speaking: boolean;
+  channel: string;
 };
 type ChatLine = { from: string; text: string };
 
@@ -67,7 +68,13 @@ type UiEvent =
   | { type: "log"; text: string }
   | { type: "net"; peers: number; up_kbps: number; down_kbps: number }
   | { type: "rekeyed"; generation: number; by: string }
-  | { type: "signaling"; up: boolean };
+  | { type: "signaling"; up: boolean }
+  | { type: "channel"; mine: string };
+
+const DEFAULT_CHANNEL = "Funk 1";
+const MAX_CHANNEL_LEN = 32;
+// Canonical form for channel matching: trim + lowercase (mirrors the Rust side).
+const canonChannel = (s: string) => s.trim().toLowerCase();
 
 // Capture-path DSP (must match companion_core::audio::DspConfig field names).
 type DspConfig = {
@@ -95,6 +102,15 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [transmitting, setTransmitting] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  // My current channel (frequency); persisted and re-applied on each connect.
+  const [myChannel, setMyChannel] = useState<string>(() => {
+    try {
+      return localStorage.getItem("sa.channel") || DEFAULT_CHANNEL;
+    } catch {
+      return DEFAULT_CHANNEL;
+    }
+  });
+  const [channelDraft, setChannelDraft] = useState<string>("");
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [log, setLog] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -363,7 +379,7 @@ export default function App() {
       } else if (p.type === "signaling") {
         setSigUp(p.up);
         if (p.up) setResuming(false);
-      }
+      } else if (p.type === "channel") setMyChannel(p.mine);
     });
     return () => {
       un.then((f) => f());
@@ -452,9 +468,26 @@ export default function App() {
       invoke("set_dsp", { cfg: dsp }).catch(() => {});
       invoke("set_low_bandwidth", { on: lowBw }).catch(() => {});
       invoke("set_earcon", { on: earcon }).catch(() => {});
+      // Re-apply the saved channel (engine starts on the default).
+      if (canonChannel(myChannel) !== canonChannel(DEFAULT_CHANNEL)) {
+        invoke("set_channel", { name: myChannel }).catch(() => {});
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
+
+  // Persist the channel whenever it changes (switch or engine confirmation).
+  useEffect(() => {
+    try { localStorage.setItem("sa.channel", myChannel); } catch { /* ignore */ }
+  }, [myChannel]);
+
+  // Switch to a (validated) channel: optimistic UI + tell the engine.
+  const switchChannel = (name: string) => {
+    const clean = name.trim().slice(0, MAX_CHANNEL_LEN);
+    if (!clean || canonChannel(clean) === canonChannel(myChannel)) return;
+    setMyChannel(clean);
+    invoke("set_channel", { name: clean }).catch(() => {});
+  };
   const rebindPtt = (slot: number) => {
     setCapturingSlot(slot);
     invoke("start_ptt_capture", { slot }).catch(() => {});
@@ -1033,15 +1066,60 @@ export default function App() {
               </div>
             </div>
           )}
+          <div className="hsec">📻 Kanal · {myChannel}</div>
+          <div className="chanbar">
+            <div className="chanchips">
+              {Object.entries(
+                participants.reduce<Record<string, { label: string; count: number }>>((m, p) => {
+                  const k = canonChannel(p.channel);
+                  if (!m[k]) m[k] = { label: p.channel, count: 0 };
+                  m[k].count++;
+                  return m;
+                }, {})
+              ).map(([k, info]) => (
+                <button
+                  key={k}
+                  className={`chanchip ${canonChannel(myChannel) === k ? "active" : ""}`}
+                  onClick={() => switchChannel(info.label)}
+                  title={`Auf Kanal "${info.label}" wechseln`}
+                >
+                  {info.label} · {info.count}
+                </button>
+              ))}
+            </div>
+            <form
+              className="channew"
+              onSubmit={(e) => {
+                e.preventDefault();
+                switchChannel(channelDraft);
+                setChannelDraft("");
+              }}
+            >
+              <input
+                value={channelDraft}
+                maxLength={MAX_CHANNEL_LEN}
+                placeholder="Neuer Kanal…"
+                onChange={(e) => setChannelDraft(e.target.value)}
+              />
+              <button type="submit" className="btn sm" disabled={!channelDraft.trim()}>
+                Wechseln
+              </button>
+            </form>
+          </div>
           <div className="hsec">Teilnehmer · {participants.length}</div>
           <div className="peerlist">
-          {participants.map((p) => (
-            <div key={p.user_id} className={`peer ${p.speaking ? "speaking" : ""}`}>
+          {participants.map((p) => {
+            const sameChan = canonChannel(p.channel) === canonChannel(myChannel);
+            return (
+            <div key={p.user_id} className={`peer ${p.speaking ? "speaking" : ""} ${sameChan ? "" : "offchannel"}`}>
               <div className="peerhead">
                 <span className={`talk ${p.speaking ? "on" : ""}`} />
                 <span className="pname">
                   {p.name}
                   {p.you && <span className="me"> (du)</span>}
+                </span>
+                <span className={`badge chan ${sameChan ? "same" : "other"}`} title={`Kanal: ${p.channel}`}>
+                  📻 {p.channel}
                 </span>
                 {p.badge && (
                   <span className={`badge ${p.badge.includes("RELAY") ? "relay" : "direct"}`}>
@@ -1063,7 +1141,8 @@ export default function App() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           </div>
           <button className={`ptt ${transmitting ? "live" : ""} ${micMuted ? "muted" : ""}`} onClick={ptt} disabled={micMuted}>
             {micMuted ? "🔇 MIKRO STUMM" : transmitting ? "● SENDEN AKTIV" : "PUSH TO TALK"}

@@ -24,6 +24,21 @@ pub struct ChatMsg {
     pub ts: u64,
 }
 
+/// Control envelope carried over the per-peer WebRTC DataChannel (mesh mode).
+/// The server never sees this — named channels (frequencies) are a pure
+/// client-side overlay. Receivers parse `CtrlMsg` first and fall back to a bare
+/// `ChatMsg` for one version's backward-compat read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "kebab-case")]
+pub enum CtrlMsg {
+    /// A text-chat line (same payload as the legacy bare `ChatMsg`).
+    Chat(ChatMsg),
+    /// Sender announces its current channel (frequency) name. Matching is
+    /// case-insensitive (trim + lowercase); peers only mix audio from senders
+    /// whose announced channel equals their own.
+    Channel { name: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnCreds {
     pub urls: Vec<String>,
@@ -77,4 +92,39 @@ pub enum ServerMsg {
     /// Soft cap reached: client should show a quality-warning banner.
     Warn { size: usize, cap: usize },
     Error { code: String, message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_msg_round_trips() {
+        let chan = CtrlMsg::Channel { name: "Alpha".into() };
+        let j = serde_json::to_string(&chan).unwrap();
+        assert!(j.contains("\"t\":\"channel\""));
+        match serde_json::from_str::<CtrlMsg>(&j).unwrap() {
+            CtrlMsg::Channel { name } => assert_eq!(name, "Alpha"),
+            _ => panic!("wrong variant"),
+        }
+
+        let chat = CtrlMsg::Chat(ChatMsg { text: "hi".into(), ts: 7 });
+        let j = serde_json::to_string(&chat).unwrap();
+        match serde_json::from_str::<CtrlMsg>(&j).unwrap() {
+            CtrlMsg::Chat(c) => {
+                assert_eq!(c.text, "hi");
+                assert_eq!(c.ts, 7);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn legacy_bare_chatmsg_still_parses() {
+        // A pre-CtrlMsg client sends a bare ChatMsg; the fallback path must read it.
+        let legacy = serde_json::to_string(&ChatMsg { text: "old".into(), ts: 1 }).unwrap();
+        assert!(serde_json::from_str::<CtrlMsg>(&legacy).is_err());
+        let c: ChatMsg = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(c.text, "old");
+    }
 }
