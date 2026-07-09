@@ -2,6 +2,17 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.31 — 2026-07-09
+
+### Added
+- **Streamermodus.** Toggle in beiden Session-Boxen blendet Link + PIN unkenntlich
+  (geblurt), damit sie beim Streamen nicht mitgelesen werden. Kopier-Buttons kopieren
+  weiterhin die echten Werte. Einstellung wird gespeichert.
+- **Testmode.** Netzwerk-Selbsttest auf dem Startbildschirm mit Gesamturteil (Senden /
+  Empfangen / STUN / Signaling) — prüft vor der Session, ob die Grundfunktion läuft.
+- **Kanäle (Frequenzen).** Benannte Kanäle im Mesh mit clientseitigem Umschalten; man
+  hört nur Peers auf demselben Kanal. Kein Server-Code (reines P2P-Overlay).
+
 ## v0.1.27 — 2026-06-11
 
 ### Added
