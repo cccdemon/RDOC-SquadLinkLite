@@ -2,6 +2,13 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.32 — 2026-07-10
+
+### Added
+- **Funk-Klick-Lautstärke.** Der lokale Funk-Klick (Earcon) ist jetzt regelbar
+  (0–200 %, Schieberegler in den Einstellungen neben dem An/Aus-Schalter). Wird
+  gespeichert und bei jedem Verbinden angewendet.
+
 ## v0.1.31 — 2026-07-09
 
 ### Added
