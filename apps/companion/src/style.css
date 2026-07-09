@@ -138,6 +138,18 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 }
 .channew .btn.sm { margin-top: 0; flex: none; }
 
+/* Streamer mode: blur the shareable link + PIN so they can't be read on stream.
+   Copy still works (it reads the real value, not the DOM text). */
+.redacted { filter: blur(7px); user-select: none; }
+.sesshead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.streamtoggle {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 4px 9px; border-radius: 12px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+}
+.streamtoggle:hover { border-color: var(--cyan-dim); color: var(--txt); }
+.streamtoggle.on { color: var(--yellow); border-color: var(--yellow); }
+
 .ptt {
   margin-top: auto;
   background: var(--panel2); border: 2px solid var(--cyan-dim); color: var(--cyan);

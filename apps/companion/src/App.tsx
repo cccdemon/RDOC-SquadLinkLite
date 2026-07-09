@@ -111,6 +111,21 @@ export default function App() {
     }
   });
   const [channelDraft, setChannelDraft] = useState<string>("");
+  // Streamer mode: blur the shareable link + PIN so they can't be read on stream.
+  // Copy buttons still copy the real values.
+  const [streamerMode, setStreamerMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.streamer") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleStreamer = () =>
+    setStreamerMode((v) => {
+      const nv = !v;
+      try { localStorage.setItem("sa.streamer", nv ? "1" : "0"); } catch { /* ignore */ }
+      return nv;
+    });
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [log, setLog] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -936,10 +951,20 @@ export default function App() {
             </button>
             {sessionInfo && (
               <div className="sessbox">
-                <label>Link — an Mitspieler</label>
-                <input readOnly value={sessionInfo.link} className="mono" onFocus={(e) => e.currentTarget.select()} />
+                <div className="sesshead">
+                  <label style={{ margin: 0 }}>Link — an Mitspieler</label>
+                  <button
+                    type="button"
+                    className={`streamtoggle ${streamerMode ? "on" : ""}`}
+                    onClick={toggleStreamer}
+                    title="Streamer-Modus: Link + PIN verbergen"
+                  >
+                    {streamerMode ? "🕶 Verborgen" : "👁 Sichtbar"}
+                  </button>
+                </div>
+                <input readOnly value={sessionInfo.link} className={`mono ${streamerMode ? "redacted" : ""}`} onFocus={(e) => e.currentTarget.select()} />
                 <label>PIN — separat weitergeben</label>
-                <div className="pin mono">{sessionInfo.pin}</div>
+                <div className={`pin mono ${streamerMode ? "redacted" : ""}`}>{sessionInfo.pin}</div>
                 <button className="btn sm" onClick={() => copy(`${sessionInfo.link}\nPIN: ${sessionInfo.pin}`)}>
                   LINK + PIN KOPIEREN
                 </button>
@@ -1056,10 +1081,20 @@ export default function App() {
         <section className="roster">
           {sessionInfo && (
             <div className="sessbox sessbox-live">
-              <div className="hsec">Session teilen</div>
-              <input readOnly value={sessionInfo.link} className="mono" onFocus={(e) => e.currentTarget.select()} />
+              <div className="sesshead">
+                <div className="hsec" style={{ margin: 0 }}>Session teilen</div>
+                <button
+                  type="button"
+                  className={`streamtoggle ${streamerMode ? "on" : ""}`}
+                  onClick={toggleStreamer}
+                  title="Streamer-Modus: Link + PIN verbergen"
+                >
+                  {streamerMode ? "🕶 Verborgen" : "👁 Sichtbar"}
+                </button>
+              </div>
+              <input readOnly value={sessionInfo.link} className={`mono ${streamerMode ? "redacted" : ""}`} onFocus={(e) => e.currentTarget.select()} />
               <div className="pinrow">
-                <span className="pin mono">PIN {sessionInfo.pin}</span>
+                <span className={`pin mono ${streamerMode ? "redacted" : ""}`}>PIN {sessionInfo.pin}</span>
                 <button className="btn sm" onClick={() => copy(`${sessionInfo.link}\nPIN: ${sessionInfo.pin}`)}>
                   LINK + PIN
                 </button>
