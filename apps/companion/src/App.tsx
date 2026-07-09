@@ -938,6 +938,32 @@ export default function App() {
           <div className="sub">P2P Voice + Chat{appVersion ? ` · v${appVersion}` : ""}</div>
           {showSettings && deviceSettings}
 
+          <div className="testmode">
+            <button className="btn sm" onClick={runNetCheck} disabled={checking}>
+              {checking ? "🧪 Teste Netzwerk… (bis ~10 s)" : "🧪 Testmode — Verbindung prüfen"}
+            </button>
+            {netCheck && (() => {
+              const core = netCheck.can_send && netCheck.can_receive;
+              const allOk = core && netCheck.signaling && netCheck.stun;
+              const yn = (b: boolean) => (b ? "✅" : "❌");
+              return (
+                <div className={`testverdict ${allOk ? "ok" : core ? "warn" : "bad"}`}>
+                  <div className="tvhead">
+                    {allOk
+                      ? "✅ Alles funktioniert"
+                      : core
+                        ? "⚠️ P2P läuft — mit Einschränkung"
+                        : "❌ Grundfunktion gestört"}
+                  </div>
+                  <div className="tvrow">{yn(netCheck.can_send)} Senden · {yn(netCheck.can_receive)} Empfangen</div>
+                  <div className="tvrow">{yn(netCheck.stun)} Internet/STUN · {yn(netCheck.signaling)} Signaling-Server</div>
+                  {!core && <div className="tvhint">P2P-Datenpfad blockiert — Firewall/VPN prüfen.</div>}
+                  {core && !netCheck.stun && <div className="tvhint">Kein STUN — hinter striktem NAT evtl. Relay nötig.</div>}
+                </div>
+              );
+            })()}
+          </div>
+
           <label>Name</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Commander" />
 

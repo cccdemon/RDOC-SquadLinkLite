@@ -150,6 +150,19 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .streamtoggle:hover { border-color: var(--cyan-dim); color: var(--txt); }
 .streamtoggle.on { color: var(--yellow); border-color: var(--yellow); }
 
+/* Testmode: pre-session network self-check with an overall verdict. */
+.testmode { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+.testverdict {
+  border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px;
+  font-size: 12px; line-height: 1.5; background: var(--panel);
+}
+.testverdict.ok { border-color: var(--green); }
+.testverdict.warn { border-color: var(--yellow); }
+.testverdict.bad { border-color: var(--red, #d05); }
+.tvhead { font-weight: 700; letter-spacing: 0.3px; margin-bottom: 4px; }
+.tvrow { color: var(--dim); font-family: ui-monospace, monospace; font-size: 11px; }
+.tvhint { margin-top: 5px; color: var(--yellow); font-size: 11px; }
+
 .ptt {
   margin-top: auto;
   background: var(--panel2); border: 2px solid var(--cyan-dim); color: var(--cyan);
