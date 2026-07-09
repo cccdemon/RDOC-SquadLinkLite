@@ -257,6 +257,20 @@ export default function App() {
       return true;
     }
   });
+  // Funk-Klick volume, 0..200 % (1.0 = normal). Default 100 %.
+  const [earconVol, setEarconVol] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem("sa.earconvol") || "100", 10);
+      return Number.isFinite(v) ? Math.min(200, Math.max(0, v)) : 100;
+    } catch {
+      return 100;
+    }
+  });
+  const onEarconVol = (v: number) => {
+    setEarconVol(v);
+    try { localStorage.setItem("sa.earconvol", String(v)); } catch { /* ignore */ }
+    invoke("set_earcon_volume", { volume: v / 100 }).catch(() => {});
+  };
 
   // Load device list once (for the gear settings).
   useEffect(() => {
@@ -483,6 +497,7 @@ export default function App() {
       invoke("set_dsp", { cfg: dsp }).catch(() => {});
       invoke("set_low_bandwidth", { on: lowBw }).catch(() => {});
       invoke("set_earcon", { on: earcon }).catch(() => {});
+      invoke("set_earcon_volume", { volume: earconVol / 100 }).catch(() => {});
       // Re-apply the saved channel (engine starts on the default).
       if (canonChannel(myChannel) !== canonChannel(DEFAULT_CHANNEL)) {
         invoke("set_channel", { name: myChannel }).catch(() => {});
@@ -788,6 +803,18 @@ export default function App() {
             />{" "}
             Funk-Klick abspielen, wenn jemand zu sprechen beginnt (akustische SquadLink-Kennung)
           </label>
+          <div className="volrow" style={{ opacity: earcon ? 1 : 0.45 }}>
+            <span className="vlabel">🔔 Klick-Lautstärke</span>
+            <input
+              type="range"
+              min={0}
+              max={200}
+              value={earconVol}
+              disabled={!earcon}
+              onChange={(e) => onEarconVol(Number(e.target.value))}
+            />
+            <span className="vval">{earconVol}%</span>
+          </div>
 
           <label>🎧 Mikrofon-Test</label>
           <button className={`btn sm ${monitoring ? "primary" : ""}`} onClick={toggleMonitor}>

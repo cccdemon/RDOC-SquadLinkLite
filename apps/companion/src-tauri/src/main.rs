@@ -701,6 +701,14 @@ fn set_earcon(state: State<AppState>, on: bool) {
     }
 }
 
+/// Volume of the local "Funk-Klick" earcon (0.0 mute … 1.0 normal … 2.0 +6 dB).
+#[tauri::command]
+fn set_earcon_volume(state: State<AppState>, volume: f32) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_earcon_volume(clamp_vol(volume));
+    }
+}
+
 #[tauri::command]
 fn set_low_bandwidth(state: State<AppState>, on: bool) {
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -891,7 +899,8 @@ fn main() {
             set_ptt_binding,
             start_ptt_capture,
             set_ducking,
-            set_earcon
+            set_earcon,
+            set_earcon_volume
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

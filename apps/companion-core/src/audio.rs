@@ -58,25 +58,40 @@ pub const EARCON_KEY: &str = "__earcon__";
 pub struct Earcon {
     mix: MixMap,
     enabled: Arc<AtomicBool>,
+    /// Playback gain for the click, as f32 bits (0.0 mute … 1.0 default … 2.0 +6 dB).
+    volume: Arc<AtomicU32>,
     samples: Vec<i16>,
 }
 impl Earcon {
     pub fn new(mix: MixMap, enabled: Arc<AtomicBool>) -> Self {
-        Earcon { mix, enabled, samples: render_click() }
+        Earcon { mix, enabled, volume: Arc::new(AtomicU32::new(1.0f32.to_bits())), samples: render_click() }
     }
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::SeqCst);
     }
-    /// Queue one click into the mixer (no-op when disabled). Cheap + non-blocking;
-    /// safe to call from the async engine loop on a peer's PTT-onset.
+    /// Set the click playback volume (0.0 mute … 1.0 normal … 2.0 +6 dB). Live.
+    pub fn set_volume(&self, v: f32) {
+        let v = if v.is_finite() { v.clamp(0.0, 2.0) } else { 1.0 };
+        self.volume.store(v.to_bits(), Ordering::SeqCst);
+    }
+    /// Queue one click into the mixer (no-op when disabled or muted). Cheap +
+    /// non-blocking; safe to call from the async engine loop on a peer's PTT-onset.
     pub fn click(&self) {
         if !self.enabled.load(Ordering::SeqCst) {
             return;
         }
+        let vol = f32::from_bits(self.volume.load(Ordering::SeqCst));
+        if vol <= 0.0 {
+            return; // muted click
+        }
         let mut m = self.mix.lock().unwrap();
         let b = m.entry(EARCON_KEY.to_string()).or_default();
         b.clear(); // drop any un-played click so rapid PTT toggling can't pile up
-        b.extend(self.samples.iter().copied());
+        if (vol - 1.0).abs() < f32::EPSILON {
+            b.extend(self.samples.iter().copied());
+        } else {
+            b.extend(self.samples.iter().map(|&s| (s as f32 * vol).clamp(-32768.0, 32767.0) as i16));
+        }
     }
 }
 

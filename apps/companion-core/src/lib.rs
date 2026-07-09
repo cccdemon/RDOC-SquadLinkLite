@@ -234,6 +234,10 @@ impl Engine {
     pub fn set_earcon(&self, on: bool) {
         self.earcon.set_enabled(on);
     }
+    /// Volume of the local "Funk-Klick" earcon (0.0 mute … 1.0 normal … 2.0 +6 dB).
+    pub fn set_earcon_volume(&self, v: f32) {
+        self.earcon.set_volume(v);
+    }
 }
 
 pub(crate) fn build_api() -> Result<API> {
