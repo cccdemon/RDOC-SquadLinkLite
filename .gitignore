@@ -24,3 +24,6 @@ apps/companion/src-tauri/target
 # OS
 Thumbs.db
 .DS_Store
+
+# Local CI-downloaded test binaries (installers + MSIX)
+test-build/
