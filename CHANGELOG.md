@@ -2,6 +2,24 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.33 — 2026-07-10
+
+### Added
+- **Kanäle bleiben die ganze Session bestehen** — ein erstellter Kanal
+  verschwindet nicht mehr, wenn niemand mehr drauf ist; er bleibt wählbar.
+- **Kanäle löschbar** — × auf leeren Kanälen (nicht dem aktuellen).
+- **Cycle-Hotkeys** — globale Vor/Zurück-Tasten (RAW, auch im Vollbild-Game)
+  zum Durchschalten der Session-Kanäle.
+- **Kanal-Overlay** — kleines, klick-durchlässiges, immer-oben Fenster über dem
+  Spiel; zeigt den aktuellen Kanal, blinkt beim Wechsel. Position (6 Presets),
+  Größe (S/M/L) und Ein/Aus konfigurierbar. Kein Game-Prozess-Eingriff.
+
+### Performance
+- Overlay wird **lazy** erzeugt (nur wenn aktiv) und bei Aus vollständig
+  geschlossen → kein RAM/CPU wenn ungenutzt.
+- Channel-Hotkey-Matching wird pro Tastenevent übersprungen, solange keine
+  Cycle-Taste belegt ist.
+
 ## v0.1.32 — 2026-07-10
 
 ### Added

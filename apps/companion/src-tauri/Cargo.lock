@@ -3713,7 +3713,7 @@ dependencies = [
 
 [[package]]
 name = "rdoc-squadlink-lite"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "anyhow",
  "companion-core",
