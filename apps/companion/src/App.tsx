@@ -122,6 +122,11 @@ export default function App() {
       prev.some((c) => canonChannel(c) === canonChannel(clean)) ? prev : [...prev, clean]
     );
   };
+  // Remove a channel from the session list. Only meaningful for an empty channel
+  // (one with a live member re-appears from the roster union).
+  const deleteChannel = (canon: string) => {
+    setSessionChannels((prev) => prev.filter((c) => canonChannel(c) !== canon));
+  };
   // Streamer mode: blur the shareable link + PIN so they can't be read on stream.
   // Copy buttons still copy the real values.
   const [streamerMode, setStreamerMode] = useState<boolean>(() => {
@@ -1200,16 +1205,32 @@ export default function App() {
                   seen.add(k);
                   chips.push({ label, canon: k, count: counts[k] || 0 });
                 }
-                return chips.map((c) => (
-                  <button
-                    key={c.canon}
-                    className={`chanchip ${canonChannel(myChannel) === c.canon ? "active" : ""}`}
-                    onClick={() => switchChannel(c.label)}
-                    title={`Auf Kanal "${c.label}" wechseln`}
-                  >
-                    {c.label} · {c.count}
-                  </button>
-                ));
+                return chips.map((c) => {
+                  const isMine = canonChannel(myChannel) === c.canon;
+                  // Deletable only when empty and not the channel I'm on.
+                  const deletable = c.count === 0 && !isMine;
+                  return (
+                    <span key={c.canon} className="chanchipwrap">
+                      <button
+                        className={`chanchip ${isMine ? "active" : ""}`}
+                        onClick={() => switchChannel(c.label)}
+                        title={`Auf Kanal "${c.label}" wechseln`}
+                      >
+                        {c.label} · {c.count}
+                      </button>
+                      {deletable && (
+                        <button
+                          className="chandel"
+                          onClick={() => deleteChannel(c.canon)}
+                          title={`Kanal "${c.label}" entfernen`}
+                          aria-label={`Kanal ${c.label} entfernen`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </span>
+                  );
+                });
               })()}
             </div>
             <form

@@ -131,6 +131,13 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 }
 .chanchip:hover { border-color: var(--cyan-dim); color: var(--txt); }
 .chanchip.active { background: var(--panel2); border-color: var(--cyan); color: var(--cyan); }
+.chanchipwrap { display: inline-flex; align-items: center; gap: 3px; }
+.chandel {
+  width: 18px; height: 18px; line-height: 1; padding: 0; cursor: pointer;
+  border-radius: 50%; font-size: 13px; font-weight: 700;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+}
+.chandel:hover { border-color: var(--red, #d05); color: var(--red, #d05); }
 .channew { display: flex; gap: 6px; }
 .channew input {
   flex: 1; min-width: 0; padding: 6px 9px; font-size: 12px;
