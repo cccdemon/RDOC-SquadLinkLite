@@ -41,16 +41,31 @@ function mdToText(s: string): string {
 }
 
 // Friendly label for raw input codes (e.g. "F8", "KeyR", "Mouse:Unknown(1)").
-function pttLabel(code: string): string {
-  if (!code) return "—";
+// Label one base key (no modifiers).
+function baseLabel(code: string): string {
   if (code.startsWith("Pad:")) return `Gamepad-Taste ${code.slice(4)}`;
   if (code.startsWith("Mouse:")) {
     const b = code.slice(6);
+    const wheel: Record<string, string> = {
+      WheelUp: "Mausrad ▲", WheelDown: "Mausrad ▼",
+      WheelLeft: "Mausrad ◀", WheelRight: "Mausrad ▶",
+    };
+    if (wheel[b]) return wheel[b];
     const m = b.match(/Unknown\((\d+)\)/);
     if (m) return `Maustaste ${Number(m[1]) + 3}`; // Unknown(1)→Mouse4
     return `Maus ${b}`;
   }
   return code.replace(/^Key/, "");
+}
+
+// Label a binding, including modifier chords ("Shift+KeyT" → "Shift + T").
+function pttLabel(code: string): string {
+  if (!code) return "—";
+  const mods = new Set(["Ctrl", "Alt", "Shift", "Meta"]);
+  const parts = code.split("+");
+  const base = parts.pop() ?? "";
+  const prefix = parts.filter((p) => mods.has(p));
+  return [...prefix, baseLabel(base)].join(" + ");
 }
 
 type Participant = {
@@ -979,7 +994,7 @@ export default function App() {
             {pttBinding2 && <button className="btn sm" onClick={clearPtt2} disabled={capturingSlot !== null} title="Zweite Taste entfernen">✕</button>}
           </div>
           <div className="sub2" style={{ opacity: 0.7 }}>
-            Push-to-Talk: jede Taste, Maustaste oder Gamepad-/Joystick-Taste (RAW) — bis zu zwei, beide senden. Geräteänderung wirkt sofort (auch während eines Gesprächs).
+            Push-to-Talk: jede Taste, Maustaste, Mausrad, Gamepad-/Joystick-Taste (RAW) oder Modifier-Kombi (z.B. Shift+T) — bis zu zwei, beide senden. Geräteänderung wirkt sofort (auch während eines Gesprächs).
           </div>
           <label className="ckrow">
             <input
@@ -1085,7 +1100,7 @@ export default function App() {
             {chanNext && <button className="btn sm" onClick={() => clearChan(1)} disabled={capturingChan !== null} title="Entfernen">✕</button>}
           </div>
           <div className="sub2" style={{ opacity: 0.7 }}>
-            Globale Tasten (RAW, auch im Vollbild-Game) zum Durchschalten der Session-Kanäle — vorheriger / nächster.
+            Globale Tasten (RAW, auch im Vollbild-Game) zum Durchschalten der Session-Kanäle — vorheriger / nächster. Auch Mausrad, Gamepad-/Joystick-Taste oder Modifier-Kombi (z.B. Shift+T). Mausrad ▲/▼ eignet sich ideal zum Cyceln.
           </div>
 
           <label>🔑 Session-Verschlüsselung</label>

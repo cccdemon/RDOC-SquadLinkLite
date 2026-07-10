@@ -53,73 +53,178 @@ fn refresh_chan_bound() {
     CHAN_ANY_BOUND.store(any, Ordering::Relaxed);
 }
 
+// ── Modifier chords (Ctrl / Alt / Shift / Meta + a base key) ──────────────────
+// Live modifier state, updated from every keyboard edge. A binding may be a plain
+// key ("F8") or a chord ("Shift+KeyT", "Ctrl+Shift+Mouse:Left"); a chord fires
+// only while its required modifiers are held.
+static MOD_SHIFT: AtomicBool = AtomicBool::new(false);
+static MOD_CTRL: AtomicBool = AtomicBool::new(false);
+static MOD_ALT: AtomicBool = AtomicBool::new(false);
+static MOD_META: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Mods {
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    meta: bool,
+}
+
+/// Which modifier group a raw key label belongs to (None = not a modifier).
+fn mod_of_label(code: &str) -> Option<&'static str> {
+    match code {
+        "ShiftLeft" | "ShiftRight" => Some("Shift"),
+        "ControlLeft" | "ControlRight" => Some("Ctrl"),
+        "Alt" | "AltGr" => Some("Alt"),
+        "MetaLeft" | "MetaRight" => Some("Meta"),
+        _ => None,
+    }
+}
+
+fn held_mods() -> Mods {
+    Mods {
+        shift: MOD_SHIFT.load(Ordering::SeqCst),
+        ctrl: MOD_CTRL.load(Ordering::SeqCst),
+        alt: MOD_ALT.load(Ordering::SeqCst),
+        meta: MOD_META.load(Ordering::SeqCst),
+    }
+}
+
+/// All required modifiers held? (Extra held modifiers are tolerated.)
+fn mods_ok(req: Mods, held: Mods) -> bool {
+    (!req.shift || held.shift)
+        && (!req.ctrl || held.ctrl)
+        && (!req.alt || held.alt)
+        && (!req.meta || held.meta)
+}
+
+/// Split a binding string into its required modifiers + base key.
+fn parse_binding(s: &str) -> (Mods, String) {
+    let mut m = Mods::default();
+    let mut rest = s;
+    while let Some((tok, r)) = rest.split_once('+') {
+        match tok {
+            "Shift" => m.shift = true,
+            "Ctrl" => m.ctrl = true,
+            "Alt" => m.alt = true,
+            "Meta" => m.meta = true,
+            _ => break, // not a modifier → part of the base key
+        }
+        rest = r;
+    }
+    (m, rest.to_string())
+}
+
+/// Build a canonical chord label from the held modifiers + a base key.
+fn build_combo(base: &str, m: Mods) -> String {
+    let mut s = String::new();
+    if m.ctrl {
+        s.push_str("Ctrl+");
+    }
+    if m.alt {
+        s.push_str("Alt+");
+    }
+    if m.shift {
+        s.push_str("Shift+");
+    }
+    if m.meta {
+        s.push_str("Meta+");
+    }
+    s.push_str(base);
+    s
+}
+
 /// Process one raw key/mouse edge. In capture mode the next press becomes the
 /// new binding (emitted as `ptt-bound`); otherwise edges on the bound code
 /// toggle transmit via the `ptt` event. De-duped so key auto-repeat (and
 /// duplicate button flags in one packet) don't spam the IPC channel.
 fn handle_raw(code: String, down: bool) {
-    // ── Capture mode: the next press binds the pending PTT slot ──────────────
+    // Track modifier state first (chords gate on it). Modifier keys can still be
+    // a plain binding on their own.
+    match mod_of_label(&code) {
+        Some("Shift") => MOD_SHIFT.store(down, Ordering::SeqCst),
+        Some("Ctrl") => MOD_CTRL.store(down, Ordering::SeqCst),
+        Some("Alt") => MOD_ALT.store(down, Ordering::SeqCst),
+        Some("Meta") => MOD_META.store(down, Ordering::SeqCst),
+        _ => {}
+    }
+    let is_mod = mod_of_label(&code).is_some();
+
+    // ── Capture: the first non-modifier press binds the slot as a chord ──────
     let cap = PTT_CAPTURE_SLOT.load(Ordering::SeqCst);
     if cap >= 0 {
-        if down {
+        if down && !is_mod {
             PTT_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
             let slot = (cap as usize).min(1);
+            let combo = build_combo(&code, held_mods());
             PTT_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
-            ptt_bindings().lock().unwrap()[slot] = Some(code.clone());
+            ptt_bindings().lock().unwrap()[slot] = Some(combo.clone());
             if let Some(app) = APP_HANDLE.get() {
-                let _ = app.emit("ptt-bound", serde_json::json!({ "slot": slot, "code": code }));
+                let _ = app.emit("ptt-bound", serde_json::json!({ "slot": slot, "code": combo }));
             }
         }
         return;
     }
-    // ── Capture mode: the next press binds the pending channel-cycle slot ────
     let ccap = CHAN_CAPTURE_SLOT.load(Ordering::SeqCst);
     if ccap >= 0 {
-        if down {
+        if down && !is_mod {
             CHAN_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
             let slot = (ccap as usize).min(1);
+            let combo = build_combo(&code, held_mods());
             CHAN_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
-            chan_bindings().lock().unwrap()[slot] = Some(code.clone());
+            chan_bindings().lock().unwrap()[slot] = Some(combo.clone());
             refresh_chan_bound();
             if let Some(app) = APP_HANDLE.get() {
-                let _ = app.emit("chan-bound", serde_json::json!({ "slot": slot, "code": code }));
+                let _ = app.emit("chan-bound", serde_json::json!({ "slot": slot, "code": combo }));
             }
         }
         return;
     }
 
-    // ── PTT: transmit while EITHER bound trigger is held ─────────────────────
-    let mut ptt_changed = false;
-    {
+    let held = held_mods();
+
+    // ── PTT: transmit while a bound chord's base key is held AND its modifiers
+    // are held. Recomputed on EVERY edge (incl. modifier edges), so releasing a
+    // required modifier also stops transmit. ─────────────────────────────────
+    let combined = {
         let b = ptt_bindings().lock().unwrap();
         for i in 0..2 {
-            if b[i].as_deref() == Some(code.as_str())
-                && PTT_SLOT_DOWN[i].swap(down, Ordering::SeqCst) != down
-            {
-                ptt_changed = true;
+            if let Some(bind) = b[i].as_deref() {
+                let (_m, base) = parse_binding(bind);
+                if base == code {
+                    PTT_SLOT_DOWN[i].store(down, Ordering::SeqCst);
+                }
             }
         }
-    }
-    if ptt_changed {
-        let combined =
-            PTT_SLOT_DOWN[0].load(Ordering::SeqCst) || PTT_SLOT_DOWN[1].load(Ordering::SeqCst);
-        if PTT_COMBINED.swap(combined, Ordering::SeqCst) != combined {
-            if let Some(app) = APP_HANDLE.get() {
-                let _ = app.emit("ptt", combined);
-            }
+        (0..2).any(|i| {
+            b[i]
+                .as_deref()
+                .map(|bind| {
+                    let (m, _base) = parse_binding(bind);
+                    PTT_SLOT_DOWN[i].load(Ordering::SeqCst) && mods_ok(m, held)
+                })
+                .unwrap_or(false)
+        })
+    };
+    if PTT_COMBINED.swap(combined, Ordering::SeqCst) != combined {
+        if let Some(app) = APP_HANDLE.get() {
+            let _ = app.emit("ptt", combined);
         }
     }
 
-    // ── Channel cycle: fire once on the press edge (prev = -1, next = +1) ─────
-    // Fast-path: skip the lock + loop entirely when no cycle key is bound.
+    // ── Channel cycle: fire once on the base's press edge with modifiers held.
+    // Fast-path: skip the lock + loop entirely when no cycle key is bound. ────
     if CHAN_ANY_BOUND.load(Ordering::Relaxed) {
         let b = chan_bindings().lock().unwrap();
         for i in 0..2 {
-            if b[i].as_deref() == Some(code.as_str()) {
-                let was = CHAN_SLOT_DOWN[i].swap(down, Ordering::SeqCst);
-                if down && !was {
-                    if let Some(app) = APP_HANDLE.get() {
-                        let _ = app.emit("chan-cycle", if i == 0 { -1 } else { 1 });
+            if let Some(bind) = b[i].as_deref() {
+                let (m, base) = parse_binding(bind);
+                if base == code {
+                    let was = CHAN_SLOT_DOWN[i].swap(down, Ordering::SeqCst);
+                    if down && !was && mods_ok(m, held) {
+                        if let Some(app) = APP_HANDLE.get() {
+                            let _ = app.emit("chan-cycle", if i == 0 { -1 } else { 1 });
+                        }
                     }
                 }
             }
@@ -332,6 +437,23 @@ mod raw_input {
                     if flags & mask != 0 {
                         handle_raw(code.to_string(), down);
                     }
+                }
+                // Scroll wheels (also VKB/HOTAS thumb encoders that present as a
+                // mouse wheel). A wheel tick is momentary → emit a press pulse so
+                // it can trigger a channel-cycle. usButtonData is a signed delta.
+                const RI_MOUSE_WHEEL: u16 = 0x0400;
+                const RI_MOUSE_HWHEEL: u16 = 0x0800;
+                if flags & (RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL) != 0 {
+                    let delta = ri.data.mouse.Anonymous.Anonymous.usButtonData as i16;
+                    let code = if flags & RI_MOUSE_WHEEL != 0 {
+                        if delta > 0 { "Mouse:WheelUp" } else { "Mouse:WheelDown" }
+                    } else if delta > 0 {
+                        "Mouse:WheelRight"
+                    } else {
+                        "Mouse:WheelLeft"
+                    };
+                    handle_raw(code.to_string(), true);
+                    handle_raw(code.to_string(), false);
                 }
             }
             t if t == RIM_TYPEHID => process_hid(ri),
