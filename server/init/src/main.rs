@@ -238,6 +238,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/privacy", get(privacy))
         .route("/legal", get(legal))
         .route("/license", get(license_page))
+        .route("/changelog", get(changelog_page))
         .route("/ws", get(ws_handler))
         .route("/healthz", get(|| async { "ok" }))
         // PIN-protected session brokering (REST, called by the app webview → CORS).
@@ -372,6 +373,8 @@ main{max-width:40rem;margin:0 auto;padding:1.4rem 1.2rem 3rem}
 .top a{color:#dfe3e8;text-decoration:none;font-weight:600}
 h1{font-size:1.45rem;font-weight:600;margin:.3rem 0 .7rem}
 h2{font-size:1.05rem;font-weight:600;margin:1.5rem 0 .3rem}
+h2.ver{border-top:1px solid #242833;padding-top:.9rem;margin-top:1.6rem;color:#cfe0ff}
+h3{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9aa3ad;margin:.8rem 0 .1rem}
 p{margin:.6rem 0}
 a{color:#7fb0ff}
 .muted{color:#9aa3ad;font-size:.9rem}
@@ -397,7 +400,7 @@ fn footer(base: &str, lang: Lang) -> String {
     let n = i18n::nav(lang);
     let lc = lang.code();
     format!(
-        r#"<a href="{base}/get?lang={lc}">{}</a><a href="/privacy?lang={lc}">{}</a><a href="/legal?lang={lc}">{}</a><a href="/license?lang={lc}">{}</a><a href="{gh}">GitHub</a><a href="{rd}">raumdock.org</a>"#,
+        r#"<a href="{base}/get?lang={lc}">{}</a><a href="/privacy?lang={lc}">{}</a><a href="/legal?lang={lc}">{}</a><a href="/license?lang={lc}">{}</a><a href="/changelog?lang={lc}">Changelog</a><a href="{gh}">GitHub</a><a href="{rd}">raumdock.org</a>"#,
         n[0], n[1], n[2], n[3], gh = i18n::GITHUB_URL, rd = i18n::RAUMDOCK_URL
     )
 }
@@ -441,6 +444,75 @@ async fn license_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String>
     let lang = lang_of(&q, &headers);
     let (title, body) = i18n::license(lang);
     shell(lang, "/license", title, &body)
+}
+
+/// The public changelog, rendered from the repo `CHANGELOG.md` (embedded at
+/// build time) into HTML, one section per version. Not localized — the source
+/// is a single mixed EN/DE document.
+const CHANGELOG_MD: &str = include_str!("../../../CHANGELOG.md");
+
+async fn changelog_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+    let lang = lang_of(&q, &headers);
+    let body = render_changelog(CHANGELOG_MD);
+    shell(lang, "/changelog", "Changelog", &body)
+}
+
+/// Minimal, trusted-input Markdown → HTML for the changelog. Handles the subset
+/// the file uses: `## ` version headers, `### ` sections, `- ` bullets (with
+/// wrapped continuation lines), `**bold**` and `` `code` ``.
+fn render_changelog(md: &str) -> String {
+    fn esc(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+    // Escape first, then apply `code` and **bold** on the escaped text (the
+    // inserted tags contain no backticks/asterisks, so each loop terminates).
+    fn inline(s: &str) -> String {
+        let mut out = esc(s);
+        loop {
+            let Some(a) = out.find('`') else { break };
+            let Some(rel) = out[a + 1..].find('`') else { break };
+            let b = a + 1 + rel;
+            let code = out[a + 1..b].to_string();
+            out.replace_range(a..=b, &format!("<code>{code}</code>"));
+        }
+        loop {
+            let Some(a) = out.find("**") else { break };
+            let Some(rel) = out[a + 2..].find("**") else { break };
+            let b = a + 2 + rel;
+            let strong = out[a + 2..b].to_string();
+            out.replace_range(a..b + 2, &format!("<strong>{strong}</strong>"));
+        }
+        out
+    }
+
+    let mut html = String::from("<h1>Changelog</h1>");
+    let mut in_ul = false;
+    for raw in md.lines() {
+        let line = raw.trim_end();
+        if let Some(rest) = line.strip_prefix("## ") {
+            if in_ul { html.push_str("</ul>"); in_ul = false; }
+            html.push_str(&format!("<h2 class=\"ver\">{}</h2>", inline(rest)));
+        } else if let Some(rest) = line.strip_prefix("### ") {
+            if in_ul { html.push_str("</ul>"); in_ul = false; }
+            html.push_str(&format!("<h3>{}</h3>", inline(rest)));
+        } else if line.strip_prefix("# ").is_some() {
+            // top-level title — skip (we emit our own <h1>)
+        } else if let Some(rest) = line.strip_prefix("- ") {
+            if !in_ul { html.push_str("<ul>"); in_ul = true; }
+            html.push_str(&format!("<li>{}</li>", inline(rest)));
+        } else if line.trim().is_empty() {
+            if in_ul { html.push_str("</ul>"); in_ul = false; }
+        } else if in_ul {
+            // wrapped continuation of the current bullet → append to last <li>
+            if let Some(pos) = html.rfind("</li>") {
+                html.insert_str(pos, &format!(" {}", inline(line.trim())));
+            }
+        } else {
+            html.push_str(&format!("<p class=\"muted\">{}</p>", inline(line.trim())));
+        }
+    }
+    if in_ul { html.push_str("</ul>"); }
+    html
 }
 
 /// Localized download page: lists every mirrored installer + its SHA-256, read
