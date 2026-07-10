@@ -37,12 +37,20 @@ static PTT_COMBINED: AtomicBool = AtomicBool::new(false); // last emitted transm
 static CHAN_BINDINGS: OnceLock<Mutex<[Option<String>; 2]>> = OnceLock::new();
 static CHAN_CAPTURE_SLOT: AtomicI32 = AtomicI32::new(-1);
 static CHAN_SLOT_DOWN: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+// True iff at least one channel-cycle key is bound. Lets `handle_raw` skip the
+// channel block entirely (no lock, no loop) on every input event when unused.
+static CHAN_ANY_BOUND: AtomicBool = AtomicBool::new(false);
 
 fn ptt_bindings() -> &'static Mutex<[Option<String>; 2]> {
     PTT_BINDINGS.get_or_init(|| Mutex::new([Some("F8".into()), None]))
 }
 fn chan_bindings() -> &'static Mutex<[Option<String>; 2]> {
     CHAN_BINDINGS.get_or_init(|| Mutex::new([None, None]))
+}
+/// Recompute the "any channel key bound" fast-path flag after a binding change.
+fn refresh_chan_bound() {
+    let any = chan_bindings().lock().unwrap().iter().any(|x| x.is_some());
+    CHAN_ANY_BOUND.store(any, Ordering::Relaxed);
 }
 
 /// Process one raw key/mouse edge. In capture mode the next press becomes the
@@ -72,6 +80,7 @@ fn handle_raw(code: String, down: bool) {
             let slot = (ccap as usize).min(1);
             CHAN_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
             chan_bindings().lock().unwrap()[slot] = Some(code.clone());
+            refresh_chan_bound();
             if let Some(app) = APP_HANDLE.get() {
                 let _ = app.emit("chan-bound", serde_json::json!({ "slot": slot, "code": code }));
             }
@@ -102,7 +111,8 @@ fn handle_raw(code: String, down: bool) {
     }
 
     // ── Channel cycle: fire once on the press edge (prev = -1, next = +1) ─────
-    {
+    // Fast-path: skip the lock + loop entirely when no cycle key is bound.
+    if CHAN_ANY_BOUND.load(Ordering::Relaxed) {
         let b = chan_bindings().lock().unwrap();
         for i in 0..2 {
             if b[i].as_deref() == Some(code.as_str()) {
@@ -513,6 +523,7 @@ fn set_chan_binding(slot: usize, code: Option<String>) {
     let code = code.filter(|c| !c.is_empty() && c.len() <= 64);
     CHAN_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
     chan_bindings().lock().unwrap()[slot] = code;
+    refresh_chan_bound();
 }
 
 /// Arm capture: the next global key/button press binds channel-cycle `slot`.
