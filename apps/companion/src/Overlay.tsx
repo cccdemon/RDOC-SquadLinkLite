@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 
 type Size = "s" | "m" | "l";
 type OverlayUpdate = { channel: string; size: Size };
@@ -30,6 +30,8 @@ export default function Overlay() {
       window.clearTimeout(timerRef.current);
       timerRef.current = window.setTimeout(() => setFlash(false), 1500);
     });
+    // Ask the main window for the current channel/size (we were just created).
+    emit("overlay-ready").catch(() => {});
     return () => {
       un.then((f) => f());
       window.clearTimeout(timerRef.current);

@@ -96,16 +96,39 @@ const OVERLAY_POSITIONS: { key: OverlayPos; label: string; title: string }[] = [
 ];
 const OVERLAY_MARGIN = 24;
 
-// Show/size/position (or hide) the overlay window. Logical coordinates; anchored
-// to a corner/center of the current monitor with a small margin.
+// Create-if-needed / size / position (or destroy) the overlay window. The window
+// is created lazily only while enabled and fully closed when disabled, so it
+// costs no RAM/CPU when off. Logical coordinates; anchored to a corner/center of
+// the current monitor with a small margin.
 async function applyOverlayWindow(on: boolean, pos: OverlayPos, size: OverlaySize) {
-  const w = await WebviewWindow.getByLabel("overlay");
-  if (!w) return;
+  let w = await WebviewWindow.getByLabel("overlay");
   if (!on) {
-    await w.hide().catch(() => {});
+    if (w) await w.close().catch(() => {}); // destroy → frees the WebView2 process
     return;
   }
   const d = OVERLAY_DIMS[size];
+  if (!w) {
+    w = new WebviewWindow("overlay", {
+      url: "index.html",
+      title: "SquadLink Overlay",
+      width: d.w,
+      height: d.h,
+      transparent: true,
+      decorations: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focus: false,
+      shadow: false,
+      visible: false,
+    });
+    // Wait until the window is actually created before positioning/showing it.
+    await new Promise<void>((resolve) => {
+      const done = () => resolve();
+      w!.once("tauri://created", done);
+      w!.once("tauri://error", done);
+    });
+  }
   await w.setSize(new LogicalSize(d.w, d.h)).catch(() => {});
   const mon = await currentMonitor().catch(() => null);
   const sf = mon?.scaleFactor ?? 1;
@@ -646,6 +669,11 @@ export default function App() {
     switchChannel(list[nextIdx]);
   };
 
+  // Latest overlay state for the handshake below (a freshly-created overlay
+  // window asks for the current channel/size once its listener is ready).
+  const overlayStateRef = useRef<{ channel: string; size: OverlaySize }>({ channel: myChannel, size: overlaySize });
+  overlayStateRef.current = { channel: myChannel, size: overlaySize };
+
   // Apply the overlay window (show/size/position or hide) + persist the choice.
   useEffect(() => {
     applyOverlayWindow(overlayOn, overlayPos, overlaySize);
@@ -674,7 +702,11 @@ export default function App() {
       else { setChanNext(code); try { localStorage.setItem("sa.channext", code); } catch { /* ignore */ } }
       setCapturingChan(null);
     });
-    return () => { offCycle.then((f) => f()); offBound.then((f) => f()); };
+    // A freshly-created overlay window announces itself → send current state.
+    const offReady = listen("overlay-ready", () => {
+      emitTo("overlay", "overlay-update", overlayStateRef.current).catch(() => {});
+    });
+    return () => { offCycle.then((f) => f()); offBound.then((f) => f()); offReady.then((f) => f()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const rebindChan = (slot: number) => {
