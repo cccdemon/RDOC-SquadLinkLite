@@ -201,6 +201,9 @@ export default function App() {
   // Remove a channel from the session list. Only meaningful for an empty channel
   // (one with a live member re-appears from the roster union).
   const deleteChannel = (canon: string) => {
+    if (canon === canonChannel(DEFAULT_CHANNEL)) return; // base channel is permanent
+    // Refuse if anyone is currently on it (roster still shows members there).
+    if (participants.some((p) => canonChannel(p.channel) === canon)) return;
     setSessionChannels((prev) => prev.filter((c) => canonChannel(c) !== canon));
   };
   // Streamer mode: blur the shareable link + PIN so they can't be read on stream.
@@ -1432,8 +1435,9 @@ export default function App() {
                 }
                 return chips.map((c) => {
                   const isMine = canonChannel(myChannel) === c.canon;
-                  // Deletable only when empty and not the channel I'm on.
-                  const deletable = c.count === 0 && !isMine;
+                  // Deletable only when EMPTY (nobody on it — count includes me)
+                  // and not the base channel (the default is permanent).
+                  const deletable = c.count === 0 && c.canon !== canonChannel(DEFAULT_CHANNEL);
                   return (
                     <span key={c.canon} className="chanchipwrap">
                       <button
