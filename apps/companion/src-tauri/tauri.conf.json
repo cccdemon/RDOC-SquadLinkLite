@@ -10,13 +10,30 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
+        "label": "main",
         "title": "RDOC SquadLink Lite",
         "width": 960,
         "height": 800,
         "minWidth": 720,
         "minHeight": 600
+      },
+      {
+        "label": "overlay",
+        "url": "index.html",
+        "title": "SquadLink Overlay",
+        "width": 240,
+        "height": 72,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {

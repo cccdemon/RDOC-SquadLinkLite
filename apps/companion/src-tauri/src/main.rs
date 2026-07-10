@@ -31,8 +31,18 @@ static PTT_CAPTURE_SLOT: AtomicI32 = AtomicI32::new(-1); // -1 idle, 0/1 = captu
 static PTT_SLOT_DOWN: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
 static PTT_COMBINED: AtomicBool = AtomicBool::new(false); // last emitted transmit state
 
+// Channel-cycle hotkeys (slot 0 = prev, slot 1 = next). A press edge emits
+// `chan-cycle` (-1 / +1); the webview steps through the session's channel list.
+// Default unset — the user binds them in settings.
+static CHAN_BINDINGS: OnceLock<Mutex<[Option<String>; 2]>> = OnceLock::new();
+static CHAN_CAPTURE_SLOT: AtomicI32 = AtomicI32::new(-1);
+static CHAN_SLOT_DOWN: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+
 fn ptt_bindings() -> &'static Mutex<[Option<String>; 2]> {
     PTT_BINDINGS.get_or_init(|| Mutex::new([Some("F8".into()), None]))
+}
+fn chan_bindings() -> &'static Mutex<[Option<String>; 2]> {
+    CHAN_BINDINGS.get_or_init(|| Mutex::new([None, None]))
 }
 
 /// Process one raw key/mouse edge. In capture mode the next press becomes the
@@ -40,9 +50,9 @@ fn ptt_bindings() -> &'static Mutex<[Option<String>; 2]> {
 /// toggle transmit via the `ptt` event. De-duped so key auto-repeat (and
 /// duplicate button flags in one packet) don't spam the IPC channel.
 fn handle_raw(code: String, down: bool) {
+    // ── Capture mode: the next press binds the pending PTT slot ──────────────
     let cap = PTT_CAPTURE_SLOT.load(Ordering::SeqCst);
     if cap >= 0 {
-        // Capture mode: the next press becomes slot `cap`'s binding.
         if down {
             PTT_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
             let slot = (cap as usize).min(1);
@@ -54,26 +64,55 @@ fn handle_raw(code: String, down: bool) {
         }
         return;
     }
-    // Update the down-state of every slot bound to this code.
-    let mut changed = false;
+    // ── Capture mode: the next press binds the pending channel-cycle slot ────
+    let ccap = CHAN_CAPTURE_SLOT.load(Ordering::SeqCst);
+    if ccap >= 0 {
+        if down {
+            CHAN_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
+            let slot = (ccap as usize).min(1);
+            CHAN_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
+            chan_bindings().lock().unwrap()[slot] = Some(code.clone());
+            if let Some(app) = APP_HANDLE.get() {
+                let _ = app.emit("chan-bound", serde_json::json!({ "slot": slot, "code": code }));
+            }
+        }
+        return;
+    }
+
+    // ── PTT: transmit while EITHER bound trigger is held ─────────────────────
+    let mut ptt_changed = false;
     {
         let b = ptt_bindings().lock().unwrap();
         for i in 0..2 {
             if b[i].as_deref() == Some(code.as_str())
                 && PTT_SLOT_DOWN[i].swap(down, Ordering::SeqCst) != down
             {
-                changed = true;
+                ptt_changed = true;
             }
         }
     }
-    if !changed {
-        return;
+    if ptt_changed {
+        let combined =
+            PTT_SLOT_DOWN[0].load(Ordering::SeqCst) || PTT_SLOT_DOWN[1].load(Ordering::SeqCst);
+        if PTT_COMBINED.swap(combined, Ordering::SeqCst) != combined {
+            if let Some(app) = APP_HANDLE.get() {
+                let _ = app.emit("ptt", combined);
+            }
+        }
     }
-    // Transmit while EITHER bound trigger is held; emit only on the combined edge.
-    let combined = PTT_SLOT_DOWN[0].load(Ordering::SeqCst) || PTT_SLOT_DOWN[1].load(Ordering::SeqCst);
-    if PTT_COMBINED.swap(combined, Ordering::SeqCst) != combined {
-        if let Some(app) = APP_HANDLE.get() {
-            let _ = app.emit("ptt", combined);
+
+    // ── Channel cycle: fire once on the press edge (prev = -1, next = +1) ─────
+    {
+        let b = chan_bindings().lock().unwrap();
+        for i in 0..2 {
+            if b[i].as_deref() == Some(code.as_str()) {
+                let was = CHAN_SLOT_DOWN[i].swap(down, Ordering::SeqCst);
+                if down && !was {
+                    if let Some(app) = APP_HANDLE.get() {
+                        let _ = app.emit("chan-cycle", if i == 0 { -1 } else { 1 });
+                    }
+                }
+            }
         }
     }
 }
@@ -462,6 +501,25 @@ fn set_ptt_binding(slot: usize, code: Option<String>) {
 fn start_ptt_capture(slot: usize) {
     if slot < 2 {
         PTT_CAPTURE_SLOT.store(slot as i32, Ordering::SeqCst);
+    }
+}
+
+/// Bind a channel-cycle hotkey: slot 0 = previous, slot 1 = next.
+#[tauri::command]
+fn set_chan_binding(slot: usize, code: Option<String>) {
+    if slot >= 2 {
+        return;
+    }
+    let code = code.filter(|c| !c.is_empty() && c.len() <= 64);
+    CHAN_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
+    chan_bindings().lock().unwrap()[slot] = code;
+}
+
+/// Arm capture: the next global key/button press binds channel-cycle `slot`.
+#[tauri::command]
+fn start_chan_capture(slot: usize) {
+    if slot < 2 {
+        CHAN_CAPTURE_SLOT.store(slot as i32, Ordering::SeqCst);
     }
 }
 
@@ -898,6 +956,8 @@ fn main() {
             is_store_build,
             set_ptt_binding,
             start_ptt_capture,
+            set_chan_binding,
+            start_chan_capture,
             set_ducking,
             set_earcon,
             set_earcon_volume

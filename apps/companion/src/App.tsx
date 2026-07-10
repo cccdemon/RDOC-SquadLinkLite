@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emitTo } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { currentMonitor, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import logo from "./Squad_Link_Lite.png";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
@@ -75,6 +77,57 @@ const DEFAULT_CHANNEL = "Funk 1";
 const MAX_CHANNEL_LEN = 32;
 // Canonical form for channel matching: trim + lowercase (mirrors the Rust side).
 const canonChannel = (s: string) => s.trim().toLowerCase();
+
+// ── Channel overlay (separate transparent, click-through window) ──────────────
+type OverlaySize = "s" | "m" | "l";
+type OverlayPos = "tl" | "tc" | "tr" | "bl" | "bc" | "br";
+const OVERLAY_DIMS: Record<OverlaySize, { w: number; h: number }> = {
+  s: { w: 180, h: 40 },
+  m: { w: 224, h: 52 },
+  l: { w: 288, h: 64 },
+};
+const OVERLAY_POSITIONS: { key: OverlayPos; label: string; title: string }[] = [
+  { key: "tl", label: "◤", title: "oben links" },
+  { key: "tc", label: "▲", title: "oben mitte" },
+  { key: "tr", label: "◥", title: "oben rechts" },
+  { key: "bl", label: "◣", title: "unten links" },
+  { key: "bc", label: "▼", title: "unten mitte" },
+  { key: "br", label: "◢", title: "unten rechts" },
+];
+const OVERLAY_MARGIN = 24;
+
+// Show/size/position (or hide) the overlay window. Logical coordinates; anchored
+// to a corner/center of the current monitor with a small margin.
+async function applyOverlayWindow(on: boolean, pos: OverlayPos, size: OverlaySize) {
+  const w = await WebviewWindow.getByLabel("overlay");
+  if (!w) return;
+  if (!on) {
+    await w.hide().catch(() => {});
+    return;
+  }
+  const d = OVERLAY_DIMS[size];
+  await w.setSize(new LogicalSize(d.w, d.h)).catch(() => {});
+  const mon = await currentMonitor().catch(() => null);
+  const sf = mon?.scaleFactor ?? 1;
+  const MW = (mon?.size.width ?? 1920) / sf;
+  const MH = (mon?.size.height ?? 1080) / sf;
+  const OX = (mon?.position.x ?? 0) / sf;
+  const OY = (mon?.position.y ?? 0) / sf;
+  const left = OX + OVERLAY_MARGIN;
+  const right = OX + MW - d.w - OVERLAY_MARGIN;
+  const cx = OX + (MW - d.w) / 2;
+  const top = OY + OVERLAY_MARGIN;
+  const bottom = OY + MH - d.h - OVERLAY_MARGIN;
+  const map: Record<OverlayPos, [number, number]> = {
+    tl: [left, top], tc: [cx, top], tr: [right, top],
+    bl: [left, bottom], bc: [cx, bottom], br: [right, bottom],
+  };
+  const [x, y] = map[pos];
+  await w.setPosition(new LogicalPosition(Math.round(x), Math.round(y))).catch(() => {});
+  await w.setAlwaysOnTop(true).catch(() => {});
+  await w.setIgnoreCursorEvents(true).catch(() => {});
+  await w.show().catch(() => {});
+}
 
 // Capture-path DSP (must match companion_core::audio::DspConfig field names).
 type DspConfig = {
@@ -195,6 +248,23 @@ export default function App() {
   const [netCheck, setNetCheck] = useState<{ signaling: boolean; can_send: boolean; can_receive: boolean; stun: boolean } | null>(null);
   const [checking, setChecking] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"simple" | "expert">("simple");
+  // Channel overlay + cycle hotkeys.
+  const [overlayOn, setOverlayOn] = useState<boolean>(() => {
+    try { return localStorage.getItem("sa.ovl") === "1"; } catch { return false; }
+  });
+  const [overlayPos, setOverlayPos] = useState<OverlayPos>(() => {
+    try { return (localStorage.getItem("sa.ovlpos") as OverlayPos) || "tc"; } catch { return "tc"; }
+  });
+  const [overlaySize, setOverlaySize] = useState<OverlaySize>(() => {
+    try { return (localStorage.getItem("sa.ovlsize") as OverlaySize) || "m"; } catch { return "m"; }
+  });
+  const [chanPrev, setChanPrev] = useState<string>(() => {
+    try { return localStorage.getItem("sa.chanprev") || ""; } catch { return ""; }
+  });
+  const [chanNext, setChanNext] = useState<string>(() => {
+    try { return localStorage.getItem("sa.channext") || ""; } catch { return ""; }
+  });
+  const [capturingChan, setCapturingChan] = useState<number | null>(null);
   const [showKbps, setShowKbps] = useState<boolean>(() => {
     try {
       return localStorage.getItem("sa.showkbps") !== "0"; // default: show
@@ -550,6 +620,73 @@ export default function App() {
     setMyChannel(clean);
     invoke("set_channel", { name: clean }).catch(() => {});
   };
+
+  // Ordered, deduped channel list (session-remembered + mine + live peers) —
+  // the order the cycle hotkeys and the chips walk through.
+  const orderedChannels = () => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const label of [...sessionChannels, myChannel, ...participants.map((p) => p.channel)]) {
+      const k = canonChannel(label);
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(label);
+    }
+    return out;
+  };
+  // Cycle prev (-1) / next (+1). Kept in a ref so the (once-registered) global
+  // hotkey listener always sees the current channel list, not a stale closure.
+  const cycleRef = useRef<(dir: number) => void>(() => {});
+  cycleRef.current = (dir: number) => {
+    const list = orderedChannels();
+    if (list.length < 2) return;
+    const idx = list.findIndex((c) => canonChannel(c) === canonChannel(myChannel));
+    const cur = idx < 0 ? 0 : idx;
+    const nextIdx = (cur + (dir < 0 ? -1 : 1) + list.length) % list.length;
+    switchChannel(list[nextIdx]);
+  };
+
+  // Apply the overlay window (show/size/position or hide) + persist the choice.
+  useEffect(() => {
+    applyOverlayWindow(overlayOn, overlayPos, overlaySize);
+    try {
+      localStorage.setItem("sa.ovl", overlayOn ? "1" : "0");
+      localStorage.setItem("sa.ovlpos", overlayPos);
+      localStorage.setItem("sa.ovlsize", overlaySize);
+    } catch { /* ignore */ }
+    if (overlayOn) emitTo("overlay", "overlay-update", { channel: myChannel, size: overlaySize }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayOn, overlayPos, overlaySize]);
+  // Push the current channel to the overlay whenever it changes.
+  useEffect(() => {
+    if (overlayOn) emitTo("overlay", "overlay-update", { channel: myChannel, size: overlaySize }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myChannel]);
+
+  // Channel-cycle hotkeys: push saved bindings + listen for global press edges.
+  useEffect(() => {
+    invoke("set_chan_binding", { slot: 0, code: chanPrev || null }).catch(() => {});
+    invoke("set_chan_binding", { slot: 1, code: chanNext || null }).catch(() => {});
+    const offCycle = listen<number>("chan-cycle", (e) => cycleRef.current(e.payload));
+    const offBound = listen<{ slot: number; code: string }>("chan-bound", (e) => {
+      const { slot, code } = e.payload;
+      if (slot === 0) { setChanPrev(code); try { localStorage.setItem("sa.chanprev", code); } catch { /* ignore */ } }
+      else { setChanNext(code); try { localStorage.setItem("sa.channext", code); } catch { /* ignore */ } }
+      setCapturingChan(null);
+    });
+    return () => { offCycle.then((f) => f()); offBound.then((f) => f()); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const rebindChan = (slot: number) => {
+    setCapturingChan(slot);
+    invoke("start_chan_capture", { slot }).catch(() => {});
+  };
+  const clearChan = (slot: number) => {
+    if (slot === 0) { setChanPrev(""); try { localStorage.removeItem("sa.chanprev"); } catch { /* ignore */ } }
+    else { setChanNext(""); try { localStorage.removeItem("sa.channext"); } catch { /* ignore */ } }
+    setCapturingChan(null);
+    invoke("set_chan_binding", { slot, code: null }).catch(() => {});
+  };
   const rebindPtt = (slot: number) => {
     setCapturingSlot(slot);
     invoke("start_ptt_capture", { slot }).catch(() => {});
@@ -860,6 +997,62 @@ export default function App() {
 
       {settingsTab === "expert" && (
         <>
+          <label>📺 Kanal-Overlay</label>
+          <button className={`btn sm ${overlayOn ? "primary" : ""}`} onClick={() => setOverlayOn((v) => !v)}>
+            {overlayOn ? "An — Overlay sichtbar" : "Aus"}
+          </button>
+          <div className="sub2" style={{ opacity: 0.7 }}>
+            Kleines, klick-durchlässiges Overlay über dem Spiel — zeigt den aktuellen Kanal, blinkt beim Wechsel. Kein Game-Eingriff (separates Fenster).
+          </div>
+          <div className={`ovlcfg ${overlayOn ? "" : "ovlcfg-off"}`}>
+            <div className="ovlrow">
+              <span className="ovllbl">Position</span>
+              <div className="ovlposgrid">
+                {OVERLAY_POSITIONS.map((p) => (
+                  <button
+                    key={p.key}
+                    className={`ovlposbtn ${overlayPos === p.key ? "on" : ""}`}
+                    onClick={() => setOverlayPos(p.key)}
+                    disabled={!overlayOn}
+                    title={p.title}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="ovlrow">
+              <span className="ovllbl">Größe</span>
+              <div className="ovlsizes">
+                {(["s", "m", "l"] as OverlaySize[]).map((s) => (
+                  <button
+                    key={s}
+                    className={`btn sm ${overlaySize === s ? "primary" : ""}`}
+                    onClick={() => setOverlaySize(s)}
+                    disabled={!overlayOn}
+                  >
+                    {s === "s" ? "Klein" : s === "m" ? "Mittel" : "Groß"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <label>📻 Kanal-Hotkeys (Cycle)</label>
+          <div className="pttrow">
+            <span className="pttcur">◀ {capturingChan === 0 ? "Drücke Taste…" : (chanPrev ? pttLabel(chanPrev) : "— (nicht belegt)")}</span>
+            <button className="btn sm" onClick={() => rebindChan(0)} disabled={capturingChan !== null}>{chanPrev ? "Neu belegen" : "Belegen"}</button>
+            {chanPrev && <button className="btn sm" onClick={() => clearChan(0)} disabled={capturingChan !== null} title="Entfernen">✕</button>}
+          </div>
+          <div className="pttrow">
+            <span className="pttcur">▶ {capturingChan === 1 ? "Drücke Taste…" : (chanNext ? pttLabel(chanNext) : "— (nicht belegt)")}</span>
+            <button className="btn sm" onClick={() => rebindChan(1)} disabled={capturingChan !== null}>{chanNext ? "Neu belegen" : "Belegen"}</button>
+            {chanNext && <button className="btn sm" onClick={() => clearChan(1)} disabled={capturingChan !== null} title="Entfernen">✕</button>}
+          </div>
+          <div className="sub2" style={{ opacity: 0.7 }}>
+            Globale Tasten (RAW, auch im Vollbild-Game) zum Durchschalten der Session-Kanäle — vorheriger / nächster.
+          </div>
+
           <label>🔑 Session-Verschlüsselung</label>
           <button className="btn sm" onClick={rotateKey} disabled={rotating || !connected}>
             {rotating ? "⏳ Verschlüssele neu…" : `Session neu verschlüsseln · #${keyInfo.gen}`}

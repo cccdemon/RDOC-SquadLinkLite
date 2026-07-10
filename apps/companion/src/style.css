@@ -138,6 +138,42 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
   background: var(--panel); border: 1px solid var(--line); color: var(--dim);
 }
 .chandel:hover { border-color: var(--red, #d05); color: var(--red, #d05); }
+
+/* ── Channel overlay window (separate transparent, click-through window) ── */
+.overlay-mode, .overlay-mode body, .overlay-mode #root {
+  background: transparent !important; margin: 0; overflow: hidden;
+  height: 100%; width: 100%;
+}
+.ovl {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 999px;
+  background: rgba(10, 14, 20, 0.72); border: 1px solid #2a3140;
+  color: #cfe0ff; font-weight: 700; letter-spacing: 0.3px;
+  white-space: nowrap; user-select: none;
+  opacity: 0.5; transition: opacity 0.25s, border-color 0.25s, background 0.25s;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.ovl-flash { opacity: 1; border-color: #7fb0ff; background: rgba(16, 32, 58, 0.9); }
+.ovl-ico { opacity: 0.85; }
+.ovl-s { font-size: 12px; padding: 3px 9px; }
+.ovl-m { font-size: 15px; padding: 5px 12px; }
+.ovl-l { font-size: 19px; padding: 7px 15px; }
+
+/* Overlay settings (in the app, expert tab). */
+.ovlcfg { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.ovlcfg-off { opacity: 0.5; }
+.ovlrow { display: flex; align-items: center; gap: 10px; }
+.ovllbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; width: 68px; flex: none; }
+.ovlposgrid { display: grid; grid-template-columns: repeat(3, 30px); grid-auto-rows: 26px; gap: 4px; }
+.ovlposbtn {
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1;
+}
+.ovlposbtn:hover:not(:disabled) { border-color: var(--cyan-dim); color: var(--txt); }
+.ovlposbtn.on { border-color: var(--cyan); color: var(--cyan); background: var(--panel2); }
+.ovlposbtn:disabled { cursor: default; }
+.ovlsizes { display: flex; gap: 6px; }
+.ovlsizes .btn.sm { margin-top: 0; }
 .channew { display: flex; gap: 6px; }
 .channew input {
   flex: 1; min-width: 0; padding: 6px 9px; font-size: 12px;
