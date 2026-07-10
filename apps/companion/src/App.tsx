@@ -111,6 +111,17 @@ export default function App() {
     }
   });
   const [channelDraft, setChannelDraft] = useState<string>("");
+  // Channels known this session: every channel I create or that a peer announces
+  // stays in the switcher for the whole session, even after everyone leaves it
+  // (a created channel doesn't vanish when its roster count hits zero).
+  const [sessionChannels, setSessionChannels] = useState<string[]>([]);
+  const rememberChannel = (name: string) => {
+    const clean = name.trim().slice(0, MAX_CHANNEL_LEN);
+    if (!clean) return;
+    setSessionChannels((prev) =>
+      prev.some((c) => canonChannel(c) === canonChannel(clean)) ? prev : [...prev, clean]
+    );
+  };
   // Streamer mode: blur the shareable link + PIN so they can't be read on stream.
   // Copy buttons still copy the real values.
   const [streamerMode, setStreamerMode] = useState<boolean>(() => {
@@ -498,6 +509,9 @@ export default function App() {
       invoke("set_low_bandwidth", { on: lowBw }).catch(() => {});
       invoke("set_earcon", { on: earcon }).catch(() => {});
       invoke("set_earcon_volume", { volume: earconVol / 100 }).catch(() => {});
+      // Fresh session → start the channel list from just my channel; peers'
+      // channels + any I create get added as they're seen.
+      setSessionChannels([myChannel]);
       // Re-apply the saved channel (engine starts on the default).
       if (canonChannel(myChannel) !== canonChannel(DEFAULT_CHANNEL)) {
         invoke("set_channel", { name: myChannel }).catch(() => {});
@@ -511,10 +525,23 @@ export default function App() {
     try { localStorage.setItem("sa.channel", myChannel); } catch { /* ignore */ }
   }, [myChannel]);
 
+  // Keep the session's channel list growing: remember my channel + every channel
+  // a peer announces, so created channels stay selectable all session.
+  useEffect(() => {
+    rememberChannel(myChannel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myChannel]);
+  useEffect(() => {
+    participants.forEach((p) => rememberChannel(p.channel));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participants]);
+
   // Switch to a (validated) channel: optimistic UI + tell the engine.
   const switchChannel = (name: string) => {
     const clean = name.trim().slice(0, MAX_CHANNEL_LEN);
-    if (!clean || canonChannel(clean) === canonChannel(myChannel)) return;
+    if (!clean) return;
+    rememberChannel(clean); // keep even a brand-new channel in the list right away
+    if (canonChannel(clean) === canonChannel(myChannel)) return;
     setMyChannel(clean);
     invoke("set_channel", { name: clean }).catch(() => {});
   };
@@ -1157,23 +1184,33 @@ export default function App() {
           <div className="hsec">📻 Kanal · {myChannel}</div>
           <div className="chanbar">
             <div className="chanchips">
-              {Object.entries(
-                participants.reduce<Record<string, { label: string; count: number }>>((m, p) => {
+              {(() => {
+                // Live occupancy per channel (canonical key → count).
+                const counts = participants.reduce<Record<string, number>>((m, p) => {
                   const k = canonChannel(p.channel);
-                  if (!m[k]) m[k] = { label: p.channel, count: 0 };
-                  m[k].count++;
+                  m[k] = (m[k] || 0) + 1;
                   return m;
-                }, {})
-              ).map(([k, info]) => (
-                <button
-                  key={k}
-                  className={`chanchip ${canonChannel(myChannel) === k ? "active" : ""}`}
-                  onClick={() => switchChannel(info.label)}
-                  title={`Auf Kanal "${info.label}" wechseln`}
-                >
-                  {info.label} · {info.count}
-                </button>
-              ))}
+                }, {});
+                // Union of session-remembered channels + any live ones, deduped.
+                const seen = new Set<string>();
+                const chips: { label: string; canon: string; count: number }[] = [];
+                for (const label of [...sessionChannels, myChannel, ...participants.map((p) => p.channel)]) {
+                  const k = canonChannel(label);
+                  if (!k || seen.has(k)) continue;
+                  seen.add(k);
+                  chips.push({ label, canon: k, count: counts[k] || 0 });
+                }
+                return chips.map((c) => (
+                  <button
+                    key={c.canon}
+                    className={`chanchip ${canonChannel(myChannel) === c.canon ? "active" : ""}`}
+                    onClick={() => switchChannel(c.label)}
+                    title={`Auf Kanal "${c.label}" wechseln`}
+                  >
+                    {c.label} · {c.count}
+                  </button>
+                ));
+              })()}
             </div>
             <form
               className="channew"
