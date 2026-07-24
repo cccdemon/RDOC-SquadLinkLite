@@ -43,6 +43,15 @@ pub enum CtrlMsg {
     /// even for peers that join after it was created. Sent on DataChannel open
     /// (so late joiners catch up) and whenever the directory grows.
     Channels { names: Vec<String> },
+    /// PQC handshake, initiator → responder: hybrid ML-KEM-768 encapsulation key
+    /// + X25519 public key (both base64). Sent plaintext (public values).
+    KemHello { kem_pk: String, x_pk: String },
+    /// PQC handshake, responder → initiator: X25519 public key + ML-KEM
+    /// ciphertext (both base64).
+    KemReply { x_pk: String, kem_ct: String },
+    /// An AEAD-sealed inner `CtrlMsg` (base64) once the PQC session is up —
+    /// quantum-safe confidentiality layered inside DTLS.
+    Enc { data: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

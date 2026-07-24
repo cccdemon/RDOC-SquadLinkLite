@@ -376,6 +376,15 @@ export default function App() {
       return true;
     }
   });
+  // How much quieter other apps get while voice is active, in percent.
+  const [duckAmount, setDuckAmount] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("sa.duckAmount"));
+      return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 75;
+    } catch {
+      return 75;
+    }
+  });
   // Local "Funk-Klick" earcon at the start of an incoming transmission, so you can
   // hear that audio is coming from SquadLink. Default on.
   const [earcon, setEarcon] = useState<boolean>(() => {
@@ -758,6 +767,11 @@ export default function App() {
       invoke("set_ducking", { active: duckActive }).catch(() => {});
     }
   }, [duckActive]);
+  // Push the amount on mount too — the backend defaults to 75 and would otherwise
+  // ignore a stored setting until the slider is touched.
+  useEffect(() => {
+    invoke("set_duck_amount", { percent: duckAmount }).catch(() => {});
+  }, [duckAmount]);
   const rotateKey = () => {
     setRotating(true);
     invoke("rotate_key").catch(() => setRotating(false));
@@ -1011,6 +1025,22 @@ export default function App() {
             />{" "}
             Andere Apps automatisch leiser, wenn im SquadLink gesprochen wird (Windows)
           </label>
+          <div className="volrow" style={{ opacity: duckOthers ? 1 : 0.45 }}>
+            <span className="vlabel">🔉 Um wie viel leiser</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={duckAmount}
+              disabled={!duckOthers}
+              onChange={(e) => {
+                const pct = Number(e.target.value);
+                setDuckAmount(pct);
+                try { localStorage.setItem("sa.duckAmount", String(pct)); } catch { /* ignore */ }
+              }}
+            />
+            <span className="vval">{duckAmount}%</span>
+          </div>
           <label className="ckrow">
             <input
               type="checkbox"

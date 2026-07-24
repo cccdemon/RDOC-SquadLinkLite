@@ -550,6 +550,7 @@ mod raw_input {
 #[cfg(windows)]
 mod ducking {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
@@ -560,7 +561,15 @@ mod ducking {
         CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
     };
 
-    const DUCK_FACTOR: f32 = 0.25; // other apps drop to 25% while voice is active
+    // How far to lower other apps, in percent (0 = unchanged, 100 = silent).
+    // 75 keeps the previous hardcoded behaviour (drop to 25% of original).
+    static DUCK_PERCENT: AtomicU32 = AtomicU32::new(75);
+    // Whether ducking is applied right now, so an amount change can re-apply live.
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+    fn factor() -> f32 {
+        1.0 - DUCK_PERCENT.load(Ordering::Relaxed).min(100) as f32 / 100.0
+    }
 
     // pid -> original master volume, captured the moment ducking turns on.
     fn saved() -> &'static Mutex<HashMap<u32, f32>> {
@@ -568,9 +577,20 @@ mod ducking {
         S.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
+    /// Set how much other apps get lowered. Re-applies immediately if voice is
+    /// already active, so dragging the slider is audible while someone talks.
+    /// Safe because `run` scales from the *saved* original, not the current level.
+    pub fn set_amount(percent: u32) {
+        DUCK_PERCENT.store(percent.min(100), Ordering::Relaxed);
+        if ACTIVE.load(Ordering::Relaxed) {
+            set(true);
+        }
+    }
+
     /// Lower (active) or restore (inactive) every OTHER app's audio session.
     /// Runs on a short-lived MTA thread so it never disturbs Tauri's apartment.
     pub fn set(active: bool) {
+        ACTIVE.store(active, Ordering::Relaxed);
         std::thread::spawn(move || unsafe {
             let _ = run(active);
         });
@@ -595,7 +615,7 @@ mod ducking {
             if active {
                 let cur = vol.GetMasterVolume()?;
                 let orig = *saved().lock().unwrap().entry(pid).or_insert(cur);
-                let _ = vol.SetMasterVolume(orig * DUCK_FACTOR, std::ptr::null());
+                let _ = vol.SetMasterVolume(orig * factor(), std::ptr::null());
             } else if let Some(orig) = saved().lock().unwrap().remove(&pid) {
                 let _ = vol.SetMasterVolume(orig, std::ptr::null());
             }
@@ -610,12 +630,20 @@ mod ducking {
 #[cfg(not(windows))]
 mod ducking {
     pub fn set(_active: bool) {}
+    pub fn set_amount(_percent: u32) {}
 }
 
 /// Duck/restore other apps' audio. No-op off Windows.
 #[tauri::command]
 fn set_ducking(active: bool) {
     ducking::set(active);
+}
+
+/// How much to lower other apps while voice is active, in percent
+/// (0 = unchanged, 100 = silent). Clamped Rust-side.
+#[tauri::command]
+fn set_duck_amount(percent: u32) {
+    ducking::set_amount(percent);
 }
 
 #[tauri::command]
@@ -1092,6 +1120,7 @@ fn main() {
             set_chan_binding,
             start_chan_capture,
             set_ducking,
+            set_duck_amount,
             set_earcon,
             set_earcon_volume
         ])

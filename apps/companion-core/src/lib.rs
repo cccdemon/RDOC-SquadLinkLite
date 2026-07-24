@@ -3,6 +3,7 @@
 //! the Tauri app both drive this same engine.
 
 pub mod audio;
+pub mod crypto;
 pub mod mesh;
 pub mod selfcheck;
 pub mod serverless;
@@ -41,6 +42,8 @@ pub struct Participant {
     /// Current channel (frequency) name this member is tuned to. Members on a
     /// different channel than you are shown dimmed and you don't hear them.
     pub channel: String,
+    /// True once the post-quantum (ML-KEM-768) session with this peer is up.
+    pub secure: bool,
 }
 
 /// Events the engine pushes to the frontend.
@@ -72,6 +75,9 @@ pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
 /// a malicious member can't grow native/webview memory with one giant message.
 pub(crate) const MAX_CHAT_BYTES: usize = 4 * 1024;
 pub(crate) const MAX_CHAT_CHARS: usize = 2000;
+/// Max DataChannel control-frame size (larger than chat to fit a KEM handshake:
+/// base64 ML-KEM-768 key ≈ 1.6 KB, sealed chat a bit more).
+pub(crate) const MAX_CTRL_BYTES: usize = 8 * 1024;
 
 /// Internal events from the mesh layer back to the engine loop.
 pub(crate) enum MeshEvent {
@@ -81,6 +87,8 @@ pub(crate) enum MeshEvent {
     PeerChannel { peer: String, name: String },
     /// A peer shared its channel directory (union-merge into ours).
     PeerChannels { names: Vec<String> },
+    /// The post-quantum session with this peer is established.
+    Secure { peer: String },
 }
 
 /// Default channel (frequency) every client starts on.
@@ -369,6 +377,7 @@ struct Member {
     badge: Option<String>,
     speaking: bool,
     channel: String,
+    secure: bool,
 }
 
 fn emit_roster(
@@ -386,6 +395,7 @@ fn emit_roster(
         badge: None,
         speaking: transmitting,
         channel: me_channel.to_string(),
+        secure: true, // our own row: we always hold the crypto
     }];
     let mut others: Vec<Participant> = members
         .iter()
@@ -396,6 +406,7 @@ fn emit_roster(
             badge: m.badge.clone(),
             speaking: m.speaking,
             channel: m.channel.clone(),
+            secure: m.secure,
         })
         .collect();
     others.sort_by(|a, b| a.name.cmp(&b.name));
@@ -454,7 +465,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     // Shared channel (frequency) state: the mesh RX-gate reads it on the hot
     // audio path; the engine loop updates it on switch / peer announce.
     let chan = Arc::new(ChanState::new());
-    let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx, chan.clone());
+    // Per-peer post-quantum sessions (ML-KEM-768 + X25519), established over each
+    // DataChannel; used to AEAD-seal chat + audio.
+    let crypto = Arc::new(crypto::PeerCrypto::new(cfg.user_id.clone()));
+    let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx, chan.clone(), crypto.clone());
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Cmd>();
 
@@ -566,6 +580,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 badge: None,
                                 speaking: false,
                                 channel: chan.peer(&p.user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                                secure: crypto.is_secure(&p.user_id),
                             })).collect();
                             for p in &peers { let _ = mesh.on_peer(&p.user_id).await; }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
@@ -576,6 +591,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 badge: None,
                                 speaking: false,
                                 channel: chan.peer(&user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                                secure: crypto.is_secure(&user_id),
                             });
                             let _ = mesh.on_peer(&user_id).await;
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
@@ -641,6 +657,11 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 mesh.broadcast_channels(&known_channels).await;
                                 sink(UiEvent::Channels { names: known_channels.clone() });
                             }
+                        }
+                        Some(MeshEvent::Secure { peer }) => {
+                            // The PQC session with this peer came up → show the lock.
+                            if let Some(m) = members.get_mut(&peer) { m.secure = true; }
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         None => {}
                     }
