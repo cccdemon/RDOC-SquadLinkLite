@@ -2,13 +2,22 @@
 //!
 //! A hybrid **ML-KEM-768 + X25519** handshake runs over the (already
 //! DTLS-authenticated) P2P DataChannel; the derived symmetric keys AEAD-encrypt
-//! audio + chat **inside** DTLS. This defeats passive "harvest now, decrypt
-//! later": an attacker must break *both* ML-KEM and the DTLS transport. It does
-//! NOT replace DTLS (which still authenticates the peer); it layers quantum-safe
-//! confidentiality on top.
+//! chat and the group-audio room key **inside** DTLS. This defeats passive
+//! "harvest now, decrypt later": an attacker must break *both* ML-KEM and the
+//! DTLS transport. It does NOT replace DTLS (which still authenticates the
+//! peer); it layers quantum-safe confidentiality on top.
 //!
 //! Glare: the lexicographically smaller `user_id` is the initiator (side A);
-//! keys are per-direction so A→B and B→A never share a key or nonce.
+//! the pairwise `Session` keys are per-direction so A→B and B→A never share a
+//! key or nonce.
+//!
+//! Two symmetric layers sit on top of the handshake:
+//! - [`Session`] — the per-peer pairwise AEAD used for chat and to ship the
+//!   room key confidentially.
+//! - [`RoomAudio`] / [`RoomKey`] — a single room-wide key so an audio frame is
+//!   sealed ONCE and fanned out to every peer (preserving encode-once). The
+//!   authority (smallest `user_id`) mints it and distributes it over the
+//!   pairwise sessions, rotating it when membership changes.
 
 use anyhow::{anyhow, Result};
 use chacha20poly1305::aead::{Aead, Payload};
@@ -16,7 +25,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 use hkdf::Hkdf;
 use ml_kem::kem::{Decapsulate, Encapsulate};
 use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
@@ -341,9 +350,266 @@ impl PeerCrypto {
     }
 }
 
+/// Room-wide symmetric key for **group audio**. One key shared by all members,
+/// so an audio frame is sealed ONCE by the sender and fanned out to every peer —
+/// the encode-once model is preserved (unlike the per-direction pairwise
+/// `Session`, which would force a per-peer seal). The key itself is distributed
+/// confidentially over the pairwise PQC `Session`s (see `CtrlMsg::RoomKey`), so
+/// it inherits the hybrid post-quantum protection.
+///
+/// Because many senders share the key, each frame carries a fresh **random
+/// 96-bit nonce** instead of a per-sender counter — no cross-sender coordination
+/// is needed and nonce reuse is negligible (birthday bound ≈ 2^48 frames). The
+/// sender's `user_id` is bound into the AAD so a frame can't be re-attributed to
+/// another member. There is no anti-replay window: DTLS-SRTP already gives
+/// transport-level replay protection and a replayed stale audio frame is
+/// harmless (it just plays late), unlike a replayed chat line.
+#[derive(Clone)]
+pub struct RoomKey {
+    gen: u32,
+    key: [u8; 32],
+}
+
+impl RoomKey {
+    /// A fresh random room key at generation `gen`.
+    pub fn generate(gen: u32) -> Self {
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        RoomKey { gen, key }
+    }
+    /// Reconstruct a room key received from the authority.
+    pub fn from_bytes(gen: u32, key: [u8; 32]) -> Self {
+        RoomKey { gen, key }
+    }
+    pub fn generation(&self) -> u32 {
+        self.gen
+    }
+    pub fn key_bytes(&self) -> [u8; 32] {
+        self.key
+    }
+
+    fn cipher(&self) -> ChaCha20Poly1305 {
+        ChaCha20Poly1305::new(Key::from_slice(&self.key))
+    }
+
+    /// Seal one audio frame from `sender`. Output = 12-byte nonce ‖ ct+tag.
+    pub fn seal_audio(&self, sender: &str, pt: &[u8]) -> Vec<u8> {
+        let mut nonce = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce);
+        let aad = room_aad(sender);
+        let ct = self
+            .cipher()
+            .encrypt(Nonce::from_slice(&nonce), Payload { msg: pt, aad: &aad })
+            .expect("aead encrypt");
+        let mut out = Vec::with_capacity(12 + ct.len());
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ct);
+        out
+    }
+
+    /// Open one audio frame claimed to be from `sender`. None on auth failure.
+    pub fn open_audio(&self, sender: &str, wire: &[u8]) -> Option<Vec<u8>> {
+        if wire.len() < 12 {
+            return None;
+        }
+        let aad = room_aad(sender);
+        self.cipher()
+            .decrypt(Nonce::from_slice(&wire[..12]), Payload { msg: &wire[12..], aad: &aad })
+            .ok()
+    }
+}
+
+/// AAD for a room-audio frame: the audio kind tag ‖ the sender's id, so a sealed
+/// frame is bound to both its kind and its author.
+fn room_aad(sender: &str) -> Vec<u8> {
+    let mut a = Vec::with_capacity(1 + sender.len());
+    a.push(Kind::Audio.tag());
+    a.extend_from_slice(sender.as_bytes());
+    a
+}
+
+/// Audio payload framing tags (first byte of the RTP payload we write).
+const AUDIO_RAW: u8 = 0; // plaintext Opus (pre-key fallback so audio isn't lost)
+const AUDIO_SEALED: u8 = 1; // AUDIO_SEALED ‖ gen(4) ‖ nonce(12) ‖ ct+tag
+
+/// Live group-audio keying, shared (behind an `Arc`) between the outbound writer
+/// (`seal_outbound`), the inbound read-track tasks (`open_inbound`), and the
+/// engine loop, which `install`s keys received from the authority. Keeps the
+/// current key plus the immediately-previous one so frames still sealed under
+/// the old key during a rekey keep decoding through the transition.
+pub struct RoomAudio {
+    cur: std::sync::Mutex<Option<RoomKey>>,
+    prev: std::sync::Mutex<Option<RoomKey>>,
+}
+
+impl Default for RoomAudio {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoomAudio {
+    pub fn new() -> Self {
+        RoomAudio { cur: std::sync::Mutex::new(None), prev: std::sync::Mutex::new(None) }
+    }
+
+    /// The current key generation, if a key is installed.
+    pub fn generation(&self) -> Option<u32> {
+        self.cur.lock().unwrap().as_ref().map(|k| k.generation())
+    }
+
+    /// A clone of the current key (for the authority to distribute), if any.
+    pub fn current(&self) -> Option<RoomKey> {
+        self.cur.lock().unwrap().clone()
+    }
+
+    /// Install `k` as current, demoting the old current to `prev`. Ignored if a
+    /// key at the same-or-newer generation is already installed (idempotent
+    /// under duplicate distributions).
+    pub fn install(&self, k: RoomKey) {
+        let mut cur = self.cur.lock().unwrap();
+        if let Some(existing) = cur.as_ref() {
+            if existing.generation() >= k.generation() {
+                return;
+            }
+            *self.prev.lock().unwrap() = cur.take();
+        }
+        *cur = Some(k);
+    }
+
+    /// Frame an outbound audio payload: sealed if we hold a key, else raw.
+    pub fn seal_outbound(&self, sender: &str, opus: &[u8]) -> Vec<u8> {
+        if let Some(k) = self.cur.lock().unwrap().as_ref() {
+            let sealed = k.seal_audio(sender, opus);
+            let mut out = Vec::with_capacity(5 + sealed.len());
+            out.push(AUDIO_SEALED);
+            out.extend_from_slice(&k.generation().to_be_bytes());
+            out.extend_from_slice(&sealed);
+            out
+        } else {
+            let mut out = Vec::with_capacity(1 + opus.len());
+            out.push(AUDIO_RAW);
+            out.extend_from_slice(opus);
+            out
+        }
+    }
+
+    /// Parse an inbound audio payload from `sender` → the Opus bytes, or None to
+    /// drop (unknown tag, or a sealed frame we can't authenticate). A raw frame
+    /// is accepted even when we hold a key: the threat is passive harvest-now,
+    /// and an active downgrade would still sit inside the authenticated DTLS
+    /// channel, so leniency costs nothing against the modeled adversary.
+    pub fn open_inbound(&self, sender: &str, wire: &[u8]) -> Option<Vec<u8>> {
+        match wire.split_first() {
+            Some((&AUDIO_RAW, opus)) => Some(opus.to_vec()),
+            Some((&AUDIO_SEALED, rest)) if rest.len() >= 4 => {
+                let gen = u32::from_be_bytes(rest[..4].try_into().ok()?);
+                let body = &rest[4..];
+                for slot in [&self.cur, &self.prev] {
+                    if let Some(k) = slot.lock().unwrap().as_ref() {
+                        if k.generation() == gen {
+                            if let Some(pt) = k.open_audio(sender, body) {
+                                return Some(pt);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_key_round_trip() {
+        let rk = RoomKey::generate(1);
+        let w = rk.seal_audio("alice", b"opus-frame");
+        // Same key + same sender → opens.
+        let rk2 = RoomKey::from_bytes(rk.generation(), rk.key_bytes());
+        assert_eq!(rk2.open_audio("alice", &w).unwrap(), b"opus-frame");
+    }
+
+    #[test]
+    fn room_key_wrong_sender_rejected() {
+        let rk = RoomKey::generate(7);
+        let w = rk.seal_audio("alice", b"x");
+        assert!(rk.open_audio("bob", &w).is_none()); // AAD sender mismatch
+    }
+
+    #[test]
+    fn room_key_wrong_key_rejected() {
+        let a = RoomKey::generate(1);
+        let b = RoomKey::generate(1);
+        let w = a.seal_audio("alice", b"x");
+        assert!(b.open_audio("alice", &w).is_none());
+    }
+
+    #[test]
+    fn room_key_nonces_differ_per_frame() {
+        let rk = RoomKey::generate(1);
+        let w1 = rk.seal_audio("a", b"same");
+        let w2 = rk.seal_audio("a", b"same");
+        assert_ne!(&w1[..12], &w2[..12]); // random nonce per frame
+    }
+
+    #[test]
+    fn room_audio_raw_passthrough_without_key() {
+        let ra = RoomAudio::new();
+        let wire = ra.seal_outbound("a", b"opus"); // no key → raw
+        assert_eq!(wire[0], AUDIO_RAW);
+        // A receiver (with or without a key) recovers the plaintext Opus.
+        assert_eq!(ra.open_inbound("a", &wire).unwrap(), b"opus");
+    }
+
+    #[test]
+    fn room_audio_sealed_round_trip() {
+        let key = RoomKey::generate(1);
+        let sender = RoomAudio::new();
+        let recv = RoomAudio::new();
+        sender.install(key.clone());
+        recv.install(key);
+        let wire = sender.seal_outbound("alice", b"voice");
+        assert_eq!(wire[0], AUDIO_SEALED);
+        assert_eq!(recv.open_inbound("alice", &wire).unwrap(), b"voice");
+        // A receiver without the key can't open it.
+        assert!(RoomAudio::new().open_inbound("alice", &wire).is_none());
+    }
+
+    #[test]
+    fn room_audio_prev_key_bridges_rekey() {
+        let sender = RoomAudio::new();
+        let recv = RoomAudio::new();
+        sender.install(RoomKey::generate(1));
+        recv.install(sender.current().unwrap()); // both at gen 1
+        let old_frame = sender.seal_outbound("a", b"old");
+        // Receiver rekeys to gen 2 before the old frame arrives.
+        recv.install(RoomKey::generate(2));
+        // gen-1 frame still opens via the retained previous key.
+        assert_eq!(recv.open_inbound("a", &old_frame).unwrap(), b"old");
+    }
+
+    #[test]
+    fn room_audio_unknown_generation_dropped() {
+        let recv = RoomAudio::new();
+        recv.install(RoomKey::generate(5));
+        let other = RoomAudio::new();
+        other.install(RoomKey::generate(9)); // gen the receiver never saw
+        let wire = other.seal_outbound("a", b"x");
+        assert!(recv.open_inbound("a", &wire).is_none());
+    }
+
+    #[test]
+    fn room_audio_install_ignores_stale_generation() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(3));
+        ra.install(RoomKey::generate(2)); // older → ignored
+        assert_eq!(ra.generation(), Some(3));
+    }
 
     #[test]
     fn peer_crypto_handshake_and_seal() {

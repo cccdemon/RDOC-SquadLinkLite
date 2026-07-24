@@ -52,6 +52,11 @@ pub enum CtrlMsg {
     /// An AEAD-sealed inner `CtrlMsg` (base64) once the PQC session is up —
     /// quantum-safe confidentiality layered inside DTLS.
     Enc { data: String },
+    /// Authority → member: the current group-audio room key (32 bytes, base64)
+    /// at generation `gen`. Only ever sent SEALED (wrapped in `Enc` over the
+    /// pairwise PQC session), so the room key never leaves the post-quantum
+    /// channel. Members adopt the highest generation they see.
+    RoomKey { gen: u32, key: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

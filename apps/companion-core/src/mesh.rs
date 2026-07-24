@@ -14,7 +14,7 @@ use bytes::Bytes;
 use protocol::{ChatMsg, ClientMsg, CtrlMsg};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::crypto::{Hello, Kind, PeerCrypto, Reply};
+use crate::crypto::{Hello, Kind, PeerCrypto, Reply, RoomAudio};
 use crate::{ChanState, MeshEvent};
 use webrtc::api::API;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -116,6 +116,16 @@ fn dispatch_inner(peer: &str, msg: CtrlMsg, events: &UnboundedSender<MeshEvent>,
                 .collect();
             let _ = events.send(MeshEvent::PeerChannels { names });
         }
+        CtrlMsg::RoomKey { gen, key } => {
+            // Arrives already decrypted (unwrapped from `Enc`): the group-audio
+            // key from the authority. Decode + hand up; the engine adopts the
+            // highest generation.
+            if let Ok(bytes) = STANDARD.decode(&key) {
+                if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                    let _ = events.send(MeshEvent::RoomKey { gen, key: arr });
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -214,9 +224,11 @@ pub struct Mesh {
     events: UnboundedSender<MeshEvent>,
     chan: Arc<ChanState>,
     crypto: Arc<PeerCrypto>,
+    room: Arc<RoomAudio>,
 }
 
 impl Mesh {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api: Arc<API>,
         local: Arc<TrackLocalStaticSample>,
@@ -226,12 +238,13 @@ impl Mesh {
         events: UnboundedSender<MeshEvent>,
         chan: Arc<ChanState>,
         crypto: Arc<PeerCrypto>,
+        room: Arc<RoomAudio>,
     ) -> Self {
         let ice_servers = vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
             ..Default::default()
         }];
-        Self { api, local, my_id, out, decode_tx, ice_servers, peers: HashMap::new(), events, chan, crypto }
+        Self { api, local, my_id, out, decode_tx, ice_servers, peers: HashMap::new(), events, chan, crypto, room }
     }
 
     pub fn add_turn(&mut self, urls: Vec<String>, username: String, credential: String) {
@@ -292,12 +305,14 @@ impl Mesh {
         let dtx = self.decode_tx.clone();
         let pid = peer.to_string();
         let chan_rt = self.chan.clone();
+        let room_rt = self.room.clone();
         pc.on_track(Box::new(move |track: Arc<TrackRemote>, _, _| {
             let dtx = dtx.clone();
             let pid = pid.clone();
             let chan_rt = chan_rt.clone();
+            let room_rt = room_rt.clone();
             Box::pin(async move {
-                tokio::spawn(read_track(track, pid, dtx, chan_rt));
+                tokio::spawn(read_track(track, pid, dtx, chan_rt, room_rt));
             })
         }));
 
@@ -502,6 +517,30 @@ impl Mesh {
             }
         }
     }
+
+    /// Send the current group-audio room key to one peer, SEALED over that
+    /// peer's pairwise PQC session. No-op if the peer has no session yet (the
+    /// engine retries when the peer becomes secure).
+    pub async fn send_room_key(&self, peer: &str, gen: u32, key: &[u8; 32]) {
+        let msg = CtrlMsg::RoomKey { gen, key: STANDARD.encode(key) };
+        let inner = match serde_json::to_vec(&msg) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let Some(sealed) = self.crypto.seal(peer, Kind::Chat, &inner) else {
+            return;
+        };
+        let Some(p) = self.peers.get(peer) else {
+            return;
+        };
+        let dc = p.chat.lock().unwrap().clone();
+        if let Some(dc) = dc {
+            let env = CtrlMsg::Enc { data: STANDARD.encode(sealed) };
+            if let Ok(j) = serde_json::to_string(&env) {
+                let _ = dc.send_text(j).await;
+            }
+        }
+    }
 }
 
 /// Classify the live connection from the selected ICE candidate pair:
@@ -523,14 +562,23 @@ async fn selected_kind(pc: &RTCPeerConnection) -> Option<&'static str> {
     None
 }
 
-async fn read_track(track: Arc<TrackRemote>, peer: String, dtx: DecodeTx, chan: Arc<ChanState>) {
+async fn read_track(
+    track: Arc<TrackRemote>,
+    peer: String,
+    dtx: DecodeTx,
+    chan: Arc<ChanState>,
+    room: Arc<RoomAudio>,
+) {
     loop {
         match track.read_rtp().await {
             Ok((pkt, _)) => {
                 // Channel RX-gate: only feed the decoder when this peer is tuned
                 // to the same channel as me. Off-channel audio is dropped here.
                 if !pkt.payload.is_empty() && chan.hears(&peer) {
-                    let _ = dtx.send((peer.clone(), pkt.payload));
+                    // Unseal the group-audio frame (raw passthrough pre-key).
+                    if let Some(opus) = room.open_inbound(&peer, &pkt.payload) {
+                        let _ = dtx.send((peer.clone(), Bytes::from(opus)));
+                    }
                 }
             }
             Err(_) => break,
@@ -592,10 +640,12 @@ mod rekey_tests {
         let a = Arc::new(AsyncMutex::new(Mesh::new(
             Arc::new(build_api().unwrap()), track(), "a".into(), out_a_tx, dec_a, ev_a,
             Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("a".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
         )));
         let b = Arc::new(AsyncMutex::new(Mesh::new(
             Arc::new(build_api().unwrap()), track(), "b".into(), out_b_tx, dec_b, ev_b,
             Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("b".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
         )));
 
         // Mock relay: forward each side's outbound to the other (stamped `from`).
