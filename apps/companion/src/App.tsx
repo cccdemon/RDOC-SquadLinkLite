@@ -86,7 +86,8 @@ type UiEvent =
   | { type: "net"; peers: number; up_kbps: number; down_kbps: number }
   | { type: "rekeyed"; generation: number; by: string }
   | { type: "signaling"; up: boolean }
-  | { type: "channel"; mine: string };
+  | { type: "channel"; mine: string }
+  | { type: "channels"; names: string[] };
 
 const DEFAULT_CHANNEL = "Funk 1";
 const MAX_CHANNEL_LEN = 32;
@@ -536,6 +537,7 @@ export default function App() {
         setSigUp(p.up);
         if (p.up) setResuming(false);
       } else if (p.type === "channel") setMyChannel(p.mine);
+      else if (p.type === "channels") p.names.forEach(rememberChannel);
     });
     return () => {
       un.then((f) => f());

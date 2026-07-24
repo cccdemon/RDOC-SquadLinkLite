@@ -37,6 +37,12 @@ pub enum CtrlMsg {
     /// case-insensitive (trim + lowercase); peers only mix audio from senders
     /// whose announced channel equals their own.
     Channel { name: String },
+    /// Sender shares the full set of channel (frequency) names it knows — the
+    /// shared directory. Union-merged on receipt so a channel created by any
+    /// peer becomes selectable for everyone, even before anyone tunes to it and
+    /// even for peers that join after it was created. Sent on DataChannel open
+    /// (so late joiners catch up) and whenever the directory grows.
+    Channels { names: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

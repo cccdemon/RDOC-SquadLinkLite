@@ -60,6 +60,9 @@ pub enum UiEvent {
     Signaling { up: bool },
     /// Confirms MY current channel (frequency) name after a switch / on connect.
     Channel { mine: String },
+    /// The shared channel directory grew — a peer created/announced a channel
+    /// not yet in the UI's list. The UI unions these into its switcher.
+    Channels { names: Vec<String> },
 }
 
 pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
@@ -76,16 +79,41 @@ pub(crate) enum MeshEvent {
     Badge { peer: String, badge: String },
     /// A peer announced (over its DataChannel) the channel it's tuned to.
     PeerChannel { peer: String, name: String },
+    /// A peer shared its channel directory (union-merge into ours).
+    PeerChannels { names: Vec<String> },
 }
 
 /// Default channel (frequency) every client starts on.
 pub(crate) const DEFAULT_CHANNEL: &str = "Funk 1";
 /// Max channel-name length accepted at the IPC boundary.
 pub const MAX_CHANNEL_LEN: usize = 32;
+/// Upper bound on the shared channel directory — clamps an inbound `Channels`
+/// frame so a malicious peer can't grow the list without limit.
+pub(crate) const MAX_CHANNELS: usize = 64;
 
 /// Canonical form for channel matching: trim + lowercase (case-insensitive).
 pub(crate) fn canon_channel(s: &str) -> String {
     s.trim().to_lowercase()
+}
+
+/// Union `add` into the directory `dir` (dedupe by canonical form, bounded by
+/// `MAX_CHANNELS`). Returns true if `dir` grew — the signal to re-broadcast.
+pub(crate) fn merge_channels(dir: &mut Vec<String>, add: &[String]) -> bool {
+    let mut grew = false;
+    for name in add {
+        if dir.len() >= MAX_CHANNELS {
+            break;
+        }
+        let k = canon_channel(name);
+        if k.is_empty() {
+            continue;
+        }
+        if !dir.iter().any(|d| canon_channel(d) == k) {
+            dir.push(name.clone());
+            grew = true;
+        }
+    }
+    grew
 }
 
 /// Shared channel (frequency) state: my tuned channel + each peer's announced
@@ -95,10 +123,26 @@ pub(crate) fn canon_channel(s: &str) -> String {
 pub struct ChanState {
     mine: Mutex<String>,
     peers: Mutex<HashMap<String, String>>,
+    /// Shared channel directory I currently know (raw display form). The engine
+    /// owns the canonical set; this copy lets the mesh announce it to a
+    /// newly-connected peer on DataChannel open without reaching into the loop.
+    dir: Mutex<Vec<String>>,
 }
 impl ChanState {
     fn new() -> Self {
-        Self { mine: Mutex::new(DEFAULT_CHANNEL.to_string()), peers: Mutex::new(HashMap::new()) }
+        Self {
+            mine: Mutex::new(DEFAULT_CHANNEL.to_string()),
+            peers: Mutex::new(HashMap::new()),
+            dir: Mutex::new(vec![DEFAULT_CHANNEL.to_string()]),
+        }
+    }
+    /// The channel directory to announce to a peer (raw display form).
+    pub fn dir(&self) -> Vec<String> {
+        self.dir.lock().unwrap().clone()
+    }
+    /// Replace my known directory (the engine pushes the canonical set here).
+    pub fn set_dir(&self, names: Vec<String>) {
+        *self.dir.lock().unwrap() = names;
     }
     /// My current channel (raw display form).
     pub fn mine(&self) -> String {
@@ -430,6 +474,11 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         // the roster + UiEvent::Channel show the exact name I typed.
         let mut my_channel = DEFAULT_CHANNEL.to_string();
         sink(UiEvent::Channel { mine: my_channel.clone() }); // tell the UI our start channel
+        // Shared channel directory: every channel this client has created,
+        // switched to, or learned from a peer. Announced on DataChannel open and
+        // whenever it grows, so a created channel reaches everyone — even peers
+        // who join later or never tune to it.
+        let mut known_channels: Vec<String> = vec![DEFAULT_CHANNEL.to_string()];
         let mut key_gen: u32 = 1; // generation #1 = the initial DTLS-SRTP keys
         let mut cur_in = Some(incoming);
         let mut cur_out = Some(out);
@@ -582,6 +631,17 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             if let Some(m) = members.get_mut(&peer) { m.channel = name; }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
+                        Some(MeshEvent::PeerChannels { names }) => {
+                            // A peer shared its directory. Union it in; if it grew,
+                            // persist + re-broadcast so a channel learned from one
+                            // peer reaches peers that peer isn't yet linked to, and
+                            // tell the UI to add the new entries to its switcher.
+                            if merge_channels(&mut known_channels, &names) {
+                                chan.set_dir(known_channels.clone());
+                                mesh.broadcast_channels(&known_channels).await;
+                                sink(UiEvent::Channels { names: known_channels.clone() });
+                            }
+                        }
                         None => {}
                     }
                 }
@@ -630,6 +690,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             my_channel = name.clone();
                             chan.set_mine(name.clone());
                             mesh.broadcast_channel(&name).await;
+                            // Creating a channel means switching to it → fold it
+                            // into the shared directory and push the grown set.
+                            if merge_channels(&mut known_channels, std::slice::from_ref(&name)) {
+                                chan.set_dir(known_channels.clone());
+                                mesh.broadcast_channels(&known_channels).await;
+                            }
                             sink(UiEvent::Channel { mine: name });
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }

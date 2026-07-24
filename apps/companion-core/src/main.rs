@@ -59,6 +59,8 @@ async fn main() -> Result<()> {
         }
         UiEvent::Rekeyed { generation, by } => println!("[rekey #{generation} by {by}]"),
         UiEvent::Signaling { up } => println!("[signaling {}]", if up { "up" } else { "down" }),
+        UiEvent::Channel { mine } => println!("[channel {mine}]"),
+        UiEvent::Channels { names } => println!("[channels {}]", names.join(", ")),
     });
 
     let engine = Arc::new(start(cfg, sink).await?);

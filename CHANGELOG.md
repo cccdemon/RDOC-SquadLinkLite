@@ -2,6 +2,22 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.34 — 2026-07-24
+
+### Added
+- **Funkkanäle werden an alle durchgereicht** — geteiltes Kanal-Verzeichnis
+  über die Mesh: ein von irgendeinem Teilnehmer erstellter Kanal wird für alle
+  wählbar, auch für später beitretende und für leere Kanäle (Ankündigung beim
+  DataChannel-Open + bei jeder Erweiterung, union-merge, transitiv). Vorher sah
+  man nur den Kanal, auf den ein Peer gerade getunt war.
+
+### Fixed
+- Headless-Engine (`companion-core` bin) kompiliert wieder — fehlender
+  `UiEvent::Channel`-Match-Arm (nur die Tauri-App wird von CI gebaut, daher lange
+  unbemerkt).
+- CI-Build-Gate: postcss auf `^8.5.18` gepinnt (behebt high-Advisory im
+  `pnpm audit`).
+
 ## v0.1.33 — 2026-07-10
 
 ### Added

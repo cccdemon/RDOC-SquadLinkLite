@@ -98,6 +98,15 @@ fn wire_ctrl(
                     chan.set_peer(&p, name.clone());
                     let _ = events.send(MeshEvent::PeerChannel { peer: p, name });
                 }
+                Ok(CtrlMsg::Channels { names }) => {
+                    // Clamp count + each name before handing the untrusted directory up.
+                    let names: Vec<String> = names
+                        .into_iter()
+                        .take(crate::MAX_CHANNELS)
+                        .map(|n| n.chars().take(crate::MAX_CHANNEL_LEN).collect())
+                        .collect();
+                    let _ = events.send(MeshEvent::PeerChannels { names });
+                }
                 Err(_) => {
                     if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
                         if c.text.chars().count() > crate::MAX_CHAT_CHARS {
@@ -117,6 +126,11 @@ fn wire_ctrl(
 fn announce_channel(dc: Arc<RTCDataChannel>, chan: Arc<ChanState>) {
     tokio::spawn(async move {
         if let Ok(j) = serde_json::to_string(&CtrlMsg::Channel { name: chan.mine() }) {
+            let _ = dc.send_text(j).await;
+        }
+        // Hand the newcomer our channel directory so channels created before it
+        // joined (incl. empty ones) are selectable for it.
+        if let Ok(j) = serde_json::to_string(&CtrlMsg::Channels { names: chan.dir() }) {
             let _ = dc.send_text(j).await;
         }
     });
@@ -370,6 +384,20 @@ impl Mesh {
     /// Announce my (just-switched) channel to every connected peer's DataChannel.
     pub async fn broadcast_channel(&self, name: &str) {
         let json = match serde_json::to_string(&CtrlMsg::Channel { name: name.to_string() }) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        for p in self.peers.values() {
+            let dc = p.chat.lock().unwrap().clone();
+            if let Some(dc) = dc {
+                let _ = dc.send_text(json.clone()).await;
+            }
+        }
+    }
+
+    /// Announce my full channel directory to every peer (shared-directory sync).
+    pub async fn broadcast_channels(&self, names: &[String]) {
+        let json = match serde_json::to_string(&CtrlMsg::Channels { names: names.to_vec() }) {
             Ok(j) => j,
             Err(_) => return,
         };
