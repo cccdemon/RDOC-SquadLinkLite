@@ -2,7 +2,7 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
-## v0.1.35 — unreleased
+## v0.1.35 — 2026-07-25
 
 ### Added
 - **Post-Quantum-Sprachverschlüsselung** — die Stimme wird jetzt zusätzlich
