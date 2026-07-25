@@ -367,22 +367,29 @@ impl PeerCrypto {
 #[derive(Clone)]
 pub struct RoomKey {
     gen: u32,
+    /// The minting authority's `user_id`. Used only to break ties when two nodes
+    /// mint the same generation during a split roster view — the smaller id wins,
+    /// so every node deterministically converges on one key.
+    auth: String,
     key: [u8; 32],
 }
 
 impl RoomKey {
-    /// A fresh random room key at generation `gen`.
-    pub fn generate(gen: u32) -> Self {
+    /// A fresh random room key at generation `gen`, minted by `auth`.
+    pub fn generate(gen: u32, auth: String) -> Self {
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
-        RoomKey { gen, key }
+        RoomKey { gen, auth, key }
     }
     /// Reconstruct a room key received from the authority.
-    pub fn from_bytes(gen: u32, key: [u8; 32]) -> Self {
-        RoomKey { gen, key }
+    pub fn from_bytes(gen: u32, auth: String, key: [u8; 32]) -> Self {
+        RoomKey { gen, auth, key }
     }
     pub fn generation(&self) -> u32 {
         self.gen
+    }
+    pub fn authority(&self) -> &str {
+        &self.auth
     }
     pub fn key_bytes(&self) -> [u8; 32] {
         self.key
@@ -463,13 +470,18 @@ impl RoomAudio {
         self.cur.lock().unwrap().clone()
     }
 
-    /// Install `k` as current, demoting the old current to `prev`. Ignored if a
-    /// key at the same-or-newer generation is already installed (idempotent
-    /// under duplicate distributions).
+    /// Install `k` as current, demoting the old current to `prev`. Ignored
+    /// unless `k` is strictly better — a newer generation, or the same
+    /// generation from a smaller authority id — so duplicate/older/losing-tie
+    /// distributions are idempotent.
     pub fn install(&self, k: RoomKey) {
         let mut cur = self.cur.lock().unwrap();
         if let Some(existing) = cur.as_ref() {
-            if existing.generation() >= k.generation() {
+            // Newer generation wins; on a tie the smaller authority id wins, so
+            // a split roster view converges on one key instead of partitioning.
+            let better = k.generation() > existing.generation()
+                || (k.generation() == existing.generation() && k.authority() < existing.authority());
+            if !better {
                 return;
             }
             *self.prev.lock().unwrap() = cur.take();
@@ -527,31 +539,31 @@ mod tests {
 
     #[test]
     fn room_key_round_trip() {
-        let rk = RoomKey::generate(1);
+        let rk = RoomKey::generate(1, "auth".into());
         let w = rk.seal_audio("alice", b"opus-frame");
         // Same key + same sender → opens.
-        let rk2 = RoomKey::from_bytes(rk.generation(), rk.key_bytes());
+        let rk2 = RoomKey::from_bytes(rk.generation(), rk.authority().into(), rk.key_bytes());
         assert_eq!(rk2.open_audio("alice", &w).unwrap(), b"opus-frame");
     }
 
     #[test]
     fn room_key_wrong_sender_rejected() {
-        let rk = RoomKey::generate(7);
+        let rk = RoomKey::generate(7, "auth".into());
         let w = rk.seal_audio("alice", b"x");
         assert!(rk.open_audio("bob", &w).is_none()); // AAD sender mismatch
     }
 
     #[test]
     fn room_key_wrong_key_rejected() {
-        let a = RoomKey::generate(1);
-        let b = RoomKey::generate(1);
+        let a = RoomKey::generate(1, "auth".into());
+        let b = RoomKey::generate(1, "auth".into());
         let w = a.seal_audio("alice", b"x");
         assert!(b.open_audio("alice", &w).is_none());
     }
 
     #[test]
     fn room_key_nonces_differ_per_frame() {
-        let rk = RoomKey::generate(1);
+        let rk = RoomKey::generate(1, "auth".into());
         let w1 = rk.seal_audio("a", b"same");
         let w2 = rk.seal_audio("a", b"same");
         assert_ne!(&w1[..12], &w2[..12]); // random nonce per frame
@@ -568,7 +580,7 @@ mod tests {
 
     #[test]
     fn room_audio_sealed_round_trip() {
-        let key = RoomKey::generate(1);
+        let key = RoomKey::generate(1, "auth".into());
         let sender = RoomAudio::new();
         let recv = RoomAudio::new();
         sender.install(key.clone());
@@ -584,11 +596,11 @@ mod tests {
     fn room_audio_prev_key_bridges_rekey() {
         let sender = RoomAudio::new();
         let recv = RoomAudio::new();
-        sender.install(RoomKey::generate(1));
+        sender.install(RoomKey::generate(1, "auth".into()));
         recv.install(sender.current().unwrap()); // both at gen 1
         let old_frame = sender.seal_outbound("a", b"old");
         // Receiver rekeys to gen 2 before the old frame arrives.
-        recv.install(RoomKey::generate(2));
+        recv.install(RoomKey::generate(2, "auth".into()));
         // gen-1 frame still opens via the retained previous key.
         assert_eq!(recv.open_inbound("a", &old_frame).unwrap(), b"old");
     }
@@ -596,18 +608,35 @@ mod tests {
     #[test]
     fn room_audio_unknown_generation_dropped() {
         let recv = RoomAudio::new();
-        recv.install(RoomKey::generate(5));
+        recv.install(RoomKey::generate(5, "auth".into()));
         let other = RoomAudio::new();
-        other.install(RoomKey::generate(9)); // gen the receiver never saw
+        other.install(RoomKey::generate(9, "auth".into())); // gen the receiver never saw
         let wire = other.seal_outbound("a", b"x");
         assert!(recv.open_inbound("a", &wire).is_none());
     }
 
     #[test]
+    fn room_audio_same_gen_smaller_authority_wins() {
+        let ra = RoomAudio::new();
+        // Two authorities mint gen 1 during a split roster view.
+        let from_c = RoomKey::generate(1, "c".into());
+        let from_a = RoomKey::generate(1, "a".into());
+        // Install the larger-id one first, then the smaller — smaller id wins.
+        ra.install(from_c.clone());
+        ra.install(from_a.clone());
+        assert_eq!(ra.current().unwrap().key_bytes(), from_a.key_bytes());
+        // And the reverse order converges to the same key (idempotent tie-break).
+        let rb = RoomAudio::new();
+        rb.install(from_a.clone());
+        rb.install(from_c);
+        assert_eq!(rb.current().unwrap().key_bytes(), from_a.key_bytes());
+    }
+
+    #[test]
     fn room_audio_install_ignores_stale_generation() {
         let ra = RoomAudio::new();
-        ra.install(RoomKey::generate(3));
-        ra.install(RoomKey::generate(2)); // older → ignored
+        ra.install(RoomKey::generate(3, "auth".into()));
+        ra.install(RoomKey::generate(2, "auth".into())); // older → ignored
         assert_eq!(ra.generation(), Some(3));
     }
 
