@@ -20,7 +20,7 @@
   <Identity
     Name="raumdock.org.RDOC-SquadLinkLite"
     Publisher="CN=1889C9C8-C357-4F28-BCFC-DFE786BD3996"
-    Version="0.1.27.0"
+    Version="0.1.35.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
