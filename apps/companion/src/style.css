@@ -274,6 +274,9 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .netbar .rekey:hover:not(:disabled) { background: #213149; }
 .netbar .rekey:disabled { opacity: .6; cursor: default; }
 .encfoot .keygen { color: #8fb6ff; }
+.encfoot .pqcvoice.on { color: #34d399; }
+.encfoot .pqcvoice.on b { color: #6ee7b7; }
+.encfoot .pqcvoice.neg { color: #b6893a; }
 
 /* Signaling-down banner (P2P still alive) */
 .sigbanner { display: flex; align-items: center; gap: .7rem; justify-content: space-between; background: #3a2a12; border: 1px solid #6b4b1a; color: #ffd9a0; border-radius: 7px; padding: .5rem .8rem; margin: .4rem 0; font-size: .85rem; }

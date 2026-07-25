@@ -87,7 +87,8 @@ type UiEvent =
   | { type: "rekeyed"; generation: number; by: string }
   | { type: "signaling"; up: boolean }
   | { type: "channel"; mine: string }
-  | { type: "channels"; names: string[] };
+  | { type: "channels"; names: string[] }
+  | { type: "room_audio"; gen: number | null; authority: boolean };
 
 const DEFAULT_CHANNEL = "Funk 1";
 const MAX_CHANNEL_LEN = 32;
@@ -272,6 +273,9 @@ export default function App() {
   const [masterVol, setMasterVol] = useState(100); // percent
   const [peerVol, setPeerVol] = useState<Record<string, number>>({});
   const [net, setNet] = useState<{ peers: number; up: number; down: number } | null>(null);
+  // Group-audio encryption: gen=null while negotiating the room key, else the
+  // installed key generation; `authority` = this client mints/rotates the key.
+  const [roomAudio, setRoomAudio] = useState<{ gen: number | null; authority: boolean }>({ gen: null, authority: false });
   const [keyInfo, setKeyInfo] = useState<{ gen: number; at: number }>({ gen: 1, at: 0 });
   const [rotating, setRotating] = useState(false);
   const [sigUp, setSigUp] = useState(true);
@@ -547,6 +551,7 @@ export default function App() {
         if (p.up) setResuming(false);
       } else if (p.type === "channel") setMyChannel(p.mine);
       else if (p.type === "channels") p.names.forEach(rememberChannel);
+      else if (p.type === "room_audio") setRoomAudio({ gen: p.gen, authority: p.authority });
     });
     return () => {
       un.then((f) => f());
@@ -1230,14 +1235,25 @@ export default function App() {
   const rotatedAt = keyInfo.at
     ? new Date(keyInfo.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : null;
+  const pqcVoice = roomAudio.gen != null;
   const encFooter = (
     <div className="encfoot">
-      🔒 Encryption: <b>DTLS-SRTP</b> (Audio) · <b>DTLS-SCTP</b> (Chat) · <b>TLS/wss</b> (Signaling)
+      🔒 Encryption: <b>DTLS-SRTP{pqcVoice ? " + PQC" : ""}</b> (Audio) · <b>DTLS-SCTP</b> (Chat) · <b>TLS/wss</b> (Signaling)
       — Ende-zu-Ende P2P, encrypted by default &amp; by session
       <span className="keygen">
         · Schlüssel-Generation <b>#{keyInfo.gen}</b>
         {rotatedAt ? ` (rotiert ${rotatedAt})` : ""}
       </span>
+      {connected && (
+        <span className={`pqcvoice ${pqcVoice ? "on" : "neg"}`} title="Post-Quantum-Verschlüsselung der Sprache (ML-KEM-768 Raum-Schlüssel, verteilt über die pairwise PQC-Sessions)">
+          {" · "}
+          {pqcVoice ? (
+            <>🛡️ Voice quantensicher <b>#{roomAudio.gen}</b>{roomAudio.authority ? " ★" : ""}</>
+          ) : (
+            <>🛡️ Voice-Verschlüsselung: aushandeln…</>
+          )}
+        </span>
+      )}
       {appVersion && <span className="ver"> · v{appVersion}</span>}
     </div>
   );

@@ -66,6 +66,9 @@ pub enum UiEvent {
     /// The shared channel directory grew — a peer created/announced a channel
     /// not yet in the UI's list. The UI unions these into its switcher.
     Channels { names: Vec<String> },
+    /// Group-audio encryption status: the installed room-key generation
+    /// (`None` = still negotiating) and whether this node is the key authority.
+    RoomAudio { gen: Option<u32>, authority: bool },
 }
 
 pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
@@ -517,6 +520,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         // Highest group-audio key generation this node has minted (as authority)
         // or adopted (from the authority).
         let mut room_gen: u32 = 0;
+        sink(UiEvent::RoomAudio { gen: None, authority: false }); // negotiating until a key lands
         let mut key_gen: u32 = 1; // generation #1 = the initial DTLS-SRTP keys
         let mut cur_in = Some(incoming);
         let mut cur_out = Some(out);
@@ -643,6 +647,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                         mesh.send_room_key(&id, k.generation(), &k.key_bytes()).await;
                                     }
                                 }
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
                             }
                         }
                         ServerMsg::Offer { from, sdp } => { let _ = mesh.on_offer(&from, sdp).await; }
@@ -716,6 +721,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 if let Some(k) = room.current() {
                                     mesh.send_room_key(&peer, k.generation(), &k.key_bytes()).await;
                                 }
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
                             }
                         }
                         Some(MeshEvent::RoomKey { gen, key }) => {
@@ -724,6 +730,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             if gen > room_gen {
                                 room_gen = gen;
                                 room.install(crypto::RoomKey::from_bytes(gen, key));
+                                sink(UiEvent::RoomAudio { gen: Some(gen), authority: am_authority(&me_id, &members) });
                             }
                         }
                         None => {}
