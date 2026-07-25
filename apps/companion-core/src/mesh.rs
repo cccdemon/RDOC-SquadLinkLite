@@ -116,13 +116,14 @@ fn dispatch_inner(peer: &str, msg: CtrlMsg, events: &UnboundedSender<MeshEvent>,
                 .collect();
             let _ = events.send(MeshEvent::PeerChannels { names });
         }
-        CtrlMsg::RoomKey { gen, auth, key } => {
-            // Arrives already decrypted (unwrapped from `Enc`): the group-audio
-            // key from the authority. Decode + hand up; the engine adopts the
-            // highest generation.
+        CtrlMsg::RoomKey { gen, key } => {
+            // Arrives already decrypted (unwrapped from `Enc`), so `peer` is the
+            // DTLS+PQC-authenticated sender. Carry THAT identity up as the
+            // claimed authority — never a value from the message body — so the
+            // engine can verify the sender really is the elected authority.
             if let Ok(bytes) = STANDARD.decode(&key) {
                 if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                    let _ = events.send(MeshEvent::RoomKey { gen, auth, key: arr });
+                    let _ = events.send(MeshEvent::RoomKey { from: peer.to_string(), gen, key: arr });
                 }
             }
         }
@@ -521,8 +522,8 @@ impl Mesh {
     /// Send the current group-audio room key to one peer, SEALED over that
     /// peer's pairwise PQC session. No-op if the peer has no session yet (the
     /// engine retries when the peer becomes secure).
-    pub async fn send_room_key(&self, peer: &str, gen: u32, auth: &str, key: &[u8; 32]) {
-        let msg = CtrlMsg::RoomKey { gen, auth: auth.to_string(), key: STANDARD.encode(key) };
+    pub async fn send_room_key(&self, peer: &str, gen: u32, key: &[u8; 32]) {
+        let msg = CtrlMsg::RoomKey { gen, key: STANDARD.encode(key) };
         let inner = match serde_json::to_vec(&msg) {
             Ok(b) => b,
             Err(_) => return,

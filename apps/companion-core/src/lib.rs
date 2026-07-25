@@ -92,8 +92,9 @@ pub(crate) enum MeshEvent {
     PeerChannels { names: Vec<String> },
     /// The post-quantum session with this peer is established.
     Secure { peer: String },
-    /// A peer (the room-key authority) sent us the group-audio room key.
-    RoomKey { gen: u32, auth: String, key: [u8; 32] },
+    /// A peer sent us the group-audio room key. `from` is the DTLS+PQC-
+    /// authenticated sender (used to verify it's really the elected authority).
+    RoomKey { from: String, gen: u32, key: [u8; 32] },
 }
 
 /// Default channel (frequency) every client starts on.
@@ -115,6 +116,19 @@ pub(crate) fn canon_channel(s: &str) -> String {
 fn am_authority(me: &str, members: &HashMap<String, Member>) -> bool {
     members.keys().all(|k| me < k.as_str())
 }
+
+/// True if `from` (an authenticated peer) is the room-key authority from OUR
+/// view — smaller than us and than every other member. A room key is only
+/// adopted from this peer, so a member can't inject/hijack the group key.
+fn is_authority_peer(from: &str, me: &str, members: &HashMap<String, Member>) -> bool {
+    from < me && members.keys().all(|k| k.as_str() == from || from < k.as_str())
+}
+
+/// Max generation jump we accept in one received room key. Bounds a malicious
+/// authority (or a forged frame that slipped the authority check) from pinning
+/// the room to `u32::MAX` so that no future rotation can ever exceed it. Large
+/// enough for a reconnecting member to catch up across many rotations.
+const ROOM_GEN_BOUND: u32 = 1024;
 
 /// Grace between staging a new group-audio key (able to decrypt it) and
 /// activating it for sealing. Long enough that every peer has received+staged
@@ -164,7 +178,7 @@ async fn rotate_room_key(
         let secure_peers: Vec<String> =
             members.keys().filter(|id| crypto.is_secure(id)).cloned().collect();
         for id in secure_peers {
-            mesh.send_room_key(&id, k.generation(), k.authority(), &k.key_bytes()).await;
+            mesh.send_room_key(&id, k.generation(), &k.key_bytes()).await;
         }
     }
 }
@@ -780,17 +794,24 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                     adopt_room_key(&room, crypto::RoomKey::generate(room_gen, me_id.clone()), &mut room_gen, &promote_tx);
                                 }
                                 if let Some(k) = room.current() {
-                                    mesh.send_room_key(&peer, k.generation(), k.authority(), &k.key_bytes()).await;
+                                    mesh.send_room_key(&peer, k.generation(), &k.key_bytes()).await;
                                 }
                                 sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
                             }
                         }
-                        Some(MeshEvent::RoomKey { gen, auth, key }) => {
-                            // The authority sent the group-audio key. `adopt_room_key`
-                            // stages it (if strictly better) and activates it for
-                            // sealing after the grace, so no audio is dropped.
-                            adopt_room_key(&room, crypto::RoomKey::from_bytes(gen, auth, key), &mut room_gen, &promote_tx);
-                            sink(UiEvent::RoomAudio { gen: room.generation(), authority: am_authority(&me_id, &members) });
+                        Some(MeshEvent::RoomKey { from, gen, key }) => {
+                            // Only adopt a key from the authenticated peer that is
+                            // the elected authority (smallest id), and only for a
+                            // plausible generation — otherwise any member could
+                            // hijack the group key or pin it to break rotation.
+                            // The authority identity is bound to the authenticated
+                            // sender (`from`), never a value from the message body.
+                            if is_authority_peer(&from, &me_id, &members)
+                                && gen <= room_gen.saturating_add(ROOM_GEN_BOUND)
+                            {
+                                adopt_room_key(&room, crypto::RoomKey::from_bytes(gen, from, key), &mut room_gen, &promote_tx);
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: am_authority(&me_id, &members) });
+                            }
                         }
                         None => {}
                     }
@@ -900,5 +921,21 @@ mod authority_tests {
         let alices: HashMap<String, Member> =
             ["bob", "carol"].into_iter().map(|id| (id.to_string(), member())).collect();
         assert!(am_authority("alice", &alices));
+    }
+
+    #[test]
+    fn only_the_min_id_peer_is_accepted_as_room_key_authority() {
+        // Room from bob's view = {bob(me), carol, dave}. Authority = bob himself,
+        // so no peer should be accepted as authority.
+        let others: HashMap<String, Member> =
+            ["carol", "dave"].into_iter().map(|id| (id.to_string(), member())).collect();
+        assert!(!is_authority_peer("carol", "bob", &others)); // not the smallest
+        assert!(!is_authority_peer("zoe", "bob", &others)); // larger than me → never
+
+        // Now alice (smaller than bob) is present → she is the authority.
+        let with_alice: HashMap<String, Member> =
+            ["alice", "carol", "dave"].into_iter().map(|id| (id.to_string(), member())).collect();
+        assert!(is_authority_peer("alice", "bob", &with_alice)); // accepted
+        assert!(!is_authority_peer("carol", "bob", &with_alice)); // alice is smaller → carol rejected
     }
 }

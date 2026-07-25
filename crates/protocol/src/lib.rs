@@ -53,11 +53,13 @@ pub enum CtrlMsg {
     /// quantum-safe confidentiality layered inside DTLS.
     Enc { data: String },
     /// Authority → member: the current group-audio room key (32 bytes, base64)
-    /// at generation `gen`, minted by `auth` (the authority's user_id, used to
-    /// break same-generation ties). Only ever sent SEALED (wrapped in `Enc` over
-    /// the pairwise PQC session), so the room key never leaves the post-quantum
-    /// channel. Members adopt the highest generation they see.
-    RoomKey { gen: u32, auth: String, key: String },
+    /// at generation `gen`. Only ever sent SEALED (wrapped in `Enc` over the
+    /// pairwise PQC session), so the room key never leaves the post-quantum
+    /// channel AND the sender is a DTLS+PQC-authenticated peer. The authority
+    /// identity is that authenticated sender — it is NOT carried in the message,
+    /// so a member can't spoof which authority minted the key. Recipients accept
+    /// it only from the elected authority (smallest room user_id).
+    RoomKey { gen: u32, key: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
