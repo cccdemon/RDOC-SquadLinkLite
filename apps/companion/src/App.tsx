@@ -87,7 +87,8 @@ type UiEvent =
   | { type: "rekeyed"; generation: number; by: string }
   | { type: "signaling"; up: boolean }
   | { type: "channel"; mine: string }
-  | { type: "channels"; names: string[] };
+  | { type: "channels"; names: string[] }
+  | { type: "room_audio"; gen: number | null; authority: boolean };
 
 const DEFAULT_CHANNEL = "Funk 1";
 const MAX_CHANNEL_LEN = 32;
@@ -272,6 +273,9 @@ export default function App() {
   const [masterVol, setMasterVol] = useState(100); // percent
   const [peerVol, setPeerVol] = useState<Record<string, number>>({});
   const [net, setNet] = useState<{ peers: number; up: number; down: number } | null>(null);
+  // Group-audio encryption: gen=null while negotiating the room key, else the
+  // installed key generation; `authority` = this client mints/rotates the key.
+  const [roomAudio, setRoomAudio] = useState<{ gen: number | null; authority: boolean }>({ gen: null, authority: false });
   const [keyInfo, setKeyInfo] = useState<{ gen: number; at: number }>({ gen: 1, at: 0 });
   const [rotating, setRotating] = useState(false);
   const [sigUp, setSigUp] = useState(true);
@@ -374,6 +378,15 @@ export default function App() {
       return localStorage.getItem("sa.duck") !== "0";
     } catch {
       return true;
+    }
+  });
+  // How much quieter other apps get while voice is active, in percent.
+  const [duckAmount, setDuckAmount] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("sa.duckAmount"));
+      return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 75;
+    } catch {
+      return 75;
     }
   });
   // Local "Funk-Klick" earcon at the start of an incoming transmission, so you can
@@ -538,6 +551,7 @@ export default function App() {
         if (p.up) setResuming(false);
       } else if (p.type === "channel") setMyChannel(p.mine);
       else if (p.type === "channels") p.names.forEach(rememberChannel);
+      else if (p.type === "room_audio") setRoomAudio({ gen: p.gen, authority: p.authority });
     });
     return () => {
       un.then((f) => f());
@@ -758,6 +772,11 @@ export default function App() {
       invoke("set_ducking", { active: duckActive }).catch(() => {});
     }
   }, [duckActive]);
+  // Push the amount on mount too — the backend defaults to 75 and would otherwise
+  // ignore a stored setting until the slider is touched.
+  useEffect(() => {
+    invoke("set_duck_amount", { percent: duckAmount }).catch(() => {});
+  }, [duckAmount]);
   const rotateKey = () => {
     setRotating(true);
     invoke("rotate_key").catch(() => setRotating(false));
@@ -1011,6 +1030,22 @@ export default function App() {
             />{" "}
             Andere Apps automatisch leiser, wenn im SquadLink gesprochen wird (Windows)
           </label>
+          <div className="volrow" style={{ opacity: duckOthers ? 1 : 0.45 }}>
+            <span className="vlabel">🔉 Um wie viel leiser</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={duckAmount}
+              disabled={!duckOthers}
+              onChange={(e) => {
+                const pct = Number(e.target.value);
+                setDuckAmount(pct);
+                try { localStorage.setItem("sa.duckAmount", String(pct)); } catch { /* ignore */ }
+              }}
+            />
+            <span className="vval">{duckAmount}%</span>
+          </div>
           <label className="ckrow">
             <input
               type="checkbox"
@@ -1200,14 +1235,25 @@ export default function App() {
   const rotatedAt = keyInfo.at
     ? new Date(keyInfo.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : null;
+  const pqcVoice = roomAudio.gen != null;
   const encFooter = (
     <div className="encfoot">
-      🔒 Encryption: <b>DTLS-SRTP</b> (Audio) · <b>DTLS-SCTP</b> (Chat) · <b>TLS/wss</b> (Signaling)
+      🔒 Encryption: <b>DTLS-SRTP{pqcVoice ? " + PQC" : ""}</b> (Audio) · <b>DTLS-SCTP</b> (Chat) · <b>TLS/wss</b> (Signaling)
       — Ende-zu-Ende P2P, encrypted by default &amp; by session
       <span className="keygen">
         · Schlüssel-Generation <b>#{keyInfo.gen}</b>
         {rotatedAt ? ` (rotiert ${rotatedAt})` : ""}
       </span>
+      {connected && (
+        <span className={`pqcvoice ${pqcVoice ? "on" : "neg"}`} title="Post-Quantum-Verschlüsselung der Sprache (ML-KEM-768 Raum-Schlüssel, verteilt über die pairwise PQC-Sessions)">
+          {" · "}
+          {pqcVoice ? (
+            <>🛡️ Voice quantensicher <b>#{roomAudio.gen}</b>{roomAudio.authority ? " ★" : ""}</>
+          ) : (
+            <>🛡️ Voice-Verschlüsselung: aushandeln…</>
+          )}
+        </span>
+      )}
       {appVersion && <span className="ver"> · v{appVersion}</span>}
     </div>
   );

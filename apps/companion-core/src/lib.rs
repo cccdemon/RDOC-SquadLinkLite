@@ -3,6 +3,7 @@
 //! the Tauri app both drive this same engine.
 
 pub mod audio;
+pub mod crypto;
 pub mod mesh;
 pub mod selfcheck;
 pub mod serverless;
@@ -41,6 +42,8 @@ pub struct Participant {
     /// Current channel (frequency) name this member is tuned to. Members on a
     /// different channel than you are shown dimmed and you don't hear them.
     pub channel: String,
+    /// True once the post-quantum (ML-KEM-768) session with this peer is up.
+    pub secure: bool,
 }
 
 /// Events the engine pushes to the frontend.
@@ -63,6 +66,9 @@ pub enum UiEvent {
     /// The shared channel directory grew — a peer created/announced a channel
     /// not yet in the UI's list. The UI unions these into its switcher.
     Channels { names: Vec<String> },
+    /// Group-audio encryption status: the installed room-key generation
+    /// (`None` = still negotiating) and whether this node is the key authority.
+    RoomAudio { gen: Option<u32>, authority: bool },
 }
 
 pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
@@ -72,6 +78,9 @@ pub type Sink = Arc<dyn Fn(UiEvent) + Send + Sync>;
 /// a malicious member can't grow native/webview memory with one giant message.
 pub(crate) const MAX_CHAT_BYTES: usize = 4 * 1024;
 pub(crate) const MAX_CHAT_CHARS: usize = 2000;
+/// Max DataChannel control-frame size (larger than chat to fit a KEM handshake:
+/// base64 ML-KEM-768 key ≈ 1.6 KB, sealed chat a bit more).
+pub(crate) const MAX_CTRL_BYTES: usize = 8 * 1024;
 
 /// Internal events from the mesh layer back to the engine loop.
 pub(crate) enum MeshEvent {
@@ -81,6 +90,11 @@ pub(crate) enum MeshEvent {
     PeerChannel { peer: String, name: String },
     /// A peer shared its channel directory (union-merge into ours).
     PeerChannels { names: Vec<String> },
+    /// The post-quantum session with this peer is established.
+    Secure { peer: String },
+    /// A peer sent us the group-audio room key. `from` is the DTLS+PQC-
+    /// authenticated sender (used to verify it's really the elected authority).
+    RoomKey { from: String, gen: u32, key: [u8; 32] },
 }
 
 /// Default channel (frequency) every client starts on.
@@ -94,6 +108,79 @@ pub(crate) const MAX_CHANNELS: usize = 64;
 /// Canonical form for channel matching: trim + lowercase (case-insensitive).
 pub(crate) fn canon_channel(s: &str) -> String {
     s.trim().to_lowercase()
+}
+
+/// True if `me` is the room-key authority — the lexicographically smallest
+/// user_id in the room (mirrors the handshake glare rule). The authority mints
+/// and distributes the shared group-audio key.
+fn am_authority(me: &str, members: &HashMap<String, Member>) -> bool {
+    members.keys().all(|k| me < k.as_str())
+}
+
+/// True if `from` (an authenticated peer) is the room-key authority from OUR
+/// view — smaller than us and than every other member. A room key is only
+/// adopted from this peer, so a member can't inject/hijack the group key.
+fn is_authority_peer(from: &str, me: &str, members: &HashMap<String, Member>) -> bool {
+    from < me && members.keys().all(|k| k.as_str() == from || from < k.as_str())
+}
+
+/// Max generation jump we accept in one received room key. Bounds a malicious
+/// authority (or a forged frame that slipped the authority check) from pinning
+/// the room to `u32::MAX` so that no future rotation can ever exceed it. Large
+/// enough for a reconnecting member to catch up across many rotations.
+const ROOM_GEN_BOUND: u32 = 1024;
+
+/// Grace between staging a new group-audio key (able to decrypt it) and
+/// activating it for sealing. Long enough that every peer has received+staged
+/// the key before anyone seals with it, so a rekey drops no audio.
+const ROOM_KEY_GRACE: Duration = Duration::from_millis(400);
+
+/// Stage `k` for decryption immediately, then activate it for sealing — at once
+/// if it's our first key (nothing to coordinate), else after `ROOM_KEY_GRACE` so
+/// every peer has staged it first. Bumps `room_gen` to the accepted generation.
+fn adopt_room_key(
+    room: &Arc<crypto::RoomAudio>,
+    k: crypto::RoomKey,
+    room_gen: &mut u32,
+    promote_tx: &mpsc::UnboundedSender<u32>,
+) {
+    let first = !room.has_send();
+    if room.stage(k) {
+        let g = room.generation().unwrap_or(0);
+        *room_gen = (*room_gen).max(g);
+        if first {
+            room.promote(g); // no prior key to coordinate → seal immediately
+        } else {
+            let ptx = promote_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(ROOM_KEY_GRACE).await;
+                let _ = ptx.send(g);
+            });
+        }
+    }
+}
+
+/// Authority action: mint the next-generation group-audio key, adopt it (stage
+/// now, activate for sealing after the grace), and hand it to every currently-
+/// secure peer (sealed over each pairwise session). Bumps `room_gen`.
+async fn rotate_room_key(
+    room_gen: &mut u32,
+    room: &Arc<crypto::RoomAudio>,
+    mesh: &Mesh,
+    members: &HashMap<String, Member>,
+    crypto: &Arc<crypto::PeerCrypto>,
+    me_id: &str,
+    promote_tx: &mpsc::UnboundedSender<u32>,
+) {
+    let g = room_gen.saturating_add(1);
+    adopt_room_key(room, crypto::RoomKey::generate(g, me_id.to_string()), room_gen, promote_tx);
+    if let Some(k) = room.current() {
+        let secure_peers: Vec<String> =
+            members.keys().filter(|id| crypto.is_secure(id)).cloned().collect();
+        for id in secure_peers {
+            mesh.send_room_key(&id, k.generation(), &k.key_bytes()).await;
+        }
+    }
 }
 
 /// Union `add` into the directory `dir` (dedupe by canonical form, bounded by
@@ -369,6 +456,7 @@ struct Member {
     badge: Option<String>,
     speaking: bool,
     channel: String,
+    secure: bool,
 }
 
 fn emit_roster(
@@ -386,6 +474,7 @@ fn emit_roster(
         badge: None,
         speaking: transmitting,
         channel: me_channel.to_string(),
+        secure: true, // our own row: we always hold the crypto
     }];
     let mut others: Vec<Participant> = members
         .iter()
@@ -396,6 +485,7 @@ fn emit_roster(
             badge: m.badge.clone(),
             speaking: m.speaking,
             channel: m.channel.clone(),
+            secure: m.secure,
         })
         .collect();
     others.sort_by(|a, b| a.name.cmp(&b.name));
@@ -425,12 +515,24 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         "audio".to_owned(),
         "rdoc-squadlink-lite".to_owned(),
     ));
+    // Group-audio keying, shared by the outbound writer below, the mesh RX
+    // tasks, and the engine loop (which installs keys from the authority).
+    let room = Arc::new(crypto::RoomAudio::new());
     {
         let local = local.clone();
+        let room = room.clone();
+        let my_id_seal = cfg.user_id.clone();
         tokio::spawn(async move {
             while let Some(b) = opus_rx.recv().await {
-                let sample =
-                    Sample { data: b, duration: Duration::from_millis(20), ..Default::default() };
+                // Seal the Opus frame with the room key (raw passthrough until a
+                // key is installed) — sealed ONCE here, then fanned out to every
+                // peer, so encode-once is preserved.
+                let payload = room.seal_outbound(&my_id_seal, &b);
+                let sample = Sample {
+                    data: Bytes::from(payload),
+                    duration: Duration::from_millis(20),
+                    ..Default::default()
+                };
                 let _ = local.write_sample(&sample).await;
             }
         });
@@ -454,9 +556,15 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     // Shared channel (frequency) state: the mesh RX-gate reads it on the hot
     // audio path; the engine loop updates it on switch / peer announce.
     let chan = Arc::new(ChanState::new());
-    let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx, chan.clone());
+    // Per-peer post-quantum sessions (ML-KEM-768 + X25519), established over each
+    // DataChannel; used to AEAD-seal chat + audio.
+    let crypto = Arc::new(crypto::PeerCrypto::new(cfg.user_id.clone()));
+    let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx, chan.clone(), crypto.clone(), room.clone());
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Cmd>();
+    // Delayed group-audio key promotions: a grace timer fires the staged
+    // generation here, and the loop activates it for sealing (see #ROOM_KEY_GRACE).
+    let (promote_tx, mut promote_rx) = mpsc::unbounded_channel::<u32>();
 
     let me_id = cfg.user_id.clone();
     let me_name = cfg.name.clone();
@@ -479,6 +587,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         // whenever it grows, so a created channel reaches everyone — even peers
         // who join later or never tune to it.
         let mut known_channels: Vec<String> = vec![DEFAULT_CHANNEL.to_string()];
+        // Highest group-audio key generation this node has minted (as authority)
+        // or adopted (from the authority).
+        let mut room_gen: u32 = 0;
+        sink(UiEvent::RoomAudio { gen: None, authority: false }); // negotiating until a key lands
         let mut key_gen: u32 = 1; // generation #1 = the initial DTLS-SRTP keys
         let mut cur_in = Some(incoming);
         let mut cur_out = Some(out);
@@ -566,6 +678,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 badge: None,
                                 speaking: false,
                                 channel: chan.peer(&p.user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                                secure: crypto.is_secure(&p.user_id),
                             })).collect();
                             for p in &peers { let _ = mesh.on_peer(&p.user_id).await; }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
@@ -576,15 +689,34 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 badge: None,
                                 speaking: false,
                                 channel: chan.peer(&user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                                secure: crypto.is_secure(&user_id),
                             });
                             let _ = mesh.on_peer(&user_id).await;
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                            // Future secrecy: if I'm the authority and a room key
+                            // already exists, rotate so the joiner only ever holds
+                            // a fresh epoch — never the key that protected pre-join
+                            // audio. (Skipped before the first key exists, so room
+                            // formation mints exactly one key via the Secure path.)
+                            if am_authority(&me_id, &members) && room.generation().is_some() {
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            }
                         }
                         ServerMsg::PeerLeft { user_id } => {
                             members.remove(&user_id);
                             chan.remove_peer(&user_id);
                             mesh.on_left(&user_id).await;
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                            // Forward secrecy: if I'm the authority (which now
+                            // includes the case where the previous authority just
+                            // left), mint a fresh group-audio key so the departed
+                            // member can't decrypt further audio, and hand it to
+                            // every remaining secure peer.
+                            if am_authority(&me_id, &members) {
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            }
                         }
                         ServerMsg::Offer { from, sdp } => { let _ = mesh.on_offer(&from, sdp).await; }
                         ServerMsg::Answer { from, sdp } => { let _ = mesh.on_answer(&from, sdp).await; }
@@ -601,6 +733,13 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             let _ = mesh.rekey().await;
                             key_gen = key_gen.saturating_add(1);
                             sink(UiEvent::Rekeyed { generation: key_gen, by });
+                            // "Neu verschlüsseln" rotates the group-audio room key
+                            // too (not just DTLS-SRTP) — the authority mints + hands
+                            // out a fresh key so voice gets new key material as well.
+                            if am_authority(&me_id, &members) {
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            }
                         }
                         ServerMsg::Turn(t) => {
                             if relay_enabled {
@@ -640,6 +779,38 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 chan.set_dir(known_channels.clone());
                                 mesh.broadcast_channels(&known_channels).await;
                                 sink(UiEvent::Channels { names: known_channels.clone() });
+                            }
+                        }
+                        Some(MeshEvent::Secure { peer }) => {
+                            // The PQC session with this peer came up → show the lock.
+                            if let Some(m) = members.get_mut(&peer) { m.secure = true; }
+                            emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                            // Room-key authority hands the group-audio key to each
+                            // peer as its pairwise PQC session comes up (the key
+                            // rides sealed inside that session).
+                            if am_authority(&me_id, &members) {
+                                if room.generation().is_none() {
+                                    room_gen = room_gen.max(1);
+                                    adopt_room_key(&room, crypto::RoomKey::generate(room_gen, me_id.clone()), &mut room_gen, &promote_tx);
+                                }
+                                if let Some(k) = room.current() {
+                                    mesh.send_room_key(&peer, k.generation(), &k.key_bytes()).await;
+                                }
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            }
+                        }
+                        Some(MeshEvent::RoomKey { from, gen, key }) => {
+                            // Only adopt a key from the authenticated peer that is
+                            // the elected authority (smallest id), and only for a
+                            // plausible generation — otherwise any member could
+                            // hijack the group key or pin it to break rotation.
+                            // The authority identity is bound to the authenticated
+                            // sender (`from`), never a value from the message body.
+                            if is_authority_peer(&from, &me_id, &members)
+                                && gen <= room_gen.saturating_add(ROOM_GEN_BOUND)
+                            {
+                                adopt_room_key(&room, crypto::RoomKey::from_bytes(gen, from, key), &mut room_gen, &promote_tx);
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: am_authority(&me_id, &members) });
                             }
                         }
                         None => {}
@@ -705,9 +876,66 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         }
                     }
                 }
+                g = promote_rx.recv() => {
+                    // A group-audio key's grace period elapsed → activate it for
+                    // sealing (peers have had time to stage it, so no gap).
+                    if let Some(g) = g {
+                        room.promote(g);
+                        sink(UiEvent::RoomAudio { gen: room.sending_generation(), authority: am_authority(&me_id, &members) });
+                    }
+                }
             }
         }
     });
 
     Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon })
+}
+
+#[cfg(test)]
+mod authority_tests {
+    use super::*;
+
+    fn member() -> Member {
+        Member {
+            name: "n".into(),
+            badge: None,
+            speaking: false,
+            channel: DEFAULT_CHANNEL.into(),
+            secure: false,
+        }
+    }
+
+    #[test]
+    fn authority_is_the_smallest_id() {
+        // `members` holds the OTHER peers (self is never in the map).
+        let mut others: HashMap<String, Member> = HashMap::new();
+        assert!(am_authority("bob", &others)); // solo → authority
+
+        others.insert("carol".into(), member());
+        assert!(am_authority("bob", &others)); // bob < carol → still authority
+
+        others.insert("alice".into(), member());
+        assert!(!am_authority("bob", &others)); // alice smaller & present → not authority
+
+        // From alice's own view, everyone else is larger → she is authority.
+        let alices: HashMap<String, Member> =
+            ["bob", "carol"].into_iter().map(|id| (id.to_string(), member())).collect();
+        assert!(am_authority("alice", &alices));
+    }
+
+    #[test]
+    fn only_the_min_id_peer_is_accepted_as_room_key_authority() {
+        // Room from bob's view = {bob(me), carol, dave}. Authority = bob himself,
+        // so no peer should be accepted as authority.
+        let others: HashMap<String, Member> =
+            ["carol", "dave"].into_iter().map(|id| (id.to_string(), member())).collect();
+        assert!(!is_authority_peer("carol", "bob", &others)); // not the smallest
+        assert!(!is_authority_peer("zoe", "bob", &others)); // larger than me → never
+
+        // Now alice (smaller than bob) is present → she is the authority.
+        let with_alice: HashMap<String, Member> =
+            ["alice", "carol", "dave"].into_iter().map(|id| (id.to_string(), member())).collect();
+        assert!(is_authority_peer("alice", "bob", &with_alice)); // accepted
+        assert!(!is_authority_peer("carol", "bob", &with_alice)); // alice is smaller → carol rejected
+    }
 }

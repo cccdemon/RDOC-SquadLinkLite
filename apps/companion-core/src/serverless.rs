@@ -165,6 +165,7 @@ async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc
                                 badge: None,
                                 speaking: false,
                                 channel: crate::DEFAULT_CHANNEL.into(),
+                                secure: true,
                             },
                             Participant {
                                 user_id: "peer".into(),
@@ -173,6 +174,9 @@ async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc
                                 badge: Some(badge),
                                 speaking: false,
                                 channel: crate::DEFAULT_CHANNEL.into(),
+                                // Serverless (1:1 copy-paste) PQC handshake is a
+                                // follow-up; media is still DTLS-encrypted.
+                                secure: false,
                             },
                         ],
                     });

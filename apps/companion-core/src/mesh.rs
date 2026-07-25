@@ -9,10 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use protocol::{ChatMsg, ClientMsg, CtrlMsg};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::crypto::{Hello, Kind, PeerCrypto, Reply, RoomAudio};
 use crate::{ChanState, MeshEvent};
 use webrtc::api::API;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -65,49 +67,140 @@ impl PeerConn {
     }
 }
 
-/// Wire a peer's DataChannel: route inbound control messages (chat + channel
-/// announces) to the engine and stash the channel for outbound sends. `from` =
-/// the peer owning this channel (sender identity is implicit).
+fn send_ctrl(dc: &Arc<RTCDataChannel>, msg: &CtrlMsg) {
+    if let Ok(j) = serde_json::to_string(msg) {
+        let dc = dc.clone();
+        tokio::spawn(async move {
+            let _ = dc.send_text(j).await;
+        });
+    }
+}
+
+fn hello_ctrl(h: &Hello) -> CtrlMsg {
+    CtrlMsg::KemHello { kem_pk: STANDARD.encode(&h.kem_pk), x_pk: STANDARD.encode(h.x_pk) }
+}
+fn reply_ctrl(r: &Reply) -> CtrlMsg {
+    CtrlMsg::KemReply { x_pk: STANDARD.encode(r.x_pk), kem_ct: STANDARD.encode(&r.kem_ct) }
+}
+fn parse_hello(kem_pk: &str, x_pk: &str) -> Option<Hello> {
+    let kem_pk = STANDARD.decode(kem_pk).ok()?;
+    let x: [u8; 32] = STANDARD.decode(x_pk).ok()?.try_into().ok()?;
+    Some(Hello { kem_pk, x_pk: x })
+}
+fn parse_reply(x_pk: &str, kem_ct: &str) -> Option<Reply> {
+    let x: [u8; 32] = STANDARD.decode(x_pk).ok()?.try_into().ok()?;
+    let kem_ct = STANDARD.decode(kem_ct).ok()?;
+    Some(Reply { x_pk: x, kem_ct })
+}
+
+/// Route a decrypted/plaintext inner control message (chat or channel announce).
+fn dispatch_inner(peer: &str, msg: CtrlMsg, events: &UnboundedSender<MeshEvent>, chan: &Arc<ChanState>) {
+    match msg {
+        CtrlMsg::Chat(mut c) => {
+            if c.text.chars().count() > crate::MAX_CHAT_CHARS {
+                c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+            }
+            let _ = events.send(MeshEvent::Chat { from: peer.to_string(), text: c.text });
+        }
+        CtrlMsg::Channel { name } => {
+            let name: String = name.chars().take(crate::MAX_CHANNEL_LEN).collect();
+            chan.set_peer(peer, name.clone());
+            let _ = events.send(MeshEvent::PeerChannel { peer: peer.to_string(), name });
+        }
+        CtrlMsg::Channels { names } => {
+            // Clamp count + each name before handing the untrusted directory up.
+            let names: Vec<String> = names
+                .into_iter()
+                .take(crate::MAX_CHANNELS)
+                .map(|n| n.chars().take(crate::MAX_CHANNEL_LEN).collect())
+                .collect();
+            let _ = events.send(MeshEvent::PeerChannels { names });
+        }
+        CtrlMsg::RoomKey { gen, key } => {
+            // Arrives already decrypted (unwrapped from `Enc`), so `peer` is the
+            // DTLS+PQC-authenticated sender. Carry THAT identity up as the
+            // claimed authority — never a value from the message body — so the
+            // engine can verify the sender really is the elected authority.
+            if let Ok(bytes) = STANDARD.decode(&key) {
+                if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                    let _ = events.send(MeshEvent::RoomKey { from: peer.to_string(), gen, key: arr });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Wire a peer's DataChannel: drive the PQC handshake, route inbound control
+/// messages (decrypting once a session exists), and stash the channel for
+/// outbound sends. On open, the initiator sends its KemHello and both sides
+/// announce their current channel.
 fn wire_ctrl(
     peer: String,
     slot: ChatSlot,
     dc: Arc<RTCDataChannel>,
     events: UnboundedSender<MeshEvent>,
     chan: Arc<ChanState>,
+    crypto: Arc<PeerCrypto>,
 ) {
+    // On open: kick off the handshake (initiator) + announce our channel.
+    {
+        let (dc_o, peer_o, chan_o, crypto_o) = (dc.clone(), peer.clone(), chan.clone(), crypto.clone());
+        dc.on_open(Box::new(move || {
+            let (dc_o, peer_o, chan_o, crypto_o) = (dc_o.clone(), peer_o.clone(), chan_o.clone(), crypto_o.clone());
+            Box::pin(async move {
+                if let Some(hello) = crypto_o.begin(&peer_o) {
+                    send_ctrl(&dc_o, &hello_ctrl(&hello));
+                }
+                send_ctrl(&dc_o, &CtrlMsg::Channel { name: chan_o.mine() });
+                // Hand the newcomer our channel directory so channels created
+                // before it joined (incl. empty ones) are selectable for it.
+                send_ctrl(&dc_o, &CtrlMsg::Channels { names: chan_o.dir() });
+            })
+        }));
+    }
+
     let p = peer.clone();
+    let slot_dc = dc.clone(); // stashed below; the closure moves its own handle
+    let msg_dc = dc.clone(); // moved into the on_message closure (not the outer `dc`)
     dc.on_message(Box::new(move |msg: DataChannelMessage| {
-        let p = p.clone();
-        let events = events.clone();
-        let chan = chan.clone();
+        let (p, events, chan, crypto, dc) = (p.clone(), events.clone(), chan.clone(), crypto.clone(), msg_dc.clone());
         Box::pin(async move {
-            if msg.data.len() > crate::MAX_CHAT_BYTES {
+            if msg.data.len() > crate::MAX_CTRL_BYTES {
                 return; // drop oversized frame before deserializing
             }
-            // New clients send a tagged CtrlMsg; fall back to a bare ChatMsg so
-            // one prior version's plain chat still reads.
             match serde_json::from_slice::<CtrlMsg>(&msg.data) {
-                Ok(CtrlMsg::Chat(mut c)) => {
-                    if c.text.chars().count() > crate::MAX_CHAT_CHARS {
-                        c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
+                Ok(CtrlMsg::KemHello { kem_pk, x_pk }) => {
+                    if let Some(hello) = parse_hello(&kem_pk, &x_pk) {
+                        if let Some(reply) = crypto.on_hello(&p, &hello) {
+                            send_ctrl(&dc, &reply_ctrl(&reply));
+                            let _ = events.send(MeshEvent::Secure { peer: p });
+                        }
                     }
-                    let _ = events.send(MeshEvent::Chat { from: p, text: c.text });
                 }
-                Ok(CtrlMsg::Channel { name }) => {
-                    let name: String = name.chars().take(crate::MAX_CHANNEL_LEN).collect();
-                    chan.set_peer(&p, name.clone());
-                    let _ = events.send(MeshEvent::PeerChannel { peer: p, name });
+                Ok(CtrlMsg::KemReply { x_pk, kem_ct }) => {
+                    if let Some(reply) = parse_reply(&x_pk, &kem_ct) {
+                        if crypto.on_reply(&p, &reply) {
+                            let _ = events.send(MeshEvent::Secure { peer: p });
+                        }
+                    }
                 }
-                Ok(CtrlMsg::Channels { names }) => {
-                    // Clamp count + each name before handing the untrusted directory up.
-                    let names: Vec<String> = names
-                        .into_iter()
-                        .take(crate::MAX_CHANNELS)
-                        .map(|n| n.chars().take(crate::MAX_CHANNEL_LEN).collect())
-                        .collect();
-                    let _ = events.send(MeshEvent::PeerChannels { names });
+                Ok(CtrlMsg::Enc { data }) => {
+                    if let Ok(wire) = STANDARD.decode(&data) {
+                        if let Some(pt) = crypto.open(&p, Kind::Chat, &wire) {
+                            if let Ok(inner) = serde_json::from_slice::<CtrlMsg>(&pt) {
+                                dispatch_inner(&p, inner, &events, &chan);
+                            }
+                        }
+                    }
                 }
+                // Plaintext chat/channel (pre-handshake or a peer with no session).
+                Ok(inner @ (CtrlMsg::Chat(_) | CtrlMsg::Channel { .. } | CtrlMsg::Channels { .. })) => {
+                    dispatch_inner(&p, inner, &events, &chan);
+                }
+                Ok(_) => {}
                 Err(_) => {
+                    // Legacy bare ChatMsg fallback.
                     if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
                         if c.text.chars().count() > crate::MAX_CHAT_CHARS {
                             c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
@@ -118,22 +211,7 @@ fn wire_ctrl(
             }
         })
     }));
-    *slot.lock().unwrap() = Some(dc);
-}
-
-/// Announce my current channel over a freshly-opened DataChannel so the peer
-/// learns where I'm tuned without waiting for a switch.
-fn announce_channel(dc: Arc<RTCDataChannel>, chan: Arc<ChanState>) {
-    tokio::spawn(async move {
-        if let Ok(j) = serde_json::to_string(&CtrlMsg::Channel { name: chan.mine() }) {
-            let _ = dc.send_text(j).await;
-        }
-        // Hand the newcomer our channel directory so channels created before it
-        // joined (incl. empty ones) are selectable for it.
-        if let Ok(j) = serde_json::to_string(&CtrlMsg::Channels { names: chan.dir() }) {
-            let _ = dc.send_text(j).await;
-        }
-    });
+    *slot.lock().unwrap() = Some(slot_dc);
 }
 
 pub struct Mesh {
@@ -146,9 +224,12 @@ pub struct Mesh {
     peers: HashMap<String, PeerConn>,
     events: UnboundedSender<MeshEvent>,
     chan: Arc<ChanState>,
+    crypto: Arc<PeerCrypto>,
+    room: Arc<RoomAudio>,
 }
 
 impl Mesh {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api: Arc<API>,
         local: Arc<TrackLocalStaticSample>,
@@ -157,12 +238,14 @@ impl Mesh {
         decode_tx: DecodeTx,
         events: UnboundedSender<MeshEvent>,
         chan: Arc<ChanState>,
+        crypto: Arc<PeerCrypto>,
+        room: Arc<RoomAudio>,
     ) -> Self {
         let ice_servers = vec![RTCIceServer {
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
             ..Default::default()
         }];
-        Self { api, local, my_id, out, decode_tx, ice_servers, peers: HashMap::new(), events, chan }
+        Self { api, local, my_id, out, decode_tx, ice_servers, peers: HashMap::new(), events, chan, crypto, room }
     }
 
     pub fn add_turn(&mut self, urls: Vec<String>, username: String, credential: String) {
@@ -223,12 +306,14 @@ impl Mesh {
         let dtx = self.decode_tx.clone();
         let pid = peer.to_string();
         let chan_rt = self.chan.clone();
+        let room_rt = self.room.clone();
         pc.on_track(Box::new(move |track: Arc<TrackRemote>, _, _| {
             let dtx = dtx.clone();
             let pid = pid.clone();
             let chan_rt = chan_rt.clone();
+            let room_rt = room_rt.clone();
             Box::pin(async move {
-                tokio::spawn(read_track(track, pid, dtx, chan_rt));
+                tokio::spawn(read_track(track, pid, dtx, chan_rt, room_rt));
             })
         }));
 
@@ -238,14 +323,15 @@ impl Mesh {
         let pid2 = peer.to_string();
         let ev_chat = self.events.clone();
         let chan_dc = self.chan.clone();
+        let crypto_dc = self.crypto.clone();
         pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
             let chat_h = chat_h.clone();
             let pid2 = pid2.clone();
             let ev_chat = ev_chat.clone();
             let chan_dc = chan_dc.clone();
+            let crypto_dc = crypto_dc.clone();
             Box::pin(async move {
-                announce_channel(dc.clone(), chan_dc.clone());
-                wire_ctrl(pid2, chat_h, dc, ev_chat, chan_dc);
+                wire_ctrl(pid2, chat_h, dc, ev_chat, chan_dc, crypto_dc);
             })
         }));
 
@@ -277,6 +363,7 @@ impl Mesh {
     pub async fn on_peer(&mut self, peer: &str) -> Result<()> {
         if self.my_id.as_str() < peer {
             if let Some(old) = self.peers.remove(peer) {
+                self.crypto.remove(peer); // stale session; a fresh DC re-handshakes
                 let _ = old.pc.close().await;
             }
             self.ensure(peer).await?;
@@ -291,8 +378,7 @@ impl Mesh {
         let p = self.peers.get(peer).unwrap();
         // Offerer creates the chat channel (must exist before the offer).
         let dc = p.pc.create_data_channel("chat", None).await?;
-        announce_channel(dc.clone(), self.chan.clone());
-        wire_ctrl(peer.to_string(), p.chat.clone(), dc, self.events.clone(), self.chan.clone());
+        wire_ctrl(peer.to_string(), p.chat.clone(), dc, self.events.clone(), self.chan.clone(), self.crypto.clone());
 
         let offer = p.pc.create_offer(None).await?;
         p.pc.set_local_description(offer.clone()).await?;
@@ -306,6 +392,7 @@ impl Mesh {
         if let Some(p) = self.peers.get(from) {
             if p.remote_set.load(Ordering::SeqCst) {
                 if let Some(old) = self.peers.remove(from) {
+                    self.crypto.remove(from); // stale session; the new DC re-handshakes
                     let _ = old.pc.close().await;
                 }
             }
@@ -335,6 +422,7 @@ impl Mesh {
     }
 
     pub async fn on_left(&mut self, peer: &str) {
+        self.crypto.remove(peer);
         if let Some(p) = self.peers.remove(peer) {
             let _ = p.pc.close().await;
         }
@@ -409,17 +497,48 @@ impl Mesh {
         }
     }
 
-    /// Broadcast a chat line over every peer's DataChannel.
+    /// Broadcast a chat line over every peer's DataChannel — AEAD-sealed for
+    /// peers with a PQC session, plaintext otherwise (pre-handshake fallback).
     pub async fn broadcast_chat(&self, text: &str) {
         let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let json = match serde_json::to_string(&ChatMsg { text: text.to_string(), ts }) {
-            Ok(j) => j,
+        let chat = CtrlMsg::Chat(ChatMsg { text: text.to_string(), ts });
+        let inner = match serde_json::to_vec(&chat) {
+            Ok(b) => b,
             Err(_) => return,
         };
-        for p in self.peers.values() {
+        for (id, p) in self.peers.iter() {
             let dc = p.chat.lock().unwrap().clone();
-            if let Some(dc) = dc {
-                let _ = dc.send_text(json.clone()).await;
+            let Some(dc) = dc else { continue };
+            let out = match self.crypto.seal(id, Kind::Chat, &inner) {
+                Some(wire) => CtrlMsg::Enc { data: STANDARD.encode(wire) },
+                None => chat.clone(),
+            };
+            if let Ok(j) = serde_json::to_string(&out) {
+                let _ = dc.send_text(j).await;
+            }
+        }
+    }
+
+    /// Send the current group-audio room key to one peer, SEALED over that
+    /// peer's pairwise PQC session. No-op if the peer has no session yet (the
+    /// engine retries when the peer becomes secure).
+    pub async fn send_room_key(&self, peer: &str, gen: u32, key: &[u8; 32]) {
+        let msg = CtrlMsg::RoomKey { gen, key: STANDARD.encode(key) };
+        let inner = match serde_json::to_vec(&msg) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let Some(sealed) = self.crypto.seal(peer, Kind::Chat, &inner) else {
+            return;
+        };
+        let Some(p) = self.peers.get(peer) else {
+            return;
+        };
+        let dc = p.chat.lock().unwrap().clone();
+        if let Some(dc) = dc {
+            let env = CtrlMsg::Enc { data: STANDARD.encode(sealed) };
+            if let Ok(j) = serde_json::to_string(&env) {
+                let _ = dc.send_text(j).await;
             }
         }
     }
@@ -444,14 +563,23 @@ async fn selected_kind(pc: &RTCPeerConnection) -> Option<&'static str> {
     None
 }
 
-async fn read_track(track: Arc<TrackRemote>, peer: String, dtx: DecodeTx, chan: Arc<ChanState>) {
+async fn read_track(
+    track: Arc<TrackRemote>,
+    peer: String,
+    dtx: DecodeTx,
+    chan: Arc<ChanState>,
+    room: Arc<RoomAudio>,
+) {
     loop {
         match track.read_rtp().await {
             Ok((pkt, _)) => {
                 // Channel RX-gate: only feed the decoder when this peer is tuned
                 // to the same channel as me. Off-channel audio is dropped here.
                 if !pkt.payload.is_empty() && chan.hears(&peer) {
-                    let _ = dtx.send((peer.clone(), pkt.payload));
+                    // Unseal the group-audio frame (raw passthrough pre-key).
+                    if let Some(opus) = room.open_inbound(&peer, &pkt.payload) {
+                        let _ = dtx.send((peer.clone(), Bytes::from(opus)));
+                    }
                 }
             }
             Err(_) => break,
@@ -512,11 +640,13 @@ mod rekey_tests {
 
         let a = Arc::new(AsyncMutex::new(Mesh::new(
             Arc::new(build_api().unwrap()), track(), "a".into(), out_a_tx, dec_a, ev_a,
-            Arc::new(ChanState::new()),
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("a".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
         )));
         let b = Arc::new(AsyncMutex::new(Mesh::new(
             Arc::new(build_api().unwrap()), track(), "b".into(), out_b_tx, dec_b, ev_b,
-            Arc::new(ChanState::new()),
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("b".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
         )));
 
         // Mock relay: forward each side's outbound to the other (stamped `from`).

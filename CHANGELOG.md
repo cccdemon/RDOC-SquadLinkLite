@@ -2,6 +2,28 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.35 — unreleased
+
+### Added
+- **Post-Quantum-Sprachverschlüsselung** — die Stimme wird jetzt zusätzlich
+  quantensicher verschlüsselt (nicht mehr nur DTLS-SRTP). Ein hybrider
+  ML-KEM-768 + X25519 Handshake läuft pro Peer über den (bereits
+  DTLS-authentifizierten) DataChannel; Chat und der **Raum-Schlüssel** reisen
+  darin versiegelt. Die Sprache selbst wird unter *einem* raumweiten Schlüssel
+  versiegelt — einmal versiegelt, an alle gefächert (das Encode-once-Prinzip
+  bleibt). So schützt die App gegen „jetzt mitschneiden, später mit einem
+  Quantencomputer entschlüsseln".
+- **Sichtbarer Voice-Krypto-Status** — die Encryption-Zeile zeigt
+  „🛡️ Voice quantensicher #<Generation>" (★ = dieser Client verwaltet den
+  Schlüssel) bzw. „aushandeln…", bis der Raum-Schlüssel verteilt ist.
+
+### Security
+- Der Raum-Schlüssel wird vom Teilnehmer mit der kleinsten ID erzeugt und
+  **bei jedem Beitritt und Verlassen rotiert** (frische Epoche für neue
+  Mitglieder, Forward Secrecy gegenüber verlassenden). „Session neu
+  verschlüsseln" rotiert jetzt auch den Sprach-Schlüssel. Eine kurze
+  Übergangszeit beim Rotieren verhindert Audio-Aussetzer.
+
 ## v0.1.34 — 2026-07-24
 
 ### Added
