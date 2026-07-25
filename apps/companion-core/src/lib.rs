@@ -116,9 +116,39 @@ fn am_authority(me: &str, members: &HashMap<String, Member>) -> bool {
     members.keys().all(|k| me < k.as_str())
 }
 
-/// Authority action: mint the next-generation group-audio key, install it
-/// locally, and hand it to every currently-secure peer (sealed over each
-/// pairwise session). Bumps `room_gen`.
+/// Grace between staging a new group-audio key (able to decrypt it) and
+/// activating it for sealing. Long enough that every peer has received+staged
+/// the key before anyone seals with it, so a rekey drops no audio.
+const ROOM_KEY_GRACE: Duration = Duration::from_millis(400);
+
+/// Stage `k` for decryption immediately, then activate it for sealing — at once
+/// if it's our first key (nothing to coordinate), else after `ROOM_KEY_GRACE` so
+/// every peer has staged it first. Bumps `room_gen` to the accepted generation.
+fn adopt_room_key(
+    room: &Arc<crypto::RoomAudio>,
+    k: crypto::RoomKey,
+    room_gen: &mut u32,
+    promote_tx: &mpsc::UnboundedSender<u32>,
+) {
+    let first = !room.has_send();
+    if room.stage(k) {
+        let g = room.generation().unwrap_or(0);
+        *room_gen = (*room_gen).max(g);
+        if first {
+            room.promote(g); // no prior key to coordinate → seal immediately
+        } else {
+            let ptx = promote_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(ROOM_KEY_GRACE).await;
+                let _ = ptx.send(g);
+            });
+        }
+    }
+}
+
+/// Authority action: mint the next-generation group-audio key, adopt it (stage
+/// now, activate for sealing after the grace), and hand it to every currently-
+/// secure peer (sealed over each pairwise session). Bumps `room_gen`.
 async fn rotate_room_key(
     room_gen: &mut u32,
     room: &Arc<crypto::RoomAudio>,
@@ -126,9 +156,10 @@ async fn rotate_room_key(
     members: &HashMap<String, Member>,
     crypto: &Arc<crypto::PeerCrypto>,
     me_id: &str,
+    promote_tx: &mpsc::UnboundedSender<u32>,
 ) {
-    *room_gen = room_gen.saturating_add(1);
-    room.install(crypto::RoomKey::generate(*room_gen, me_id.to_string()));
+    let g = room_gen.saturating_add(1);
+    adopt_room_key(room, crypto::RoomKey::generate(g, me_id.to_string()), room_gen, promote_tx);
     if let Some(k) = room.current() {
         let secure_peers: Vec<String> =
             members.keys().filter(|id| crypto.is_secure(id)).cloned().collect();
@@ -517,6 +548,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let mut mesh = Mesh::new(api, local, cfg.user_id.clone(), up_tx, decode_tx, mesh_tx, chan.clone(), crypto.clone(), room.clone());
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Cmd>();
+    // Delayed group-audio key promotions: a grace timer fires the staged
+    // generation here, and the loop activates it for sealing (see #ROOM_KEY_GRACE).
+    let (promote_tx, mut promote_rx) = mpsc::unbounded_channel::<u32>();
 
     let me_id = cfg.user_id.clone();
     let me_name = cfg.name.clone();
@@ -645,6 +679,15 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             });
                             let _ = mesh.on_peer(&user_id).await;
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                            // Future secrecy: if I'm the authority and a room key
+                            // already exists, rotate so the joiner only ever holds
+                            // a fresh epoch — never the key that protected pre-join
+                            // audio. (Skipped before the first key exists, so room
+                            // formation mints exactly one key via the Secure path.)
+                            if am_authority(&me_id, &members) && room.generation().is_some() {
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            }
                         }
                         ServerMsg::PeerLeft { user_id } => {
                             members.remove(&user_id);
@@ -657,7 +700,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // member can't decrypt further audio, and hand it to
                             // every remaining secure peer.
                             if am_authority(&me_id, &members) {
-                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id).await;
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
                                 sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
                             }
                         }
@@ -680,7 +723,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // too (not just DTLS-SRTP) — the authority mints + hands
                             // out a fresh key so voice gets new key material as well.
                             if am_authority(&me_id, &members) {
-                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id).await;
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
                                 sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
                             }
                         }
@@ -734,7 +777,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             if am_authority(&me_id, &members) {
                                 if room.generation().is_none() {
                                     room_gen = room_gen.max(1);
-                                    room.install(crypto::RoomKey::generate(room_gen, me_id.clone()));
+                                    adopt_room_key(&room, crypto::RoomKey::generate(room_gen, me_id.clone()), &mut room_gen, &promote_tx);
                                 }
                                 if let Some(k) = room.current() {
                                     mesh.send_room_key(&peer, k.generation(), k.authority(), &k.key_bytes()).await;
@@ -743,11 +786,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             }
                         }
                         Some(MeshEvent::RoomKey { gen, auth, key }) => {
-                            // The authority sent the group-audio key. `install`
-                            // adopts it only if it's strictly better (newer gen,
-                            // or same gen from a smaller authority id).
-                            room.install(crypto::RoomKey::from_bytes(gen, auth, key));
-                            room_gen = room_gen.max(gen);
+                            // The authority sent the group-audio key. `adopt_room_key`
+                            // stages it (if strictly better) and activates it for
+                            // sealing after the grace, so no audio is dropped.
+                            adopt_room_key(&room, crypto::RoomKey::from_bytes(gen, auth, key), &mut room_gen, &promote_tx);
                             sink(UiEvent::RoomAudio { gen: room.generation(), authority: am_authority(&me_id, &members) });
                         }
                         None => {}
@@ -811,6 +853,14 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             sink(UiEvent::Status { connected: false, transmitting: false });
                             break;
                         }
+                    }
+                }
+                g = promote_rx.recv() => {
+                    // A group-audio key's grace period elapsed → activate it for
+                    // sealing (peers have had time to stage it, so no gap).
+                    if let Some(g) = g {
+                        room.promote(g);
+                        sink(UiEvent::RoomAudio { gen: room.sending_generation(), authority: am_authority(&me_id, &members) });
                     }
                 }
             }

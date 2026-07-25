@@ -445,7 +445,15 @@ const AUDIO_SEALED: u8 = 1; // AUDIO_SEALED ‖ gen(4) ‖ nonce(12) ‖ ct+tag
 /// current key plus the immediately-previous one so frames still sealed under
 /// the old key during a rekey keep decoding through the transition.
 pub struct RoomAudio {
+    /// The key we currently SEAL outbound audio with. On a rekey this lags the
+    /// newest staged key by a short grace so every peer has staged the new key
+    /// (and can therefore open it) before anyone starts sealing with it — no
+    /// audio gap. `None` → raw fallback.
+    send: std::sync::Mutex<Option<RoomKey>>,
+    /// Newest open-capable key (staged the moment it arrives).
     cur: std::sync::Mutex<Option<RoomKey>>,
+    /// Previous open-capable key — bridges a rekey so frames still in flight
+    /// under the old key keep decoding.
     prev: std::sync::Mutex<Option<RoomKey>>,
 }
 
@@ -457,41 +465,80 @@ impl Default for RoomAudio {
 
 impl RoomAudio {
     pub fn new() -> Self {
-        RoomAudio { cur: std::sync::Mutex::new(None), prev: std::sync::Mutex::new(None) }
+        RoomAudio {
+            send: std::sync::Mutex::new(None),
+            cur: std::sync::Mutex::new(None),
+            prev: std::sync::Mutex::new(None),
+        }
     }
 
-    /// The current key generation, if a key is installed.
+    /// The newest staged key generation (what the authority distributes), if any.
     pub fn generation(&self) -> Option<u32> {
         self.cur.lock().unwrap().as_ref().map(|k| k.generation())
     }
 
-    /// A clone of the current key (for the authority to distribute), if any.
+    /// The generation we're actively sealing outbound audio with, if any.
+    pub fn sending_generation(&self) -> Option<u32> {
+        self.send.lock().unwrap().as_ref().map(|k| k.generation())
+    }
+
+    /// True once we hold a send key (i.e. this isn't the very first key).
+    pub fn has_send(&self) -> bool {
+        self.send.lock().unwrap().is_some()
+    }
+
+    /// A clone of the newest staged key (for the authority to distribute).
     pub fn current(&self) -> Option<RoomKey> {
         self.cur.lock().unwrap().clone()
     }
 
-    /// Install `k` as current, demoting the old current to `prev`. Ignored
-    /// unless `k` is strictly better — a newer generation, or the same
-    /// generation from a smaller authority id — so duplicate/older/losing-tie
-    /// distributions are idempotent.
-    pub fn install(&self, k: RoomKey) {
+    /// Stage `k` as open-capable (able to DECRYPT), demoting the old current to
+    /// `prev`. Does NOT change the send key. Returns true if accepted. Ignored
+    /// unless `k` is strictly better — newer generation, or same generation from
+    /// a smaller authority id — so duplicate/older/losing-tie frames are no-ops.
+    pub fn stage(&self, k: RoomKey) -> bool {
         let mut cur = self.cur.lock().unwrap();
         if let Some(existing) = cur.as_ref() {
-            // Newer generation wins; on a tie the smaller authority id wins, so
-            // a split roster view converges on one key instead of partitioning.
             let better = k.generation() > existing.generation()
                 || (k.generation() == existing.generation() && k.authority() < existing.authority());
             if !better {
-                return;
+                return false;
             }
             *self.prev.lock().unwrap() = cur.take();
         }
         *cur = Some(k);
+        true
     }
 
-    /// Frame an outbound audio payload: sealed if we hold a key, else raw.
+    /// Activate the staged key of generation `gen` for SEALING outbound audio.
+    /// No-op if that generation isn't currently staged (superseded meanwhile).
+    pub fn promote(&self, gen: u32) {
+        for slot in [&self.cur, &self.prev] {
+            if let Some(k) = slot.lock().unwrap().as_ref() {
+                if k.generation() == gen {
+                    *self.send.lock().unwrap() = Some(k.clone());
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Stage `k` and immediately activate it for sending — the no-grace path,
+    /// used for the very first key and by tests.
+    pub fn install(&self, k: RoomKey) {
+        let gen = k.generation();
+        if self.stage(k) {
+            if let Some(g) = self.generation() {
+                self.promote(g);
+            } else {
+                self.promote(gen);
+            }
+        }
+    }
+
+    /// Frame an outbound audio payload: sealed with the active send key, else raw.
     pub fn seal_outbound(&self, sender: &str, opus: &[u8]) -> Vec<u8> {
-        if let Some(k) = self.cur.lock().unwrap().as_ref() {
+        if let Some(k) = self.send.lock().unwrap().as_ref() {
             let sealed = k.seal_audio(sender, opus);
             let mut out = Vec::with_capacity(5 + sealed.len());
             out.push(AUDIO_SEALED);
@@ -613,6 +660,20 @@ mod tests {
         other.install(RoomKey::generate(9, "auth".into())); // gen the receiver never saw
         let wire = other.seal_outbound("a", b"x");
         assert!(recv.open_inbound("a", &wire).is_none());
+    }
+
+    #[test]
+    fn room_audio_stage_defers_send_until_promote() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(1, "a".into())); // first key → active immediately
+        assert_eq!(ra.sending_generation(), Some(1));
+        // A rekey stages gen 2 for decrypt but keeps sealing with gen 1…
+        assert!(ra.stage(RoomKey::generate(2, "a".into())));
+        assert_eq!(ra.sending_generation(), Some(1));
+        assert_eq!(ra.generation(), Some(2));
+        // …until the grace period elapses and we promote.
+        ra.promote(2);
+        assert_eq!(ra.sending_generation(), Some(2));
     }
 
     #[test]
