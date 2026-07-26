@@ -116,6 +116,10 @@ fn dispatch_inner(peer: &str, msg: CtrlMsg, events: &UnboundedSender<MeshEvent>,
                 .collect();
             let _ = events.send(MeshEvent::PeerChannels { names });
         }
+        CtrlMsg::ChannelRemoved { name } => {
+            let name: String = name.chars().take(crate::MAX_CHANNEL_LEN).collect();
+            let _ = events.send(MeshEvent::PeerChannelRemoved { name });
+        }
         CtrlMsg::RoomKey { gen, key } => {
             // Arrives already decrypted (unwrapped from `Enc`), so `peer` is the
             // DTLS+PQC-authenticated sender. Carry THAT identity up as the
@@ -195,7 +199,7 @@ fn wire_ctrl(
                     }
                 }
                 // Plaintext chat/channel (pre-handshake or a peer with no session).
-                Ok(inner @ (CtrlMsg::Chat(_) | CtrlMsg::Channel { .. } | CtrlMsg::Channels { .. })) => {
+                Ok(inner @ (CtrlMsg::Chat(_) | CtrlMsg::Channel { .. } | CtrlMsg::Channels { .. } | CtrlMsg::ChannelRemoved { .. })) => {
                     dispatch_inner(&p, inner, &events, &chan);
                 }
                 Ok(_) => {}
@@ -486,6 +490,20 @@ impl Mesh {
     /// Announce my full channel directory to every peer (shared-directory sync).
     pub async fn broadcast_channels(&self, names: &[String]) {
         let json = match serde_json::to_string(&CtrlMsg::Channels { names: names.to_vec() }) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        for p in self.peers.values() {
+            let dc = p.chat.lock().unwrap().clone();
+            if let Some(dc) = dc {
+                let _ = dc.send_text(json.clone()).await;
+            }
+        }
+    }
+
+    /// Tell every peer a channel was deleted from the shared directory.
+    pub async fn broadcast_channel_removed(&self, name: &str) {
+        let json = match serde_json::to_string(&CtrlMsg::ChannelRemoved { name: name.to_string() }) {
             Ok(j) => j,
             Err(_) => return,
         };

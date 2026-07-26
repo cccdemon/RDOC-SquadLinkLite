@@ -891,6 +891,23 @@ fn set_channel(state: State<AppState>, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete an (empty) channel from the shared directory. The engine drops it,
+/// tombstones it, and tells every peer to do the same.
+#[tauri::command]
+fn remove_channel(state: State<AppState>, name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty()
+        || name.chars().count() > companion_core::MAX_CHANNEL_LEN
+        || name.chars().any(|c| c.is_control())
+    {
+        return Err("invalid channel (1–32 chars, no control chars)".into());
+    }
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.remove_channel(name);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_dsp(state: State<AppState>, mut cfg: companion_core::audio::DspConfig) {
     // Normalize at the IPC boundary: reject NaN/inf, clamp to sane ranges.
@@ -1105,6 +1122,7 @@ fn main() {
             rotate_key,
             reconnect_session,
             set_channel,
+            remove_channel,
             set_dsp,
             set_monitor,
             set_low_bandwidth,

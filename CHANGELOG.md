@@ -2,6 +2,16 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## v0.1.36 — unreleased
+
+### Fixed
+- **Gelöschte Funkkanäle verschwinden jetzt bei allen** — löscht ein Teilnehmer
+  einen (leeren) Kanal, wird er über die Mesh entfernt und *tombstoned*, sodass
+  ein späterer Verzeichnis-Abgleich ihn nicht wieder auferstehen lässt. Vorher
+  blieb ein gelöschter Kanal bei den anderen Clients bestehen. Ein Kanal, auf
+  dem noch jemand ist, wird nicht gelöscht; wer den Kanal neu betritt, hebt das
+  Tombstone auf (Neuanlage).
+
 ## v0.1.35 — 2026-07-25
 
 ### Added

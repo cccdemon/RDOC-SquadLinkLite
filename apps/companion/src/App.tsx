@@ -88,6 +88,7 @@ type UiEvent =
   | { type: "signaling"; up: boolean }
   | { type: "channel"; mine: string }
   | { type: "channels"; names: string[] }
+  | { type: "channel_removed"; name: string }
   | { type: "room_audio"; gen: number | null; authority: boolean };
 
 const DEFAULT_CHANNEL = "Funk 1";
@@ -222,6 +223,9 @@ export default function App() {
     // Refuse if anyone is currently on it (roster still shows members there).
     if (participants.some((p) => canonChannel(p.channel) === canon)) return;
     setSessionChannels((prev) => prev.filter((c) => canonChannel(c) !== canon));
+    // Propagate the deletion to every peer (tombstoned engine-side so a stale
+    // directory broadcast can't resurrect it on the others).
+    invoke("remove_channel", { name: canon }).catch(() => {});
   };
   // Streamer mode: blur the shareable link + PIN so they can't be read on stream.
   // Copy buttons still copy the real values.
@@ -551,6 +555,7 @@ export default function App() {
         if (p.up) setResuming(false);
       } else if (p.type === "channel") setMyChannel(p.mine);
       else if (p.type === "channels") p.names.forEach(rememberChannel);
+      else if (p.type === "channel_removed") setSessionChannels((cs) => cs.filter((c) => canonChannel(c) !== p.name));
       else if (p.type === "room_audio") setRoomAudio({ gen: p.gen, authority: p.authority });
     });
     return () => {
