@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Extra Info.plist keys merged into the macOS bundle by Tauri on top of the
+     generated plist. NSMicrophoneUsageDescription is required — without it macOS
+     denies microphone access outright (no TCC prompt) and voice capture is
+     silent. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>RDOC SquadLink Lite uses your microphone for push-to-talk voice chat with your squad.</string>
+</dict>
+</plist>
