@@ -378,6 +378,7 @@ h3{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em
 p{margin:.6rem 0}
 a{color:#7fb0ff}
 .muted{color:#9aa3ad;font-size:.9rem}
+.announce{border:1px solid #7fb0ff;background:#13203a;border-radius:6px;padding:.7rem .9rem;color:#cfe0ff}
 ul{padding-left:1.25rem;margin:.5rem 0}
 .links a{display:block;margin:.25rem 0}
 .links span{display:block;margin:.25rem 0;color:#9aa3ad}

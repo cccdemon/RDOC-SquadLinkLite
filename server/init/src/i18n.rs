@@ -172,7 +172,8 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>The session stays alive while members are connected (max. 24&nbsp;hours).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/get">All downloads &amp; checksums (Windows, Linux, Android)</a></p>
+<p class="announce">🎉 Now on <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS and Android</strong>. <strong>iOS</strong> is finished and runs on-device — but App&nbsp;Store release is blocked on the Apple developer licence. <a href="https://twitch.tv/JustCallMeDeimos">Support the stream</a> to make it happen. 💜</p>
+<p><a class="dl" href="{base}/get">All downloads &amp; checksums (Windows, Linux, macOS, Android)</a></p>
 <p class="muted">The Microsoft Store version is signed and shows no warning. The direct installer is unsigned → Windows SmartScreen warns: "More info" then "Run anyway".</p>
 {links}"#,
                 store = store_badge("Get it from Microsoft Store"),
@@ -192,7 +193,8 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>Die Session bleibt bestehen, solange Teilnehmer verbunden sind (maximal 24&nbsp;Stunden).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/get">Alle Downloads &amp; Prüfsummen (Windows, Linux, Android)</a></p>
+<p class="announce">🎉 Jetzt für <strong>Windows, Linux (inkl. SteamOS / Steam&nbsp;Deck), macOS und Android</strong>. <strong>iOS</strong> ist fertig und läuft auf dem Gerät — die Veröffentlichung im App&nbsp;Store scheitert aber noch an der Apple-Entwickler-Lizenz. <a href="https://twitch.tv/JustCallMeDeimos">Unterstütze den Stream</a>, um das möglich zu machen. 💜</p>
+<p><a class="dl" href="{base}/get">Alle Downloads &amp; Prüfsummen (Windows, Linux, macOS, Android)</a></p>
 <p class="muted">Die Microsoft-Store-Version ist signiert und warnt nicht. Der direkte Installer ist unsigniert → Windows SmartScreen warnt: „Weitere Informationen" → „Trotzdem ausführen".</p>
 {links}"#,
                 store = store_badge("Im Microsoft Store holen"),
@@ -212,7 +214,8 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>La sessione resta attiva finché ci sono partecipanti connessi (max 24&nbsp;ore).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/get">Tutti i download e checksum (Windows, Linux, Android)</a></p>
+<p class="announce">🎉 Ora su <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS e Android</strong>. <strong>iOS</strong> è pronto e gira sul dispositivo — ma la pubblicazione sull'App&nbsp;Store è bloccata dalla licenza sviluppatore Apple. <a href="https://twitch.tv/JustCallMeDeimos">Sostieni lo stream</a> per renderlo possibile. 💜</p>
+<p><a class="dl" href="{base}/get">Tutti i download e checksum (Windows, Linux, macOS, Android)</a></p>
 <p class="muted">La versione del Microsoft Store è firmata e non mostra avvisi. L'installer diretto non è firmato → Windows SmartScreen avvisa: "Ulteriori informazioni" → "Esegui comunque".</p>
 {links}"#,
                 store = store_badge("Scarica dal Microsoft Store"),
@@ -232,7 +235,8 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>La sesión permanece activa mientras haya participantes conectados (máx. 24&nbsp;horas).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/get">Todas las descargas y checksums (Windows, Linux, Android)</a></p>
+<p class="announce">🎉 Ahora en <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS y Android</strong>. <strong>iOS</strong> está listo y funciona en el dispositivo — pero la publicación en la App&nbsp;Store está bloqueada por la licencia de desarrollador de Apple. <a href="https://twitch.tv/JustCallMeDeimos">Apoya el stream</a> para hacerlo posible. 💜</p>
+<p><a class="dl" href="{base}/get">Todas las descargas y checksums (Windows, Linux, macOS, Android)</a></p>
 <p class="muted">La versión del Microsoft Store está firmada y no muestra avisos. El instalador directo no está firmado → Windows SmartScreen avisa: "Más información" → "Ejecutar de todas formas".</p>
 {links}"#,
                 store = store_badge("Descargar de Microsoft Store"),
@@ -252,7 +256,8 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <li>La session reste active tant que des participants sont connectés (max. 24&nbsp;heures).</li>
 </ul>
 <p>{store}</p>
-<p><a class="dl" href="{base}/get">Tous les téléchargements et sommes de contrôle (Windows, Linux, Android)</a></p>
+<p class="announce">🎉 Désormais sur <strong>Windows, Linux (dont SteamOS / Steam&nbsp;Deck), macOS et Android</strong>. <strong>iOS</strong> est prêt et tourne sur l'appareil — mais la publication sur l'App&nbsp;Store est bloquée par la licence développeur Apple. <a href="https://twitch.tv/JustCallMeDeimos">Soutiens le stream</a> pour rendre ça possible. 💜</p>
+<p><a class="dl" href="{base}/get">Tous les téléchargements et sommes de contrôle (Windows, Linux, macOS, Android)</a></p>
 <p class="muted">La version du Microsoft Store est signée et n'affiche aucun avertissement. L'installeur direct n'est pas signé → Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».</p>
 {links}"#,
                 store = store_badge("Obtenir sur le Microsoft Store"),

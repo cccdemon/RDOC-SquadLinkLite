@@ -2,6 +2,16 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
+## Angekündigt — 2026-07-26 — Multi-Plattform-Rollout
+
+- **🐧 Linux**, **🍎 macOS** und **🤖 Android** kommen zu **🪟 Windows** dazu —
+  Linux inkl. **Flatpak für SteamOS / Steam Deck** und die gängigen
+  Gaming-Distributionen (Bazzite, ChimeraOS, Nobara, Garuda …).
+- **📱 iOS / iPadOS** ist technisch fertig und läuft bereits auf dem Gerät. Die
+  Veröffentlichung im App Store scheitert aktuell an der Apple-Entwickler-Lizenz
+  (99 $/Jahr). **Support the stream to make this possible —
+  [twitch.tv/JustCallMeDeimos](https://twitch.tv/JustCallMeDeimos).**
+
 ## v0.1.36 — 2026-07-26
 
 ### Fixed

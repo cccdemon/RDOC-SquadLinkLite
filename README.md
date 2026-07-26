@@ -13,8 +13,14 @@ außerhalb der RDOC-Suite.
 
 ## Download
 
-Windows-Installer (unsigniert, Prototyp): **https://squadlink.raumdock.org/download/**
-SmartScreen beim ersten Start: „Weitere Informationen → Trotzdem ausführen".
+**Jetzt Multi-Plattform** — alle Builds + Prüfsummen: **https://squadlink.raumdock.org/get**
+
+- **🪟 Windows** — signiert im Microsoft Store, sonst unsigniert (SmartScreen: „Weitere Informationen → Trotzdem ausführen").
+- **🐧 Linux** — `.deb` / `.rpm` / `.AppImage` (amd64 + arm64) sowie **Flatpak für SteamOS / Steam Deck** und gängige Gaming-Distributionen (Bazzite, ChimeraOS, Nobara, Garuda …).
+- **🍎 macOS** — Apple Silicon + Intel (unsigniert: per Rechtsklick → Öffnen starten).
+- **🤖 Android** — APK zum Sideloaden.
+- **📱 iOS / iPadOS** — technisch fertig, läuft bereits auf dem Gerät; die **App-Store-Veröffentlichung scheitert noch an der Apple-Entwickler-Lizenz** (99 $/Jahr). Unterstütze den Stream, um das möglich zu machen: **[twitch.tv/JustCallMeDeimos](https://twitch.tv/JustCallMeDeimos)**.
+
 Die App hat einen **eingebauten Update-Checker** (meldet neue Releases + Changelog).
 
 ## Funktionen
