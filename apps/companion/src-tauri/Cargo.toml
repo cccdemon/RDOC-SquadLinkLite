@@ -3,6 +3,13 @@ name = "rdoc-squadlink-lite"
 version = "0.1.33"
 edition = "2021"
 
+# The Tauri app is built as a library so desktop (main.rs) and mobile
+# (Android/iOS, via tauri::mobile_entry_point) share one `run()`. Mobile builds
+# the app as a cdylib; desktop still produces the normal binary from main.rs.
+[lib]
+name = "rdoc_squadlink_lite_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -13,8 +20,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
-# Deep link (squadlink://) config + single-instance forwarding of the launch URL.
+# Deep link (squadlink://) config — supported on desktop + mobile.
 tauri-plugin-deep-link = "2"
+
+# Single-instance (launch-URL forwarding) is desktop-only — the plugin has no
+# mobile target, so keep it out of Android/iOS builds.
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
 
 # Configurable PTT via Windows Raw Input — keeps firing while a fullscreen /
