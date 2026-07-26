@@ -408,10 +408,29 @@ fn footer(base: &str, lang: Lang) -> String {
 fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
     let base = public_base();
     let lc = lang.code();
+    let desc = i18n::meta_desc(lang);
+    let og_title = format!("{title} — RDOC SquadLink Lite");
+    let og_image = format!("{base}/download/og-image.png");
+    let og_url = format!("{base}{path}");
     Html(format!(
         "<!doctype html><html lang=\"{lc}\"><head><meta charset=\"utf-8\">{HTML_CSP}\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{title} — RDOC SquadLink Lite</title><link rel=\"icon\" href=\"{base}/download/sl-logo.png\">{css}</head><body>\
+<title>{title} — RDOC SquadLink Lite</title>\
+<meta name=\"description\" content=\"{desc}\">\
+<meta property=\"og:type\" content=\"website\">\
+<meta property=\"og:site_name\" content=\"RDOC SquadLink Lite\">\
+<meta property=\"og:title\" content=\"{og_title}\">\
+<meta property=\"og:description\" content=\"{desc}\">\
+<meta property=\"og:url\" content=\"{og_url}\">\
+<meta property=\"og:image\" content=\"{og_image}\">\
+<meta property=\"og:image:width\" content=\"1200\"><meta property=\"og:image:height\" content=\"630\">\
+<meta property=\"og:image:alt\" content=\"RDOC SquadLink Lite\">\
+<meta name=\"twitter:card\" content=\"summary_large_image\">\
+<meta name=\"twitter:title\" content=\"{og_title}\">\
+<meta name=\"twitter:description\" content=\"{desc}\">\
+<meta name=\"twitter:image\" content=\"{og_image}\">\
+<meta name=\"theme-color\" content=\"#f6c200\">\
+<link rel=\"icon\" href=\"{base}/download/sl-logo.png\">{css}</head><body>\
 <header class=\"top\"><img src=\"{base}/download/sl-logo.png\" alt=\"SquadLink Lite\" onerror=\"this.onerror=null;this.src='{logo}'\"><a href=\"/?lang={lc}\">RDOC SquadLink Lite</a>{sw}</header>\
 <main>{body}</main><footer>{footer}</footer></body></html>",
         base = base,

@@ -59,6 +59,18 @@ impl Lang {
     }
 }
 
+/// Short social-share (OpenGraph) description, one line per language. No quotes
+/// or markup — it is injected verbatim into an `og:description` attribute.
+pub fn meta_desc(l: Lang) -> &'static str {
+    match l {
+        Lang::En => "Serverless P2P voice for small squads. Push-to-talk, no account, no recording — end-to-end and post-quantum encrypted.",
+        Lang::De => "Serverloser P2P-Voicechat für kleine Crews. Push-to-Talk, ohne Account, ohne Aufnahme — Ende-zu-Ende und post-quanten-verschlüsselt.",
+        Lang::It => "Voice chat P2P senza server per piccoli gruppi. Push-to-talk, senza account, senza registrazioni — cifrato end-to-end e post-quantistico.",
+        Lang::Es => "Chat de voz P2P sin servidor para grupos pequeños. Pulsar para hablar, sin cuenta, sin grabación — cifrado de extremo a extremo y poscuántico.",
+        Lang::Fr => "Chat vocal P2P sans serveur pour petites équipes. Push-to-talk, sans compte, sans enregistrement — chiffré de bout en bout et post-quantique.",
+    }
+}
+
 /// Footer nav labels: [Download, Privacy, Legal, License].
 pub fn nav(l: Lang) -> [&'static str; 4] {
     match l {
