@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
         UiEvent::Signaling { up } => println!("[signaling {}]", if up { "up" } else { "down" }),
         UiEvent::Channel { mine } => println!("[channel {mine}]"),
         UiEvent::Channels { names } => println!("[channels {}]", names.join(", ")),
+        UiEvent::ChannelRemoved { name } => println!("[channel-removed {name}]"),
         UiEvent::RoomAudio { gen, authority } => {
             println!("[room-audio {} authority={authority}]", gen.map(|g| format!("gen{g}")).unwrap_or_else(|| "aushandeln".into()))
         }

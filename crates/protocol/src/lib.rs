@@ -43,6 +43,10 @@ pub enum CtrlMsg {
     /// even for peers that join after it was created. Sent on DataChannel open
     /// (so late joiners catch up) and whenever the directory grows.
     Channels { names: Vec<String> },
+    /// Sender deleted an (empty) channel from the shared directory. Receivers
+    /// drop it and tombstone the name so a later directory broadcast can't
+    /// resurrect it. Ignored for a channel someone is currently tuned to.
+    ChannelRemoved { name: String },
     /// PQC handshake, initiator → responder: hybrid ML-KEM-768 encapsulation key
     /// + X25519 public key (both base64). Sent plaintext (public values).
     KemHello { kem_pk: String, x_pk: String },

@@ -9,7 +9,7 @@ pub mod selfcheck;
 pub mod serverless;
 pub mod signaling;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -66,6 +66,9 @@ pub enum UiEvent {
     /// The shared channel directory grew — a peer created/announced a channel
     /// not yet in the UI's list. The UI unions these into its switcher.
     Channels { names: Vec<String> },
+    /// A channel was deleted from the shared directory — the UI drops it from
+    /// its switcher. `name` is the canonical (match) form.
+    ChannelRemoved { name: String },
     /// Group-audio encryption status: the installed room-key generation
     /// (`None` = still negotiating) and whether this node is the key authority.
     RoomAudio { gen: Option<u32>, authority: bool },
@@ -90,6 +93,8 @@ pub(crate) enum MeshEvent {
     PeerChannel { peer: String, name: String },
     /// A peer shared its channel directory (union-merge into ours).
     PeerChannels { names: Vec<String> },
+    /// A peer deleted a channel from the shared directory (tombstone it).
+    PeerChannelRemoved { name: String },
     /// The post-quantum session with this peer is established.
     Secure { peer: String },
     /// A peer sent us the group-audio room key. `from` is the DTLS+PQC-
@@ -203,6 +208,21 @@ pub(crate) fn merge_channels(dir: &mut Vec<String>, add: &[String]) -> bool {
     grew
 }
 
+/// Remove the channel whose canonical form is `canon` from the directory `dir`.
+/// Returns true if it was present (and dropped).
+fn remove_from_dir(dir: &mut Vec<String>, canon: &str) -> bool {
+    let before = dir.len();
+    dir.retain(|d| canon_channel(d) != canon);
+    dir.len() != before
+}
+
+/// True if I or any roster member is currently tuned to the channel `canon` —
+/// such a channel must not be deleted (it's in use).
+fn channel_in_use(canon: &str, my_channel: &str, members: &HashMap<String, Member>) -> bool {
+    canon_channel(my_channel) == canon
+        || members.values().any(|m| canon_channel(&m.channel) == canon)
+}
+
 /// Shared channel (frequency) state: my tuned channel + each peer's announced
 /// channel. Lives behind an `Arc`; the mesh RX-gate consults it on the hot
 /// audio path, the engine updates it on switch / peer announce. Names are stored
@@ -284,6 +304,7 @@ enum Cmd {
     Rekey,
     Reconnect,
     SetChannel(String),
+    RemoveChannel(String),
 }
 
 /// Handle to the running engine; methods are non-blocking.
@@ -330,6 +351,11 @@ impl Engine {
     /// mesh DataChannels; you then only hear peers on the same channel.
     pub fn set_channel(&self, name: String) {
         let _ = self.cmd_tx.send(Cmd::SetChannel(name));
+    }
+    /// Delete an (empty) channel from the shared directory and tell every peer
+    /// to drop + tombstone it. No-op on the base channel or one in use.
+    pub fn remove_channel(&self, name: String) {
+        let _ = self.cmd_tx.send(Cmd::RemoveChannel(name));
     }
     /// Live capture-path DSP config (noise gate / compressor / limiter).
     pub fn set_dsp(&self, cfg: audio::DspConfig) {
@@ -587,6 +613,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         // whenever it grows, so a created channel reaches everyone — even peers
         // who join later or never tune to it.
         let mut known_channels: Vec<String> = vec![DEFAULT_CHANNEL.to_string()];
+        // Tombstones (canonical form): channels deleted from the directory. A
+        // directory broadcast can't resurrect a tombstoned channel; switching to
+        // a channel clears its tombstone (recreation).
+        let mut removed_channels: HashSet<String> = HashSet::new();
         // Highest group-audio key generation this node has minted (as authority)
         // or adopted (from the authority).
         let mut room_gen: u32 = 0;
@@ -771,14 +801,36 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         Some(MeshEvent::PeerChannels { names }) => {
-                            // A peer shared its directory. Union it in; if it grew,
-                            // persist + re-broadcast so a channel learned from one
-                            // peer reaches peers that peer isn't yet linked to, and
-                            // tell the UI to add the new entries to its switcher.
-                            if merge_channels(&mut known_channels, &names) {
+                            // A peer shared its directory. Union it in — but drop
+                            // any name we've tombstoned, so a stale directory can't
+                            // resurrect a deleted channel. If it grew, persist +
+                            // re-broadcast (transitive) and tell the UI.
+                            let fresh: Vec<String> = names
+                                .into_iter()
+                                .filter(|n| !removed_channels.contains(&canon_channel(n)))
+                                .collect();
+                            if merge_channels(&mut known_channels, &fresh) {
                                 chan.set_dir(known_channels.clone());
                                 mesh.broadcast_channels(&known_channels).await;
                                 sink(UiEvent::Channels { names: known_channels.clone() });
+                            }
+                        }
+                        Some(MeshEvent::PeerChannelRemoved { name }) => {
+                            // A peer deleted a channel. Honor it only if nobody here
+                            // is tuned to it (else it's still in use). Tombstone so a
+                            // later directory broadcast can't bring it back, drop it
+                            // from the directory, re-broadcast on first sight
+                            // (transitive), and tell the UI.
+                            let canon = canon_channel(&name);
+                            if !canon.is_empty()
+                                && canon != canon_channel(DEFAULT_CHANNEL)
+                                && !channel_in_use(&canon, &my_channel, &members)
+                                && removed_channels.insert(canon.clone())
+                            {
+                                remove_from_dir(&mut known_channels, &canon);
+                                chan.set_dir(known_channels.clone());
+                                mesh.broadcast_channel_removed(&canon).await;
+                                sink(UiEvent::ChannelRemoved { name: canon });
                             }
                         }
                         Some(MeshEvent::Secure { peer }) => {
@@ -860,6 +912,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             let name = if name.is_empty() { DEFAULT_CHANNEL.to_string() } else { name };
                             my_channel = name.clone();
                             chan.set_mine(name.clone());
+                            // Switching to a channel recreates it → clear any
+                            // tombstone so it can re-enter the shared directory.
+                            removed_channels.remove(&canon_channel(&name));
                             mesh.broadcast_channel(&name).await;
                             // Creating a channel means switching to it → fold it
                             // into the shared directory and push the grown set.
@@ -869,6 +924,22 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             }
                             sink(UiEvent::Channel { mine: name });
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                        }
+                        Some(Cmd::RemoveChannel(name)) => {
+                            // Delete an empty channel from the shared directory and
+                            // tell every peer to drop + tombstone it. Refuse the base
+                            // channel or one anyone is currently tuned to.
+                            let canon = canon_channel(&name);
+                            if !canon.is_empty()
+                                && canon != canon_channel(DEFAULT_CHANNEL)
+                                && !channel_in_use(&canon, &my_channel, &members)
+                            {
+                                removed_channels.insert(canon.clone());
+                                remove_from_dir(&mut known_channels, &canon);
+                                chan.set_dir(known_channels.clone());
+                                mesh.broadcast_channel_removed(&canon).await;
+                                sink(UiEvent::ChannelRemoved { name: canon });
+                            }
                         }
                         None => {
                             sink(UiEvent::Status { connected: false, transmitting: false });
@@ -937,5 +1008,23 @@ mod authority_tests {
             ["alice", "carol", "dave"].into_iter().map(|id| (id.to_string(), member())).collect();
         assert!(is_authority_peer("alice", "bob", &with_alice)); // accepted
         assert!(!is_authority_peer("carol", "bob", &with_alice)); // alice is smaller → carol rejected
+    }
+
+    fn member_on(ch: &str) -> Member {
+        Member { name: "n".into(), badge: None, speaking: false, channel: ch.into(), secure: false }
+    }
+
+    #[test]
+    fn channel_delete_helpers() {
+        let mut dir = vec!["Funk 1".to_string(), "Bravo".to_string()];
+        assert!(remove_from_dir(&mut dir, "bravo")); // present → dropped (canon match)
+        assert!(!dir.iter().any(|d| canon_channel(d) == "bravo"));
+        assert!(!remove_from_dir(&mut dir, "bravo")); // already gone → false
+
+        let mut members = HashMap::new();
+        members.insert("x".to_string(), member_on("Bravo"));
+        assert!(channel_in_use("bravo", "Funk 1", &members)); // a member is on it
+        assert!(channel_in_use("funk 1", "Funk 1", &members)); // I'm on it
+        assert!(!channel_in_use("charlie", "Funk 1", &members)); // nobody
     }
 }
