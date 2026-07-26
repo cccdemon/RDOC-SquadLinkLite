@@ -2,7 +2,7 @@
 
 All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
 
-## v0.1.36 — unreleased
+## v0.1.36 — 2026-07-26
 
 ### Fixed
 - **Gelöschte Funkkanäle verschwinden jetzt bei allen** — löscht ein Teilnehmer
