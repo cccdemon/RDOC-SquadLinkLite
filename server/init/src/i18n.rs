@@ -59,6 +59,43 @@ impl Lang {
     }
 }
 
+/// Screenshot gallery for the home page. Images live in the Caddy download dir
+/// as `shot-1.png` … `shot-6.png`. Captions are localized (EN fallback).
+pub fn screenshots(l: Lang, base: &str) -> String {
+    let (title, caps): (&str, [&str; 6]) = match l {
+        Lang::De => (
+            "Screenshots",
+            [
+                "In der Session — Kanäle, Squad-Liste, Push-to-Talk",
+                "Senden — zum Sprechen halten, pro Kanal",
+                "Start — Session hosten oder mit Link + PIN beitreten",
+                "Audio — Mikro, Push-to-Talk, App-Ducking, Funk-Klick",
+                "Experte — In-Game-Overlay, Cycle-Hotkeys, neu verschlüsseln",
+                "Verbindungs-Selbsttest",
+            ],
+        ),
+        _ => (
+            "Screenshots",
+            [
+                "In a session — channels, squad roster, push-to-talk",
+                "Transmitting — hold to talk, per channel",
+                "Start — host a session or join with link + PIN",
+                "Audio — mic, push-to-talk, app ducking, radio-click",
+                "Expert — in-game overlay, cycle hotkeys, re-encrypt",
+                "Connection self-check",
+            ],
+        ),
+    };
+    let mut grid = String::new();
+    for (i, cap) in caps.iter().enumerate() {
+        let n = i + 1;
+        grid.push_str(&format!(
+            r#"<figure class="shot"><a href="{base}/download/shot-{n}.png" target="_blank" rel="noopener"><img src="{base}/download/shot-{n}.png" alt="{cap}" loading="lazy"></a><figcaption>{cap}</figcaption></figure>"#
+        ));
+    }
+    format!(r#"<h2>{title}</h2><div class="shots">{grid}</div>"#)
+}
+
 /// Short social-share (OpenGraph) description, one line per language. No quotes
 /// or markup — it is injected verbatim into an `og:description` attribute.
 pub fn meta_desc(l: Lang) -> &'static str {
@@ -223,6 +260,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
             ),
         ),
     };
+    body.push_str(&screenshots(l, base));
     body.push_str(&credits(l));
     (title, body)
 }
