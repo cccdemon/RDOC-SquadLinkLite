@@ -1,0 +1,65 @@
+# Flatpak manifest for RDOC SquadLink Lite — the delivery path for SteamOS /
+# Steam Deck and the immutable gaming distros (Bazzite, ChimeraOS, …) where
+# .deb/.rpm don't apply and Flatpak is the native install channel.
+#
+# Rather than rebuild the Rust app inside the (offline) Flatpak sandbox, this
+# manifest unpacks the .deb that CI already built and installs its payload into
+# /app, renaming the .desktop / icons / metainfo to the Flatpak app-id. The .deb
+# is placed next to this manifest as `rdoc-squadlink-lite.deb` by the CI job.
+id: org.raumdock.SquadLinkLite
+runtime: org.gnome.Platform
+runtime-version: "47"
+sdk: org.gnome.Sdk
+# Executable name inside the .deb (usr/bin/rdoc-squadlink-lite).
+command: rdoc-squadlink-lite
+
+finish-args:
+  # Windowing: Wayland with an X11 fallback (Steam Deck Gaming Mode = Wayland).
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU for the WebKitGTK webview.
+  - --device=dri
+  # Audio in + out — this is a voice app. PipeWire (SteamOS, modern distros)
+  # exposes the PulseAudio socket; cpal records/plays through it.
+  - --socket=pulseaudio
+  # P2P media + signaling + the in-app update check.
+  - --share=network
+  # WebKitGTK 2.42+ DMABUF renderer is broken on many GPU/driver combos and
+  # shows a blank window; force the stable GL path (belt-and-suspenders — the
+  # binary also sets these itself if unset).
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
+  - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
+
+modules:
+  - name: rdoc-squadlink-lite
+    buildsystem: simple
+    build-commands:
+      # Crack the .deb (ar → data.tar.gz) and lay out its payload.
+      - ar x rdoc-squadlink-lite.deb
+      - tar -xf data.tar.gz
+      - install -Dm755 usr/bin/rdoc-squadlink-lite /app/bin/rdoc-squadlink-lite
+      # Icons, renamed to the Flatpak app-id at each installed size.
+      - install -Dm644 usr/share/icons/hicolor/32x32/apps/rdoc-squadlink-lite.png
+        /app/share/icons/hicolor/32x32/apps/${FLATPAK_ID}.png
+      - install -Dm644 usr/share/icons/hicolor/128x128/apps/rdoc-squadlink-lite.png
+        /app/share/icons/hicolor/128x128/apps/${FLATPAK_ID}.png
+      - install -Dm644 usr/share/icons/hicolor/256x256/apps/rdoc-squadlink-lite.png
+        /app/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+      - install -Dm644 "usr/share/icons/hicolor/256x256@2/apps/rdoc-squadlink-lite.png"
+        "/app/share/icons/hicolor/256x256@2/apps/${FLATPAK_ID}.png"
+      # Desktop entry, renamed to <app-id>.desktop and pointed at the renamed
+      # icon + given proper categories (the .deb ships an empty Categories=).
+      - install -Dm644 "usr/share/applications/RDOC SquadLink Lite.desktop"
+        /app/share/applications/${FLATPAK_ID}.desktop
+      - sed -i "s/^Icon=.*/Icon=${FLATPAK_ID}/" /app/share/applications/${FLATPAK_ID}.desktop
+      - sed -i "s/^Categories=.*/Categories=Network;AudioVideo;Game;/"
+        /app/share/applications/${FLATPAK_ID}.desktop
+      # AppStream metadata.
+      - install -Dm644 org.raumdock.SquadLinkLite.metainfo.xml
+        /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
+    sources:
+      - type: file
+        path: rdoc-squadlink-lite.deb
+      - type: file
+        path: org.raumdock.SquadLinkLite.metainfo.xml

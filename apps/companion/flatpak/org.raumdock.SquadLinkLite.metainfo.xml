@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for the Flatpak build. The Flatpak app-id must use a
+     valid D-Bus name (letters/digits/underscore per component, no hyphens), so
+     it is org.raumdock.SquadLinkLite even though the Tauri identifier / native
+     packages use org.raumdock.squadlink-lite. -->
+<component type="desktop-application">
+  <id>org.raumdock.SquadLinkLite</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
+
+  <name>RDOC SquadLink Lite</name>
+  <summary>Serverless peer-to-peer voice chat for small squads</summary>
+
+  <description>
+    <p>
+      RDOC SquadLink Lite is a serverless, peer-to-peer voice mesh for small
+      gaming squads. No account, no recording, no media server: voice and chat
+      flow directly between players over WebRTC (Opus, DTLS-SRTP), additionally
+      sealed with a post-quantum hybrid key. A tiny signaling service only helps
+      set up the connection and never sees your audio.
+    </p>
+    <ul>
+      <li>Push-to-talk, self-mute and deafen</li>
+      <li>Noise suppression, noise gate, compressor and limiter</li>
+      <li>Per-peer volume and audio device selection</li>
+      <li>Automatic reconnect; a signaling drop does not end the call</li>
+      <li>Low-bandwidth mode for weak connections</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">org.raumdock.SquadLinkLite.desktop</launchable>
+
+  <url type="homepage">https://squadlink.raumdock.org</url>
+  <url type="bugtracker">https://github.com/cccdemon/RDOC-SquadLinkLite/issues</url>
+  <url type="vcs-browser">https://github.com/cccdemon/RDOC-SquadLinkLite</url>
+
+  <developer id="org.raumdock">
+    <name>Raumdock</name>
+  </developer>
+
+  <categories>
+    <category>Network</category>
+    <category>AudioVideo</category>
+  </categories>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.1.36" date="2026-07-26"/>
+  </releases>
+</component>

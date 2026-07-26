@@ -1,0 +1,140 @@
+name: Build SquadLink Lite (Flatpak)
+
+# Builds the Flatpak bundle for SteamOS / Steam Deck and the immutable gaming
+# distros (Bazzite, ChimeraOS, Nobara atomic, …), where .deb/.rpm don't apply
+# and Flatpak is the native install channel.
+#
+# Two jobs: `deb` compiles the app natively (real webkit2gtk link) and uploads
+# the .deb; `flatpak` unpacks that .deb inside the GNOME 47 SDK and installs the
+# payload into /app via apps/companion/flatpak/org.raumdock.SquadLinkLite.yml.
+#
+# - push to main / manual run       → uploads the .flatpak as a workflow artifact
+# - push a tag `squadlink-lite-v*`  → also attaches the .flatpak to the Release
+#
+# The build is UNSIGNED (no Flatpak GPG signing) — a single-file bundle users
+# install with `flatpak install ./rdoc-squadlink-lite.flatpak`.
+
+on:
+  push:
+    branches: [main]
+    tags: ["squadlink-lite-v*"]
+    paths:
+      - "apps/companion/**"
+      - "apps/companion-core/**"
+      - "crates/**"
+      - ".github/workflows/build-companion-flatpak.yml"
+  workflow_dispatch:
+
+jobs:
+  # ── 1. Native .deb build (amd64) ────────────────────────────────────────────
+  deb:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            libopus-dev \
+            libssl-dev \
+            patchelf \
+            file \
+            wget \
+            build-essential \
+            curl \
+            xdg-utils \
+            desktop-file-utils
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/companion/pnpm-lock.yaml
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/companion/src-tauri -> target
+          key: flatpak-amd64
+
+      - name: Install frontend deps (reproducible)
+        working-directory: apps/companion
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app (.deb only)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/companion
+          args: --bundles deb
+
+      - name: Stage the .deb for the Flatpak job
+        run: |
+          deb=$(find apps/companion/src-tauri/target/release/bundle/deb -name '*.deb' | head -n1)
+          echo "Found: $deb"
+          test -n "$deb"
+          cp "$deb" rdoc-squadlink-lite.deb
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: squadlink-deb-amd64
+          if-no-files-found: error
+          path: rdoc-squadlink-lite.deb
+
+  # ── 2. Flatpak bundle from the .deb ─────────────────────────────────────────
+  flatpak:
+    needs: deb
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # attach the .flatpak to a Release on a tag
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-47
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the .deb built in job 1
+        uses: actions/download-artifact@v4
+        with:
+          name: squadlink-deb-amd64
+          path: apps/companion/flatpak
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: rdoc-squadlink-lite.flatpak
+          manifest-path: apps/companion/flatpak/org.raumdock.SquadLinkLite.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          arch: x86_64
+          upload-artifact: true
+
+      - name: SHA-256 checksum
+        if: always()
+        run: |
+          if [ -f rdoc-squadlink-lite.flatpak ]; then
+            sha256sum rdoc-squadlink-lite.flatpak | tee SHA256SUMS-flatpak.txt
+          fi
+
+      - name: Attach bundle to Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            rdoc-squadlink-lite.flatpak SHA256SUMS-flatpak.txt \
+            --clobber --repo "${{ github.repository }}"
