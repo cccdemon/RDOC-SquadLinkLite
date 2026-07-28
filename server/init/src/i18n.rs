@@ -14,6 +14,9 @@ pub const GITHUB_URL: &str = "https://github.com/cccdemon/RDOC-SquadLinkLite";
 pub const RAUMDOCK_URL: &str = "https://raumdock.org";
 /// Microsoft Store product page (Store ID 9N9NR49QFBF4) — the recommended,
 /// code-signed install path. The direct/unsigned installer stays as a fallback.
+///
+/// Survives the rename: the listing was renamed in place to
+/// "Subraum Communicator", so the Store ID and package identity are unchanged.
 pub const STORE_URL: &str = "https://apps.microsoft.com/detail/9N9NR49QFBF4";
 pub const FLEET_URL: &str = "https://suite.raumdock.org/fleetplanner";
 
@@ -162,8 +165,10 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
         Lang::En => (
             "What is this?",
             format!(
-                r#"<h1>RDOC SquadLink Lite</h1>
+                r#"<h1>subraum</h1>
+<p class="tagline">encrypted communication</p>
 <p>A simple peer-to-peer voice chat for small groups. Push-to-talk, no account, no recording, encrypted.</p>
+<p class="muted">Previously released as <b>SquadLink Lite</b>. Renamed to subraum because an unrelated app already goes by "SquadLink" — the rename avoids the confusion. Same app, same team.</p>
 <p>Voice flows directly between players (WebRTC/Opus). There is no server listening in — a small service only sets up the connection.</p>
 <h2>How it works</h2>
 <ul>
@@ -183,8 +188,10 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
         Lang::De => (
             "Was ist das?",
             format!(
-                r#"<h1>RDOC SquadLink Lite</h1>
+                r#"<h1>subraum</h1>
+<p class="tagline">encrypted communication</p>
 <p>Ein einfacher Peer-to-Peer-Voice-Chat für kleine Gruppen. Push-to-Talk, ohne Account, ohne Aufnahme, verschlüsselt.</p>
+<p class="muted">Früher veröffentlicht als <b>SquadLink Lite</b>. Umbenannt in subraum, weil bereits eine andere App den Namen „SquadLink" trägt — die Umbenennung schließt Verwechslungen aus. Gleiche App, gleiches Team.</p>
 <p>Die Stimme läuft direkt zwischen den Spielern (WebRTC/Opus). Es gibt keinen Server, der mithört — ein kleiner Dienst stellt nur die Verbindung her.</p>
 <h2>So funktioniert es</h2>
 <ul>
@@ -204,8 +211,10 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
         Lang::It => (
             "Cos'è?",
             format!(
-                r#"<h1>RDOC SquadLink Lite</h1>
+                r#"<h1>subraum</h1>
+<p class="tagline">encrypted communication</p>
 <p>Una semplice chat vocale peer-to-peer per piccoli gruppi. Push-to-talk, senza account, senza registrazione, cifrata.</p>
+<p class="muted">Pubblicata in precedenza come <b>SquadLink Lite</b>. Rinominata in subraum perché esiste già un'altra app chiamata "SquadLink" — il cambio di nome evita ogni confusione. Stessa app, stesso team.</p>
 <p>La voce passa direttamente tra i giocatori (WebRTC/Opus). Nessun server in ascolto — un piccolo servizio stabilisce solo la connessione.</p>
 <h2>Come funziona</h2>
 <ul>
@@ -225,8 +234,10 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
         Lang::Es => (
             "¿Qué es esto?",
             format!(
-                r#"<h1>RDOC SquadLink Lite</h1>
+                r#"<h1>subraum</h1>
+<p class="tagline">encrypted communication</p>
 <p>Un chat de voz peer-to-peer sencillo para grupos pequeños. Pulsar para hablar, sin cuenta, sin grabación, cifrado.</p>
+<p class="muted">Publicada anteriormente como <b>SquadLink Lite</b>. Renombrada a subraum porque ya existe otra aplicación llamada "SquadLink" — el cambio de nombre evita confusiones. La misma app, el mismo equipo.</p>
 <p>La voz viaja directamente entre los jugadores (WebRTC/Opus). Ningún servidor escucha — un pequeño servicio solo establece la conexión.</p>
 <h2>Cómo funciona</h2>
 <ul>
@@ -246,8 +257,10 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
         Lang::Fr => (
             "Qu'est-ce que c'est ?",
             format!(
-                r#"<h1>RDOC SquadLink Lite</h1>
+                r#"<h1>subraum</h1>
+<p class="tagline">encrypted communication</p>
 <p>Un chat vocal pair-à-pair simple pour petits groupes. Push-to-talk, sans compte, sans enregistrement, chiffré.</p>
+<p class="muted">Publiée auparavant sous le nom <b>SquadLink Lite</b>. Renommée subraum car une autre application porte déjà le nom « SquadLink » — ce changement évite toute confusion. Même app, même équipe.</p>
 <p>La voix circule directement entre les joueurs (WebRTC/Opus). Aucun serveur n'écoute — un petit service établit seulement la connexion.</p>
 <h2>Comment ça marche</h2>
 <ul>
@@ -483,7 +496,7 @@ pub fn license(l: Lang) -> (&'static str, String) {
     let body = |intro: &str, h: &str, b1: &str, b2: &str, b3: &str, b4: &str, ch: &str, ct: &str, mail: &str, sumh: &str, full: &str, foot: &str| {
         format!(
             r#"<h1>{intro}</h1>
-<p>RDOC SquadLink Lite — <b>PolyForm Noncommercial License 1.0.0</b>.</p>
+<p>subraum — <b>PolyForm Noncommercial License 1.0.0</b>.</p>
 <h2>{h}</h2>
 <ul><li>{b1}</li><li>{b2}</li><li>{b3}</li><li>{b4}</li></ul>
 <h2>{ch}</h2>
@@ -549,7 +562,8 @@ pub fn landing(l: Lang, base: &str, code: &str) -> String {
         Lang::Fr => ("Vous avez \u{e9}t\u{e9} invit\u{e9} \u{e0} une session vocale.", "Code de session :", "Installez l'app \u{2014} Microsoft Store recommand\u{e9}.", "Ouvrez l'app \u{2192} Rejoindre \u{2192} saisissez le code + le PIN \u{e0} 6 chiffres (de l'h\u{f4}te).", "Obtenir sur le Microsoft Store", "T\u{e9}l\u{e9}chargement direct (installeur non sign\u{e9})", "L'installeur direct n'est pas sign\u{e9}, donc Windows SmartScreen affiche un avertissement. Pour installer quand m\u{ea}me : \u{ab} Informations compl\u{e9}mentaires \u{bb} \u{2192} \u{ab} Ex\u{e9}cuter quand m\u{ea}me \u{bb}. La version du Microsoft Store n'affiche aucun avertissement.", "L'audio est direct pair-\u{e0}-pair (chiffr\u{e9}). Le serveur ne fait que l'interm\u{e9}diaire."),
     };
     format!(
-        r#"<h1>RDOC SquadLink Lite</h1>
+        r#"<h1>subraum</h1>
+<p class="tagline">encrypted communication</p>
 <p>{intro}</p>
 <p class="muted">{codelbl}</p>
 <p class="code">{code}</p>
@@ -567,7 +581,7 @@ pub fn landing(l: Lang, base: &str, code: &str) -> String {
 // ── Long page bodies kept as constants for readability ───────────────────────
 
 const PRIVACY_EN: &str = r#"<h1>Privacy</h1>
-<p class="muted">RDOC SquadLink Lite is built for data minimisation.</p>
+<p class="muted">subraum is built for data minimisation.</p>
 <h2>What does NOT happen</h2>
 <ul>
 <li><b>No audio/chat recording.</b> Voice and text are peer-to-peer (DTLS-SRTP / encrypted DataChannel) and are stored nowhere.</li>
@@ -587,7 +601,7 @@ const PRIVACY_EN: &str = r#"<h1>Privacy</h1>
 <p>Controller: see the <a href="/legal?lang=en">legal notice</a>. Requests via <a href="https://raumdock.org">raumdock.org</a>.</p>"#;
 
 const PRIVACY_DE: &str = r#"<h1>Datenschutzerklärung</h1>
-<p class="muted">RDOC SquadLink Lite ist auf Datensparsamkeit ausgelegt.</p>
+<p class="muted">subraum ist auf Datensparsamkeit ausgelegt.</p>
 <h2>Was NICHT passiert</h2>
 <ul>
 <li><b>Keine Audio-/Chat-Aufzeichnung.</b> Sprache und Text laufen Peer-to-Peer (DTLS-SRTP bzw. verschlüsselter DataChannel) und werden nirgends gespeichert.</li>
@@ -607,7 +621,7 @@ const PRIVACY_DE: &str = r#"<h1>Datenschutzerklärung</h1>
 <p>Verantwortlich: siehe <a href="/legal?lang=de">Impressum</a>. Anfragen über <a href="https://raumdock.org">raumdock.org</a>.</p>"#;
 
 const PRIVACY_IT: &str = r#"<h1>Privacy</h1>
-<p class="muted">RDOC SquadLink Lite è progettato per la minimizzazione dei dati.</p>
+<p class="muted">subraum è progettato per la minimizzazione dei dati.</p>
 <h2>Cosa NON accade</h2>
 <ul>
 <li><b>Nessuna registrazione audio/chat.</b> Voce e testo sono peer-to-peer (DTLS-SRTP / DataChannel cifrato) e non vengono memorizzati da nessuna parte.</li>
@@ -627,7 +641,7 @@ const PRIVACY_IT: &str = r#"<h1>Privacy</h1>
 <p>Titolare: vedi <a href="/legal?lang=it">note legali</a>. Richieste tramite <a href="https://raumdock.org">raumdock.org</a>.</p>"#;
 
 const PRIVACY_ES: &str = r#"<h1>Privacidad</h1>
-<p class="muted">RDOC SquadLink Lite está diseñado para minimizar los datos.</p>
+<p class="muted">subraum está diseñado para minimizar los datos.</p>
 <h2>Lo que NO ocurre</h2>
 <ul>
 <li><b>Sin grabación de audio/chat.</b> La voz y el texto son peer-to-peer (DTLS-SRTP / DataChannel cifrado) y no se almacenan en ningún sitio.</li>
@@ -647,7 +661,7 @@ const PRIVACY_ES: &str = r#"<h1>Privacidad</h1>
 <p>Responsable: ver <a href="/legal?lang=es">aviso legal</a>. Solicitudes vía <a href="https://raumdock.org">raumdock.org</a>.</p>"#;
 
 const PRIVACY_FR: &str = r#"<h1>Confidentialité</h1>
-<p class="muted">RDOC SquadLink Lite est conçu pour la minimisation des données.</p>
+<p class="muted">subraum est conçu pour la minimisation des données.</p>
 <h2>Ce qui n'arrive PAS</h2>
 <ul>
 <li><b>Aucun enregistrement audio/chat.</b> La voix et le texte sont pair-à-pair (DTLS-SRTP / DataChannel chiffré) et ne sont stockés nulle part.</li>
@@ -667,7 +681,7 @@ const PRIVACY_FR: &str = r#"<h1>Confidentialité</h1>
 <p>Responsable : voir les <a href="/legal?lang=fr">mentions légales</a>. Demandes via <a href="https://raumdock.org">raumdock.org</a>.</p>"#;
 
 const LEGAL_EN: &str = r#"<h1>Legal notice</h1>
-<p>RDOC SquadLink Lite is a non-commercial community project (<a href="https://raumdock.org">raumdock.org</a>).</p>
+<p>subraum is a non-commercial community project (<a href="https://raumdock.org">raumdock.org</a>).</p>
 <h2>Authors</h2>
 <p>head87x &amp; justcallmedeimos</p>
 <h2>Provider</h2>
@@ -676,7 +690,7 @@ const LEGAL_EN: &str = r#"<h1>Legal notice</h1>
 <p>The software is provided "as is", without warranty or liability (see the <a href="/license?lang=en">license</a>). The operators of linked external sites are responsible for their content.</p>"#;
 
 const LEGAL_DE: &str = r#"<h1>Impressum / Rechtliches</h1>
-<p>RDOC SquadLink Lite ist ein nicht-kommerzielles Community-Projekt (<a href="https://raumdock.org">raumdock.org</a>).</p>
+<p>subraum ist ein nicht-kommerzielles Community-Projekt (<a href="https://raumdock.org">raumdock.org</a>).</p>
 <h2>Autoren</h2>
 <p>head87x &amp; justcallmedeimos</p>
 <h2>Anbieter</h2>
@@ -685,7 +699,7 @@ const LEGAL_DE: &str = r#"<h1>Impressum / Rechtliches</h1>
 <p>Die Software wird „wie besehen", ohne Gewähr und ohne Haftung bereitgestellt (siehe <a href="/license?lang=de">Lizenz</a>). Für Inhalte verlinkter externer Seiten sind deren Betreiber verantwortlich.</p>"#;
 
 const LEGAL_IT: &str = r#"<h1>Note legali</h1>
-<p>RDOC SquadLink Lite è un progetto di community non commerciale (<a href="https://raumdock.org">raumdock.org</a>).</p>
+<p>subraum è un progetto di community non commerciale (<a href="https://raumdock.org">raumdock.org</a>).</p>
 <h2>Autori</h2>
 <p>head87x &amp; justcallmedeimos</p>
 <h2>Fornitore</h2>
@@ -694,7 +708,7 @@ const LEGAL_IT: &str = r#"<h1>Note legali</h1>
 <p>Il software è fornito "così com'è", senza garanzie né responsabilità (vedi <a href="/license?lang=it">licenza</a>). I gestori dei siti esterni collegati sono responsabili dei loro contenuti.</p>"#;
 
 const LEGAL_ES: &str = r#"<h1>Aviso legal</h1>
-<p>RDOC SquadLink Lite es un proyecto comunitario no comercial (<a href="https://raumdock.org">raumdock.org</a>).</p>
+<p>subraum es un proyecto comunitario no comercial (<a href="https://raumdock.org">raumdock.org</a>).</p>
 <h2>Autores</h2>
 <p>head87x &amp; justcallmedeimos</p>
 <h2>Proveedor</h2>
@@ -703,7 +717,7 @@ const LEGAL_ES: &str = r#"<h1>Aviso legal</h1>
 <p>El software se ofrece "tal cual", sin garantía ni responsabilidad (ver <a href="/license?lang=es">licencia</a>). Los operadores de los sitios externos enlazados son responsables de su contenido.</p>"#;
 
 const LEGAL_FR: &str = r#"<h1>Mentions légales</h1>
-<p>RDOC SquadLink Lite est un projet communautaire non commercial (<a href="https://raumdock.org">raumdock.org</a>).</p>
+<p>subraum est un projet communautaire non commercial (<a href="https://raumdock.org">raumdock.org</a>).</p>
 <h2>Auteurs</h2>
 <p>head87x &amp; justcallmedeimos</p>
 <h2>Fournisseur</h2>

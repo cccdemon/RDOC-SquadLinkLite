@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "RDOC SquadLink Lite",
-  "version": "0.1.36",
-  "identifier": "org.raumdock.squadlink-lite",
+  "productName": "subraum",
+  "version": "0.2.0",
+  "identifier": "org.raumdock.subraum",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "RDOC SquadLink Lite",
+        "title": "subraum",
         "width": 960,
         "height": 800,
         "minWidth": 720,
@@ -22,13 +22,13 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://squadlink.raumdock.org wss://squadlink.raumdock.org https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://subraum.cc wss://subraum.cc https://squadlink.raumdock.org wss://squadlink.raumdock.org https://api.github.com https://raw.githubusercontent.com; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["squadlink"]
+        "schemes": ["subraum", "squadlink"]
       }
     }
   },

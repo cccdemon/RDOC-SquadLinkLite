@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  MSIX package manifest for RDOC SquadLink Lite (Microsoft Store, Weg B).
+  MSIX package manifest for subraum (Microsoft Store, Weg B).
   Tauri has no MSIX bundle target → this is packed manually with makeappx.
   See docs/MSIX-PACKAGING.md.
 
@@ -17,6 +17,15 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
+  <!-- DO NOT RENAME `Name` — it is assigned by the Store, not chosen by us, and
+       it keeps the pre-rename spelling on purpose. The Store listing was renamed
+       to "Subraum Communicator" in place, so the package family
+       (raumdock.org.RDOC-SquadLinkLite_ygen2gzj5h81m) and Store ID 9N9NR49QFBF4
+       carry over — which is what lets existing Store installs keep updating.
+       Changing it would create a different package family and orphan them.
+       Verified against Partner Center → App management → Product identity.
+       Version is rewritten by CI from tauri.conf.json ("Sync AppxManifest
+       version to app version"), so the value here is only a placeholder. -->
   <Identity
     Name="raumdock.org.RDOC-SquadLinkLite"
     Publisher="CN=1889C9C8-C357-4F28-BCFC-DFE786BD3996"
@@ -24,8 +33,11 @@
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <!-- MUST exactly match a reserved app name in Partner Center. -->
-    <DisplayName>RDOC-SquadLink Lite</DisplayName>
+    <!-- MUST exactly match a reserved app name in Partner Center. Reserved name
+         is "Subraum Communicator" (capital S — the Store listing name differs
+         from the lowercase product wordmark used in the app itself). The
+         tile/start-menu name below stays the short "subraum". -->
+    <DisplayName>Subraum Communicator</DisplayName>
     <PublisherDisplayName>raumdock.org</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -40,12 +52,12 @@
   </Resources>
 
   <Applications>
-    <Application Id="SquadLinkLite"
-      Executable="rdoc-squadlink-lite.exe"
+    <Application Id="Subraum"
+      Executable="subraum.exe"
       EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="RDOC SquadLink Lite"
-        Description="P2P Voice + Chat für Crews — Ende-zu-Ende verschlüsselt."
+        DisplayName="subraum"
+        Description="P2P Voice + Chat für Crews — Ende-zu-Ende verschlüsselt. Früher SquadLink Lite; umbenannt, weil bereits eine andere App „SquadLink&quot; heißt."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
@@ -53,11 +65,18 @@
       </uap:VisualElements>
 
       <Extensions>
-        <!-- squadlink:// deep link. In a packaged build this REPLACES the registry
+        <!-- subraum:// deep link. In a packaged build this REPLACES the registry
              scheme; main.rs skips register_all() when running inside the package. -->
         <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="subraum">
+            <uap:DisplayName>subraum</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+        <!-- Pre-rename scheme, kept so links handed out as squadlink:// still
+             launch the app. Same payload format; the frontend accepts both. -->
+        <uap:Extension Category="windows.protocol">
           <uap:Protocol Name="squadlink">
-            <uap:DisplayName>SquadLink Lite</uap:DisplayName>
+            <uap:DisplayName>subraum (SquadLink Lite link)</uap:DisplayName>
           </uap:Protocol>
         </uap:Extension>
       </Extensions>

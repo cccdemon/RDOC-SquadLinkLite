@@ -1,7 +1,7 @@
 # Konzept — Video, Camera & Filesharing (optional)
 
 > Status: **Konzept** (2026-06-08). Noch nicht implementiert. Erweitert RDOC
-> SquadLink Lite von Voice+Chat zu optionalem „Voice, Video & Filesharing".
+> subraum von Voice+Chat zu optionalem „Voice, Video & Filesharing".
 > Bestehender Voice-only-Flow bleibt unverändert. P2P-first/WebRTC bleibt.
 > Verwandt: [TURN-Relay-Konzept](TURN-RELAY-FALLBACK-CONCEPT.md),
 > [Browser-Participant-Konzept](../apps/web-participant/CONCEPT.md).

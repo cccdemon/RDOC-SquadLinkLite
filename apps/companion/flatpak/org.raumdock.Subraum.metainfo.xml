@@ -1,23 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AppStream metadata for the Flatpak build. The Flatpak app-id must use a
      valid D-Bus name (letters/digits/underscore per component, no hyphens), so
-     it is org.raumdock.SquadLinkLite even though the Tauri identifier / native
-     packages use org.raumdock.squadlink-lite. -->
+     it is org.raumdock.Subraum even though the Tauri identifier / native
+     packages use org.raumdock.subraum. -->
 <component type="desktop-application">
-  <id>org.raumdock.SquadLinkLite</id>
+  <id>org.raumdock.Subraum</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-PolyForm-Noncommercial-1.0.0</project_license>
 
-  <name>RDOC SquadLink Lite</name>
-  <summary>Serverless peer-to-peer voice chat for small squads</summary>
+  <name>subraum</name>
+  <summary>Encrypted peer-to-peer voice chat for small squads</summary>
 
   <description>
     <p>
-      RDOC SquadLink Lite is a serverless, peer-to-peer voice mesh for small
+      subraum is a serverless, peer-to-peer voice mesh for small
       gaming squads. No account, no recording, no media server: voice and chat
       flow directly between players over WebRTC (Opus, DTLS-SRTP), additionally
       sealed with a post-quantum hybrid key. A tiny signaling service only helps
       set up the connection and never sees your audio.
+    </p>
+    <p>
+      subraum was previously released as SquadLink Lite. It was renamed because an
+      unrelated application already goes by the name "SquadLink"; the rename rules
+      out any confusion between the two. Same application, same developers.
     </p>
     <ul>
       <li>Push-to-talk, self-mute and deafen</li>
@@ -28,9 +33,9 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">org.raumdock.SquadLinkLite.desktop</launchable>
+  <launchable type="desktop-id">org.raumdock.Subraum.desktop</launchable>
 
-  <url type="homepage">https://squadlink.raumdock.org</url>
+  <url type="homepage">https://subraum.cc</url>
   <url type="bugtracker">https://github.com/cccdemon/RDOC-SquadLinkLite/issues</url>
   <url type="vcs-browser">https://github.com/cccdemon/RDOC-SquadLinkLite</url>
 
@@ -49,6 +54,7 @@
   </content_rating>
 
   <releases>
+    <release version="0.2.0" date="2026-07-28"/>
     <release version="0.1.36" date="2026-07-26"/>
   </releases>
 </component>

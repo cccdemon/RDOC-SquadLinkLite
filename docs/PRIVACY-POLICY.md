@@ -1,8 +1,8 @@
-# Datenschutzerklärung — RDOC SquadLink Lite
+# Datenschutzerklärung — subraum
 
 _Stand: 2026-06-11_
 
-RDOC SquadLink Lite ("die App") ist eine Desktop-Anwendung für verschlüsselte
+subraum ("die App") ist eine Desktop-Anwendung für verschlüsselte
 Peer-to-Peer-Sprach- und Textkommunikation. Diese Erklärung beschreibt, welche Daten
 die App verarbeitet.
 
@@ -26,7 +26,7 @@ Raumdock (RDOC) — Kontakt: <kontakt@raumdock.org>
 
 ## Server
 
-- **Signaling-Server** (`squadlink.raumdock.org`): vermittelt den Verbindungsaufbau.
+- **Signaling-Server** (`subraum.cc`): vermittelt den Verbindungsaufbau.
   Sieht keine entschlüsselten Audio- oder Chat-Inhalte.
 - **Update-Prüfung**: die App fragt die öffentliche GitHub-Releases-API ab, um auf
   neue Versionen hinzuweisen. Dabei werden keine personenbezogenen Daten übertragen.
@@ -59,5 +59,5 @@ Aktualisierungen dieser Erklärung werden an dieser Stelle veröffentlicht.
 ---
 
 > **TODO vor Store-Submit:** Kontakt-Adresse prüfen, an stabiler URL veröffentlichen
-> (z. B. `https://squadlink.raumdock.org/privacy`) und ggf. englische Fassung
+> (z. B. `https://subraum.cc/privacy`) und ggf. englische Fassung
 > hinzufügen. URL ins Partner-Center-Listing eintragen.

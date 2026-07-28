@@ -25,7 +25,7 @@ ob er sie nutzt.
 
 > ⚠️ **Verhaltensänderung:** Heute ist TURN faktisch *an*, wenn der Server Creds
 > schickt. Neuer Default = *aus*. Praktisch betrifft das nur den Heim-VM-Deploy
-> (coturn aktiv); die Front-Door (`squadlink.raumdock.org`) ist STUN-only und
+> (coturn aktiv); die Front-Door (`subraum.cc`) ist STUN-only und
 > schickt kein `Turn` → dort keine Änderung.
 
 ## 8. Doku: Corporate-/restriktive-Netzwerk-Nutzung

@@ -4,7 +4,7 @@ Chosen path: **MSIX (packaged)**. Microsoft signs the package on submission, so 
 own code-signing certificate is needed for the Store. Tradeoffs already handled in
 code:
 
-- `squadlink://` is declared in the **package manifest** (not the registry) —
+- `subraum://` is declared in the **package manifest** (not the registry) —
   [`apps/companion/msix/AppxManifest.xml`](../apps/companion/msix/AppxManifest.xml).
   `main.rs` skips `register_all()` when it detects it runs inside a package.
 - The **self-update prompt is hidden** in packaged builds (`is_store_build` command →
@@ -15,7 +15,7 @@ code:
 > EXE/MSI flow does **not** apply here.
 
 > **Switching from an existing EXE/MSI submission:** the product type is fixed at
-> creation. To reuse the reserved name "RDOC SquadLink Lite", delete the EXE/MSI
+> creation. To reuse the reserved name "subraum", delete the EXE/MSI
 > product, then create a new **App** product (which accepts MSIX) and reserve the same
 > name.
 
@@ -25,7 +25,7 @@ Once `AppxManifest.xml` placeholders are filled (§2), one command builds + pack
 
 ```powershell
 # from repo root
-pwsh apps/companion/msix/pack.ps1            # → apps/companion/msix/RDOCSquadLinkLite_<ver>_x64.msix
+pwsh apps/companion/msix/pack.ps1            # → apps/companion/msix/Subraum_<ver>_x64.msix
 pwsh apps/companion/msix/pack.ps1 -SelfSign  # + self-sign for local install testing
 ```
 
@@ -53,7 +53,7 @@ pnpm install --frozen-lockfile
 pnpm tauri build
 ```
 
-The release binary lands in `apps/companion/src-tauri/target/release/rdoc-squadlink-lite.exe`.
+The release binary lands in `apps/companion/src-tauri/target/release/subraum.exe`.
 The frontend is embedded in the exe; the only external runtime dependency is the
 WebView2 runtime (Evergreen — present on Windows 11; do not bundle).
 
@@ -86,12 +86,12 @@ Remove-Item $stage -Recurse -Force -ErrorAction Ignore
 New-Item -ItemType Directory $stage, "$stage\Assets" | Out-Null
 
 Copy-Item apps/companion/msix/AppxManifest.xml $stage\
-Copy-Item apps/companion/src-tauri/target/release/rdoc-squadlink-lite.exe $stage\
+Copy-Item apps/companion/src-tauri/target/release/subraum.exe $stage\
 # WebView2Loader.dll only if your build emits one next to the exe:
 # Copy-Item apps/companion/src-tauri/target/release/WebView2Loader.dll $stage\ -ErrorAction Ignore
 Copy-Item path\to\assets\*.png $stage\Assets\
 
-& "$env:WindowsSdkVerBinPath\x64\makeappx.exe" pack /d $stage /p RDOCSquadLinkLite.msix /o
+& "$env:WindowsSdkVerBinPath\x64\makeappx.exe" pack /d $stage /p Subraum.msix /o
 ```
 
 ## 5. Local test (self-signed — Store submission does NOT need this)
@@ -102,20 +102,20 @@ cert whose Subject exactly equals the manifest `Publisher`:
 ```powershell
 $pub = "CN=REPLACE-WITH-PARTNER-CENTER-PUBLISHER"
 $cert = New-SelfSignedCertificate -Type Custom -Subject $pub -KeyUsage DigitalSignature `
-  -FriendlyName SquadLinkTest -CertStoreLocation "Cert:\CurrentUser\My" `
+  -FriendlyName subraumTest -CertStoreLocation "Cert:\CurrentUser\My" `
   -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
 
-& signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint RDOCSquadLinkLite.msix
+& signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint Subraum.msix
 
 # Trust the cert, then install:
-Export-Certificate -Cert $cert -FilePath squadlink-test.cer
-Import-Certificate -FilePath squadlink-test.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
-Add-AppxPackage RDOCSquadLinkLite.msix
+Export-Certificate -Cert $cert -FilePath subraum-test.cer
+Import-Certificate -FilePath subraum-test.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+Add-AppxPackage Subraum.msix
 ```
 
 Test checklist:
 - App launches, mic consent prompt appears, voice + chat work.
-- `start squadlink://connect?ws=...&room=...&token=...` activates the app + auto-connects.
+- `start subraum://connect?ws=...&room=...&token=...` activates the app + auto-connects.
 - Update banner is **absent** (Store build).
 
 ## 6. WACK (certification self-check)
@@ -133,7 +133,7 @@ Partner Center → your product (MSIX/PWA app) → **Packages** → upload the *
 `.msix` (Store re-signs). Complete: privacy policy URL ([PRIVACY-POLICY.md](PRIVACY-POLICY.md)),
 age rating (declare voice/text comms), listing, screenshots. In **Notes for
 certification** explain: global keyboard hook = in-game push-to-talk; microphone =
-voice chat; `squadlink://` = one-click join from the Fleetplanner.
+voice chat; `subraum://` = one-click join from the Fleetplanner.
 
 ---
 

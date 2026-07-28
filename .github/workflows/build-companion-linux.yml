@@ -1,11 +1,11 @@
-name: Build SquadLink Lite (Linux)
+name: Build subraum (Linux)
 
-# Builds the RDOC SquadLink Lite desktop app (Tauri GUI) for Linux on clean
+# Builds the subraum desktop app (Tauri GUI) for Linux on clean
 # runners — one job per architecture, native (no cross-compile), so the
 # webkit2gtk link is real and the binary is trustworthy.
 #
 # - push to main / manual run        → builds + uploads bundles as workflow artifacts
-# - push a tag `squadlink-lite-v*`   → also attaches the bundles to the GitHub Release
+# - push a tag `subraum-v*`   → also attaches the bundles to the GitHub Release
 #
 # Output formats: .deb, .rpm, .AppImage  (amd64 + arm64).
 # The build is UNSIGNED — distro package managers / AppImage will not show a
@@ -14,7 +14,7 @@ name: Build SquadLink Lite (Linux)
 on:
   push:
     branches: [main]
-    tags: ["squadlink-lite-v*"]
+    tags: ["subraum-v*"]
     paths:
       - "apps/companion/**"
       - "apps/companion-core/**"
@@ -98,11 +98,11 @@ jobs:
           # Override the Windows-only targets in tauri.conf.json with Linux formats.
           args: --target ${{ matrix.rust_target }} --bundles deb,rpm,appimage
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: RDOC SquadLink Lite ${{ github.ref_name }}
+          releaseName: subraum ${{ github.ref_name }}
           releaseDraft: false
           prerelease: true
           releaseBody: |
-            RDOC SquadLink Lite prototype build (Linux ${{ matrix.arch }}).
+            subraum prototype build (Linux ${{ matrix.arch }}).
             Unsigned prototype — .deb / .rpm / .AppImage.
 
       # SHA-256 of every bundle → users can verify the download matches CI.
@@ -129,7 +129,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rdoc-squadlink-lite-linux-${{ matrix.arch }}
+          name: subraum-linux-${{ matrix.arch }}
           if-no-files-found: warn
           path: |
             apps/companion/src-tauri/target/${{ matrix.rust_target }}/release/bundle/deb/*.deb

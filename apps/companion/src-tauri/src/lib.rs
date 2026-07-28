@@ -1,4 +1,4 @@
-//! Tauri shell for RDOC SquadLink Lite. Thin layer over companion-core: commands
+//! Tauri shell for subraum. Thin layer over companion-core: commands
 //! drive the engine, engine state is forwarded to the webview as "ui" events.
 //!
 //! Entry point is `run()` — desktop `main.rs` calls it directly; on mobile
@@ -356,7 +356,7 @@ mod raw_input {
 
     pub unsafe fn run() {
         let hinstance = GetModuleHandleW(null_mut());
-        let class_name: Vec<u16> = "SquadLinkRawInput\0".encode_utf16().collect();
+        let class_name: Vec<u16> = "subraumRawInput\0".encode_utf16().collect();
         let mut wc: WNDCLASSW = std::mem::zeroed();
         wc.lpfnWndProc = Some(wndproc);
         wc.hInstance = hinstance;
@@ -547,7 +547,7 @@ mod raw_input {
     }
 }
 
-// ── Audio ducking: lower other apps' volume while SquadLink voice is active ───
+// ── Audio ducking: lower other apps' volume while subraum voice is active ───
 // Windows-only (WASAPI per-session volume). The frontend drives `set_ducking`
 // from the combined "I'm transmitting OR a peer is speaking" state.
 #[cfg(windows)]
@@ -996,9 +996,20 @@ fn pending_deeplink() -> &'static Mutex<Option<String>> {
     PENDING_DEEPLINK.get_or_init(|| Mutex::new(None))
 }
 
+/// Deep-link schemes we answer to. `subraum://` is current; `squadlink://` is the
+/// pre-rename scheme, kept so links already handed out (Fleetplanner entries,
+/// pinned messages) keep working. Both carry the identical query format.
+const DEEPLINK_SCHEMES: [&str; 2] = ["subraum://", "squadlink://"];
+
+/// True for an argv entry that is one of our deep links.
+fn is_deeplink(arg: &str) -> bool {
+    DEEPLINK_SCHEMES.iter().any(|s| arg.starts_with(s))
+}
+
 /// True when running inside an MSIX package (Microsoft Store build). Used to skip
 /// registry-based deep-link registration (the package manifest declares the
-/// `squadlink` protocol) and to hide the self-update UI (the Store updates the app).
+/// `subraum` + `squadlink` protocols) and to hide the self-update UI (the Store
+/// updates the app).
 #[cfg(windows)]
 fn is_packaged() -> bool {
     use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
@@ -1018,7 +1029,7 @@ fn is_store_build() -> bool {
     is_packaged()
 }
 
-/// Drained once by the webview on mount: the squadlink:// URL (if any) the app
+/// Drained once by the webview on mount: the subraum:// URL (if any) the app
 /// was cold-started with. Returns None on a normal launch.
 #[tauri::command]
 fn take_pending_deeplink() -> Option<String> {
@@ -1030,7 +1041,7 @@ fn take_pending_deeplink() -> Option<String> {
 /// Store's "blocked executable" check (a cmd.exe reference in the binary).
 #[tauri::command]
 fn open_download() {
-    open_url("https://squadlink.raumdock.org/download/");
+    open_url("https://subraum.cc/download/");
 }
 
 #[cfg(windows)]
@@ -1075,13 +1086,13 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
     // Single-instance is desktop-only (the plugin has no mobile target) and MUST
-    // be the first plugin: a second launch (e.g. clicking a squadlink:// link while
+    // be the first plugin: a second launch (e.g. clicking a subraum:// link while
     // running) forwards its argv here; we surface the deep link to the
     // already-running window instead of opening a new one.
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(url) = argv.iter().find(|a| a.starts_with("squadlink://")) {
+            if let Some(url) = argv.iter().find(|a| is_deeplink(a)) {
                 let _ = app.emit("deeplink", url.clone());
             }
         }));
@@ -1094,12 +1105,12 @@ pub fn run() {
             start_raw_input();
             // Cold start: stash the launch URL for the webview to drain on mount
             // (Windows delivers deep links via argv).
-            if let Some(url) = std::env::args().find(|a| a.starts_with("squadlink://")) {
+            if let Some(url) = std::env::args().find(|a| is_deeplink(a)) {
                 *pending_deeplink().lock().unwrap() = Some(url);
             }
-            // Register the squadlink:// scheme at runtime (dev + portable runs; the
-            // NSIS/MSI installer also registers it). In an MSIX/Store build the
-            // package manifest declares the protocol, so skip the registry write.
+            // Register both schemes at runtime (dev + portable runs; the NSIS/MSI
+            // installer also registers them). In an MSIX/Store build the package
+            // manifest declares the protocols, so skip the registry write.
             // on_open_url covers warm relaunch (macOS); a running instance is reached
             // via single-instance above.
             #[cfg(any(windows, target_os = "linux"))]

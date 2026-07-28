@@ -1,17 +1,17 @@
-name: Build SquadLink Lite (Windows)
+name: Build subraum (Windows)
 
-# Builds the RDOC SquadLink Lite desktop prototype (Tauri GUI) on a clean Windows
+# Builds the subraum desktop prototype (Tauri GUI) on a clean Windows
 # runner — so it can be built/installed without a local Rust/Tauri toolchain.
 #
 # - push to main / manual run  → builds + uploads the installer as a workflow artifact
-# - push a tag `squadlink-lite-v*`  → also creates a draft GitHub Release with the installers
+# - push a tag `subraum-v*`  → also creates a draft GitHub Release with the installers
 #
 # The prototype is UNSIGNED → Windows SmartScreen will warn on first run.
 
 on:
   push:
     branches: [main]
-    tags: ["squadlink-lite-v*"]
+    tags: ["subraum-v*"]
     paths:
       - "apps/companion/**"
       - "apps/companion-core/**"
@@ -63,7 +63,7 @@ jobs:
         # Report-only: don't block prototype builds on unpatched transitive advisories.
         run: cargo audit || true
 
-      - name: Generate app icons from the SquadLink Lite logo
+      - name: Generate app icons from the subraum logo
         working-directory: apps/companion
         run: pnpm tauri icon src/Squad_Link_Lite.png
 
@@ -75,13 +75,13 @@ jobs:
           projectPath: apps/companion
           # tagName non-empty only on a tag push → tauri-action then cuts a release.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: RDOC SquadLink Lite ${{ github.ref_name }}
+          releaseName: subraum ${{ github.ref_name }}
           # Published (not draft) so the server can auto-pull the asset; marked
           # prerelease because the build is unsigned.
           releaseDraft: false
           prerelease: true
           releaseBody: |
-            RDOC SquadLink Lite prototype build (Windows).
+            subraum prototype build (Windows).
             Unsigned — Windows SmartScreen will warn; "More info → Run anyway".
 
       # SHA-256 of every installer → users can verify the download matches CI.
@@ -111,7 +111,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rdoc-squadlink-lite-windows
+          name: subraum-windows
           if-no-files-found: warn
           path: |
             apps/companion/src-tauri/target/release/bundle/nsis/*.exe
@@ -124,10 +124,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: squadlink-exe
+          name: subraum-exe
           if-no-files-found: warn
           path: |
-            apps/companion/src-tauri/target/release/rdoc-squadlink-lite.exe
+            apps/companion/src-tauri/target/release/subraum.exe
             apps/companion/src-tauri/target/release/WebView2Loader.dll
 
   # Pack an UNSIGNED MSIX for Microsoft Store upload (Partner Center re-signs).
@@ -144,7 +144,7 @@ jobs:
       - name: Download built exe
         uses: actions/download-artifact@v4
         with:
-          name: squadlink-exe
+          name: subraum-exe
           path: apps/companion/src-tauri/target/release
 
       # Manifest carries a hardcoded version; sync it to the app version so the
@@ -192,7 +192,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rdoc-squadlink-lite-msix
+          name: subraum-msix
           if-no-files-found: warn
           path: |
             apps/companion/msix/*.msix
@@ -203,6 +203,9 @@ jobs:
   # (push trigger, instead of waiting for the hourly systemd timer). The SSH
   # key is locked to a forced command on the host: it can ONLY run
   # `systemctl start squadlink-installer.service` — no shell, no other access.
+  # NOTE: the host-side unit still carries the pre-rename name; renaming it is a
+  # server-side change (unit + forced-command entry in authorized_keys), not a
+  # repo change. Nothing here depends on the name — the SSH command is `true`.
   notify-pull:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')

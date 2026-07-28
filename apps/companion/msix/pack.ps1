@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Build + package RDOC SquadLink Lite as an MSIX for the Microsoft Store (Weg B).
+  Build + package subraum as an MSIX for the Microsoft Store (Weg B).
 
 .DESCRIPTION
   One command: builds the Tauri release exe, generates the MSIX visual assets from
@@ -32,7 +32,7 @@ $msixDir   = $PSScriptRoot                                  # apps/companion/msi
 $appDir    = Split-Path $msixDir -Parent                    # apps/companion
 $manifest  = Join-Path $msixDir "AppxManifest.xml"
 $logo      = Join-Path $appDir  "src\Squad_Link_Lite.png"
-$exe       = Join-Path $appDir  "src-tauri\target\release\rdoc-squadlink-lite.exe"
+$exe       = Join-Path $appDir  "src-tauri\target\release\subraum.exe"
 $stage     = Join-Path $msixDir "staging"
 $assets    = Join-Path $stage   "Assets"
 
@@ -43,7 +43,7 @@ $version   = $m.Package.Identity.Version
 if ($publisher -match "REPLACE") {
   throw "AppxManifest.xml still has placeholders. Fill Identity Name + Publisher from Partner Center first."
 }
-$out = Join-Path $msixDir "RDOCSquadLinkLite_${version}_x64.msix"
+$out = Join-Path $msixDir "Subraum_${version}_x64.msix"
 Write-Host "Packaging $version  ($publisher)" -ForegroundColor Cyan
 
 # Locate Windows SDK tools (latest).
@@ -110,7 +110,7 @@ if ($SelfSign) {
   if (-not $cert) {
     Write-Host "Creating self-signed test cert for $publisher" -ForegroundColor Yellow
     $cert = New-SelfSignedCertificate -Type Custom -Subject $publisher -KeyUsage DigitalSignature `
-      -FriendlyName "SquadLink MSIX test" -CertStoreLocation "Cert:\CurrentUser\My" `
+      -FriendlyName "subraum MSIX test" -CertStoreLocation "Cert:\CurrentUser\My" `
       -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
   }
   & $signtool sign /fd SHA256 /a /sha1 $cert.Thumbprint $out

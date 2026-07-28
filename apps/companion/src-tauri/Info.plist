@@ -7,6 +7,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>RDOC SquadLink Lite uses your microphone for push-to-talk voice chat with your squad.</string>
+  <string>subraum uses your microphone for push-to-talk voice chat with your squad.</string>
 </dict>
 </plist>

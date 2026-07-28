@@ -1,16 +1,19 @@
-# Fleetplanner → SquadLink Lite — Deep-Link Config
+# Fleetplanner → subraum — Deep-Link Config
 
-How the Fleetplanner generates a `squadlink://` config link that SquadLink Lite
+How the Fleetplanner generates a `subraum://` config link that subraum
 opens and auto-connects from (no code / PIN entry). Parsed by `parseDirectLink` in
 `apps/companion/src/App.tsx`; values re-validated Rust-side in the `connect` command.
 
 ## Format
 
 ```
-squadlink://connect?ws=<WS_URL>&room=<ROOM>&token=<TOKEN>&name=<NAME>&uid=<UID>
+subraum://connect?ws=<WS_URL>&room=<ROOM>&token=<TOKEN>&name=<NAME>&uid=<UID>
 ```
 
-- Scheme: `squadlink:` (registered by the app — MSIX manifest / registry).
+- Scheme: `subraum:` (registered by the app — MSIX manifest / registry).
+  The pre-rename scheme **`squadlink:` is still accepted** with the identical
+  payload, so links already distributed keep working; both are registered by the
+  app and both are parsed by the client. Generate new links as `subraum://`.
 - Host segment `connect` is conventional and ignored by the parser; keep it for
   readability.
 - Everything meaningful is in the **query string**.
@@ -19,7 +22,7 @@ squadlink://connect?ws=<WS_URL>&room=<ROOM>&token=<TOKEN>&name=<NAME>&uid=<UID>
 
 | Param   | Required | Format / validation | Notes |
 | ------- | -------- | ------------------- | ----- |
-| `ws`    | **yes**  | `wss://…` (TLS). `ws://` only for loopback (`localhost` / `127.0.0.1`, dev). | Signaling server WebSocket URL, e.g. `wss://squadlink.raumdock.org/ws`. |
+| `ws`    | **yes**  | `wss://…` (TLS). `ws://` only for loopback (`localhost` / `127.0.0.1`, dev). | Signaling server WebSocket URL, e.g. `wss://subraum.cc/ws`. |
 | `room`  | **yes**  | 1–64 chars, `[A-Za-z0-9_-]` only. | Room / session id. |
 | `token` | no       | hex only (`[0-9a-fA-F]`), ≤128 chars. | Session auth token. Omit if the room needs none. |
 | `name`  | no       | 1–64 chars, no control chars. | **Display** name. Omitted → app uses "Commander". |
@@ -34,7 +37,7 @@ Discord name as-is.
 
 `cert_sha256` is an optional **TLS certificate pin** (trust exactly one cert by its
 SHA-256 fingerprint — used only for self-signed / private servers). The public
-`squadlink.raumdock.org` has a normal CA-signed cert, so the app uses standard CA
+`subraum.cc` has a normal CA-signed cert, so the app uses standard CA
 validation and the field stays `null`. The Fleetplanner does not put it in the link.
 
 ## Encoding (important)
@@ -43,9 +46,9 @@ Query **values must be URL-encoded**. In particular `ws` contains `:` and `/`, a
 `name` may contain spaces. The safe way is to let a URL builder do it:
 
 ```js
-function buildSquadLink({ ws, room, token, name, uid }) {
-  const u = new URL("squadlink://connect");
-  u.searchParams.set("ws", ws);       // wss://squadlink.raumdock.org/ws
+function buildsubraum({ ws, room, token, name, uid }) {
+  const u = new URL("subraum://connect");
+  u.searchParams.set("ws", ws);       // wss://subraum.cc/ws
   u.searchParams.set("room", room);   // alpha-fleet-01
   if (token) u.searchParams.set("token", token);
   if (name)  u.searchParams.set("name", name); // display name
@@ -61,7 +64,7 @@ encode `&`, `#`, spaces, and any non-ASCII.
 ## Example
 
 Input:
-- ws = `wss://squadlink.raumdock.org/ws`
+- ws = `wss://subraum.cc/ws`
 - room = `alpha-fleet-01`
 - token = `a1b2c3d4e5f6`
 - name = `Commander Ada`
@@ -70,13 +73,13 @@ Input:
 Output link:
 
 ```
-squadlink://connect?ws=wss%3A%2F%2Fsquadlink.raumdock.org%2Fws&room=alpha-fleet-01&token=a1b2c3d4e5f6&name=Commander+Ada&uid=ada.commander
+subraum://connect?ws=wss%3A%2F%2Fsubraum.cc%2Fws&room=alpha-fleet-01&token=a1b2c3d4e5f6&name=Commander+Ada&uid=ada.commander
 ```
 
 Resulting `connect` call:
 
 ```
-server      = wss://squadlink.raumdock.org/ws
+server      = wss://subraum.cc/ws
 room        = alpha-fleet-01
 token       = a1b2c3d4e5f6
 name        = Commander Ada      (display)
@@ -86,7 +89,7 @@ cert_sha256 = null               (public server uses standard CA validation)
 
 ## What the app does on activation
 
-1. OS opens the link → SquadLink Lite (cold start: launch arg; already running:
+1. OS opens the link → subraum (cold start: launch arg; already running:
    forwarded to the live window).
 2. App parses the params, fills the name + identity, and connects directly — no
    link/PIN entry.

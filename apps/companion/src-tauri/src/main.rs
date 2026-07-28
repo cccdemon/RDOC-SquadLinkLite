@@ -5,5 +5,5 @@
 // `run()` is shared with the mobile (Android/iOS) entry point that Tauri
 // generates via `#[tauri::mobile_entry_point]`.
 fn main() {
-    rdoc_squadlink_lite_lib::run()
+    subraum_lib::run()
 }

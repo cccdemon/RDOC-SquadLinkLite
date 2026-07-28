@@ -132,7 +132,7 @@ pub async fn connect(url: &str, cert_sha256: Option<&str>) -> Result<Signaling> 
             ws
         } else {
             // No pin → standard CA validation (webpki roots). Works for real
-            // certs like Let's Encrypt (e.g. squadlink.raumdock.org behind Caddy).
+            // certs like Let's Encrypt (e.g. subraum.cc behind Caddy).
             let (ws, _) = tokio_tungstenite::connect_async(url).await?;
             ws
         }
@@ -197,19 +197,19 @@ mod tests {
 
     #[test]
     fn server_policy() {
-        assert!(server_url_ok("wss://squadlink.raumdock.org/ws"));
+        assert!(server_url_ok("wss://subraum.cc/ws"));
         assert!(server_url_ok("ws://127.0.0.1:8080/ws"));
         assert!(server_url_ok("ws://localhost:8080/ws"));
         assert!(!server_url_ok("ws://evil.example/ws")); // plain ws, non-loopback
         assert!(!server_url_ok("ws://evil.example/127.0.0.1")); // spoof
-        assert!(!server_url_ok("http://squadlink.raumdock.org")); // wrong scheme
+        assert!(!server_url_ok("http://subraum.cc")); // wrong scheme
         assert!(!server_url_ok("wss://")); // empty host
     }
 
     #[test]
     fn host_parsing() {
         assert_eq!(url_host("ws://127.0.0.1:8080/ws").as_deref(), Some("127.0.0.1"));
-        assert_eq!(url_host("wss://squadlink.raumdock.org/ws").as_deref(), Some("squadlink.raumdock.org"));
+        assert_eq!(url_host("wss://subraum.cc/ws").as_deref(), Some("subraum.cc"));
         assert_eq!(url_host("ws://[::1]:8080/ws").as_deref(), Some("::1"));
         assert_eq!(url_host("wss://user@Host.Example:443/x").as_deref(), Some("host.example"));
         // host is evil.example, NOT the loopback string in the path
@@ -231,6 +231,6 @@ mod tests {
         assert!(!is_loopback("ws://127.0.0.1.evil.example/ws"));
         assert!(!is_loopback("ws://localhost.evil.example/ws"));
         assert!(!is_loopback("ws://127.0.0.1@evil.example/ws"));
-        assert!(!is_loopback("wss://squadlink.raumdock.org/ws"));
+        assert!(!is_loopback("wss://subraum.cc/ws"));
     }
 }

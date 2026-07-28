@@ -128,7 +128,7 @@ async function applyOverlayWindow(on: boolean, pos: OverlayPos, size: OverlaySiz
   if (!w) {
     w = new WebviewWindow("overlay", {
       url: "index.html",
-      title: "SquadLink Overlay",
+      title: "subraum Overlay",
       width: d.w,
       height: d.h,
       transparent: true,
@@ -343,7 +343,7 @@ export default function App() {
       return false;
     }
   });
-  // Fleetplanner-Modus: opt-in manual direct-link entry (squadlink:// deep links
+  // Fleetplanner-Modus: opt-in manual direct-link entry (subraum:// deep links
   // always auto-connect regardless of this toggle).
   const [fpMode, setFpMode] = useState<boolean>(() => {
     try {
@@ -376,7 +376,7 @@ export default function App() {
   });
   // null = idle; 0 or 1 = currently capturing a new binding for that slot.
   const [capturingSlot, setCapturingSlot] = useState<number | null>(null);
-  // Auto-duck other apps (game etc.) while SquadLink voice is active (Windows).
+  // Auto-duck other apps (game etc.) while subraum voice is active (Windows).
   const [duckOthers, setDuckOthers] = useState<boolean>(() => {
     try {
       return localStorage.getItem("sa.duck") !== "0";
@@ -394,7 +394,7 @@ export default function App() {
     }
   });
   // Local "Funk-Klick" earcon at the start of an incoming transmission, so you can
-  // hear that audio is coming from SquadLink. Default on.
+  // hear that audio is coming from subraum. Default on.
   const [earcon, setEarcon] = useState<boolean>(() => {
     try {
       return localStorage.getItem("sa.earcon") !== "0";
@@ -468,7 +468,7 @@ export default function App() {
     setChecking(true);
     setNetCheck(null);
     invoke<{ signaling: boolean; can_send: boolean; can_receive: boolean; stun: boolean }>("net_selfcheck", {
-      server: "wss://squadlink.raumdock.org/ws",
+      server: "wss://subraum.cc/ws",
     })
       .then((r) => setNetCheck(r))
       .catch(() => setNetCheck(null))
@@ -798,7 +798,7 @@ export default function App() {
 
   // ── Session brokering (PIN-protected link via InitConnection REST) ──────────
   // The session service is the hosted public endpoint.
-  const SESSION_BASE = "https://squadlink.raumdock.org";
+  const SESSION_BASE = "https://subraum.cc";
   const parseCode = (s: string) => {
     const t = s.trim();
     const m = t.match(/\/j\/([A-Za-z0-9]+)/);
@@ -891,14 +891,17 @@ export default function App() {
     }
   };
 
-  // ── Direct-link config (Fleetplanner / squadlink:// deep link) ──────────────
-  // Format: squadlink://connect?ws=<wss url>&room=<id>&token=<hex>&name=<>&uid=<>
+  // ── Direct-link config (Fleetplanner / subraum:// deep link) ──────────────
+  // Format: subraum://connect?ws=<wss url>&room=<id>&token=<hex>&name=<>&uid=<>
   // Carries the full creds so neither link nor PIN entry is needed. `uid` is the
   // player's stable identity (e.g. Discord name); `name` is the display name.
+  // `squadlink:` is the pre-rename scheme — same payload, still accepted so links
+  // already handed out keep working.
+  const LINK_SCHEMES = ["subraum:", "squadlink:"];
   const parseDirectLink = (raw: string): { ws: string; room: string; token: string | null; name?: string; uid?: string } | null => {
     try {
       const u = new URL(raw.trim());
-      if (u.protocol !== "squadlink:") return null;
+      if (!LINK_SCHEMES.includes(u.protocol)) return null;
       const ws = u.searchParams.get("ws");
       const room = u.searchParams.get("room");
       if (!ws || !room) return null;
@@ -916,7 +919,7 @@ export default function App() {
   const connectDirect = async (raw: string) => {
     const cfg = parseDirectLink(raw);
     if (!cfg) {
-      setLog("Ungültiger SquadLink-Direktlink");
+      setLog("Ungültiger subraum-Direktlink");
       return;
     }
     setConnecting(true);
@@ -942,12 +945,12 @@ export default function App() {
     });
   };
 
-  // squadlink:// deep link (from Rust) → auto-connect with the carried creds.
+  // subraum:// deep link (from Rust) → auto-connect with the carried creds.
   const connectDirectRef = useRef(connectDirect);
   connectDirectRef.current = connectDirect;
   useEffect(() => {
     const off = listen<string>("deeplink", (e) => connectDirectRef.current(e.payload));
-    // Cold start: app launched by a squadlink:// link (event fired before this
+    // Cold start: app launched by a subraum:// link (event fired before this
     // listener existed) → drain the stashed URL from Rust.
     invoke<string | null>("take_pending_deeplink")
       .then((url) => {
@@ -1033,7 +1036,7 @@ export default function App() {
                 if (!on) invoke("set_ducking", { active: false }).catch(() => {});
               }}
             />{" "}
-            Andere Apps automatisch leiser, wenn im SquadLink gesprochen wird (Windows)
+            Andere Apps automatisch leiser, wenn im subraum gesprochen wird (Windows)
           </label>
           <div className="volrow" style={{ opacity: duckOthers ? 1 : 0.45 }}>
             <span className="vlabel">🔉 Um wie viel leiser</span>
@@ -1062,7 +1065,7 @@ export default function App() {
                 invoke("set_earcon", { on }).catch(() => {});
               }}
             />{" "}
-            Funk-Klick abspielen, wenn jemand zu sprechen beginnt (akustische SquadLink-Kennung)
+            Funk-Klick abspielen, wenn jemand zu sprechen beginnt (akustische subraum-Kennung)
           </label>
           <div className="volrow" style={{ opacity: earcon ? 1 : 0.45 }}>
             <span className="vlabel">🔔 Klick-Lautstärke</span>
@@ -1286,11 +1289,11 @@ export default function App() {
           <div className="brandrow">
             <div className="brandwrap">
               <img src={logo} className="applogo" alt="" />
-              <div className="brand">RDOC <span>// SQUADLINK LITE</span></div>
+              <div className="brand">sub<span>raum</span></div>
             </div>
             <button className="gear" title="Audio-Einstellungen" onClick={() => setShowSettings((s) => !s)}>⚙</button>
           </div>
-          <div className="sub">P2P Voice + Chat{appVersion ? ` · v${appVersion}` : ""}</div>
+          <div className="sub">encrypted communication{appVersion ? ` · v${appVersion}` : ""}</div>
           {showSettings && deviceSettings}
 
           <div className="testmode">
@@ -1365,11 +1368,11 @@ export default function App() {
               <div className="sub2">
                 <b>Fleetplanner-Modus</b> — Direkt-Link einfügen und verbinden. Kein Code, keine PIN.
               </div>
-              <label>SquadLink-Direktlink</label>
+              <label>subraum-Direktlink</label>
               <input
                 value={directLink}
                 onChange={(e) => setDirectLink(e.target.value)}
-                placeholder="squadlink://connect?ws=…&room=…&token=…"
+                placeholder="subraum://connect?ws=…&room=…&token=…"
                 className="mono"
                 spellCheck={false}
               />
@@ -1403,7 +1406,7 @@ export default function App() {
   return (
     <div className="screen app">
       <header>
-        <div className="brand sm">RDOC <span>// SQUADLINK LITE</span></div>
+        <div className="brand sm">sub<span>raum</span></div>
         <div className={`dot ${transmitting ? "tx" : "ok"}`} />
         <div className="hstatus">{transmitting ? "SENDEN" : "VERBUNDEN"}</div>
         <button className="gear" title="Audio-Einstellungen" onClick={() => setShowSettings((s) => !s)}>⚙</button>

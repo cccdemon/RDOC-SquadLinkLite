@@ -1,4 +1,4 @@
-# macOS + iOS/iPadOS build plan — RDOC SquadLink Lite
+# macOS + iOS/iPadOS build plan — subraum
 
 Status: **plan only**. Neither target can be built on the Windows dev box or the
 Linux LXC builder — Apple's toolchain (Xcode) runs only on macOS. Both are built
@@ -13,7 +13,7 @@ via GitHub Actions `macos-14` runners (Apple Silicon, Xcode preinstalled).
   - iOS: "Apple Distribution" cert + an App ID + provisioning profile.
 - App-specific password or an App Store Connect API key for `notarytool` /
   `altool` uploads.
-- Identifier note: the current `org.raumdock.squadlink-lite` is fine for Apple
+- Identifier note: the current `org.raumdock.subraum` is fine for Apple
   bundle IDs (hyphens allowed), unlike Android. Keep it consistent.
 
 ## 1. Code readiness
@@ -43,7 +43,7 @@ Native — closest to the existing Windows/Linux desktop build.
    bundle `Info.plist` (set via `tauri.conf.json` → `bundle.macOS.*` /
    an `Info.plist` fragment). Hardened runtime is required for notarization;
    add the `com.apple.security.device.audio-input` entitlement.
-5. Deep link: register the `squadlink://` scheme via `CFBundleURLTypes` (Tauri's
+5. Deep link: register the `subraum://` scheme via `CFBundleURLTypes` (Tauri's
    deep-link plugin already wires `on_open_url` for macOS warm relaunch).
 6. Universal binary: build `aarch64-apple-darwin` + `x86_64-apple-darwin` and
    `lipo` them, or ship two DMGs. Easiest: `--target universal-apple-darwin`.
@@ -58,11 +58,11 @@ Mobile — same Tauri mobile pipeline as Android, but Xcode-side.
    - Signing: `APPLE_DEVELOPMENT_TEAM`, a provisioning profile, distribution cert
      installed into a temporary keychain in CI (`apple-actions/import-codesign-certs`).
 3. Mandatory `Info.plist` keys (App Store will reject without them):
-   - `NSMicrophoneUsageDescription` — "SquadLink uses the microphone for voice chat."
+   - `NSMicrophoneUsageDescription` — "subraum uses the microphone for voice chat."
    - Background audio: add `audio` to `UIBackgroundModes` so the mic/voice keeps
      running when the screen locks (voice app expectation).
-4. Deep link / universal links: `CFBundleURLTypes` for `squadlink://`; optional
-   Associated Domains for `https://squadlink.raumdock.org` universal links.
+4. Deep link / universal links: `CFBundleURLTypes` for `subraum://`; optional
+   Associated Domains for `https://subraum.cc` universal links.
 5. WebRTC on iOS: works via `webrtc-rs` (no system WebRTC), but verify ICE/UDP
    on cellular + that AAudio/CoreAudio capture starts after the mic permission
    prompt. Test on a real device — the simulator has no mic capture parity.

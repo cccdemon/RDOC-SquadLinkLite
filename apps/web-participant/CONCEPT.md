@@ -1,4 +1,4 @@
-# Konzept — Browser Participant für RDOC SquadLink Lite
+# Konzept — Browser Participant für subraum
 
 > Status: **Konzept** (2026-06-08). Noch nicht implementiert. Tauri-App und
 > Rust-Core bleiben unberührt; `crates/protocol/src/lib.rs` ist Source-of-Truth.
@@ -23,7 +23,7 @@ versteht. Belege aus dem Ist-Code:
 | Audio | 1× Opus-m-line, sendrecv (`mesh.rs:118`) | `addTrack(mic)` Opus | ✅ (Quality-Caveats §10) |
 | TURN | `ServerMsg::Turn{urls,username,credential,ttl}` nach Roster (`server/init/src/main.rs:474`) | `RTCIceServer{urls,username,credential}` | ✅ |
 | STUN-Default | `stun:stun.l.google.com:19302` (`mesh.rs:97`) | gleicher Default | ✅ |
-| Transport | Front-Door `wss://squadlink.raumdock.org/ws` = echtes LE-Cert via Caddy (`deploy/docker-compose.proxy.yml`) | Browser-WSS, **kein Pin** | ✅ |
+| Transport | Front-Door `wss://subraum.cc/ws` = echtes LE-Cert via Caddy (`deploy/docker-compose.proxy.yml`) | Browser-WSS, **kein Pin** | ✅ |
 
 **Einziger echter Bruch:** Der Self-signed-Pin-Pfad (Heim-VM `:8080`,
 `CERT_SHA256`, `signaling.rs`) ist **Rust-only** — der Browser kann ein
@@ -104,7 +104,7 @@ ASCII → Glare-sicher). Token/PIN **nur in-memory**, nie persistiert.
   sessionStorage (nicht sensibel).
 - DOM nur `textContent`/`createElement` — **kein** `innerHTML`. Chat-Text nie als HTML.
 - CSP (Meta im `index.html`, später als Caddy-Header verschärfbar):
-  `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://squadlink.raumdock.org wss://squadlink.raumdock.org; media-src 'self' blob:; img-src 'self' data:`
+  `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://subraum.cc wss://subraum.cc; media-src 'self' blob:; img-src 'self' data:`
 - Validierung: Code `^[a-z0-9]{4,12}$`, PIN `^\d{6}$`, Name length-cap + trim —
   als UX, nicht als alleinige Sicherheit (Server bleibt autoritativ:
   PIN-Rate-Limit, Room-Token-HMAC).
