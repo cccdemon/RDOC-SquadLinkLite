@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="subraum">
+  <title>subraum</title>
+  <!-- The surface. One peer breaks through it — that is where you connect;
+       the rest of the mesh stays below. -->
+  <line x1="4" y1="14" x2="60" y2="14" stroke="#3A4152" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Four peers, every pair connected (K4). The centre is deliberately empty:
+       no hub, no media server, nothing sitting in the middle of the call. -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M32 14 V56 M11 35 H53" stroke="#3D6FD8" stroke-width="2"/>
+    <path d="M32 14 L53 35 L32 56 L11 35 Z" stroke="#7FB0FF" stroke-width="2.2" stroke-linejoin="round"/>
+  </g>
+  <g fill="#7FB0FF">
+    <circle cx="32" cy="14" r="3.6"/>
+    <circle cx="53" cy="35" r="3.6"/>
+    <circle cx="32" cy="56" r="3.6"/>
+    <circle cx="11" cy="35" r="3.6"/>
+  </g>
+</svg>

@@ -52,8 +52,8 @@ impl Gains {
 /// bus and tanh limiter like any other source.
 pub const EARCON_KEY: &str = "__earcon__";
 
-/// A short "radio click" played LOCALLY through the SquadLink output device at the
-/// start of an incoming transmission, so the listener can tell SquadLink voice
+/// A short "radio click" played LOCALLY through the subraum output device at the
+/// start of an incoming transmission, so the listener can tell subraum voice
 /// apart from game/other audio. Toggleable; off = `click()` is a no-op.
 pub struct Earcon {
     mix: MixMap,

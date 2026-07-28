@@ -1,6 +1,43 @@
 # Changelog
 
-All notable changes to RDOC SquadLink Lite. Tags: `squadlink-lite-v*`.
+All notable changes to subraum (formerly RDOC SquadLink Lite).
+Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
+
+## v0.2.0 — 2026-07-28 — Umbenennung: RDOC SquadLink Lite → subraum
+
+- **Warum umbenannt**: es existiert bereits eine andere Anwendung namens
+  „SquadLink". Um Verwechslungen auszuschließen, heißt die App jetzt **subraum**.
+  Gleiche App, gleiches Team, gleiche Daten — nur der Name ist neu.
+- **Neuer Name + neue Domain**: die App heißt **subraum** ("encrypted
+  communication"), die Website läuft auf **https://subraum.cc**. Alle
+  In-App-URLs, die CSP und die Session-Share-Links zeigen auf die neue Domain.
+- **Neue Paket-Identität**: Tauri-Identifier `org.raumdock.subraum`, Flatpak-App-ID
+  `org.raumdock.Subraum`, Binary/Crate `subraum`. Wer über den **direkten
+  Installer** (NSIS/MSI) installiert hat, bekommt dadurch kein In-Place-Update —
+  die neue Version landet neben der alten, die alte kann danach deinstalliert
+  werden.
+- **Microsoft Store: normales Update.** Die Store-Identität bleibt unverändert
+  (`raumdock.org.RDOC-SquadLinkLite`, Store-ID 9N9NR49QFBF4) — das Listing wurde
+  nur in **„Subraum Communicator"** umbenannt. Store-Installationen aktualisieren
+  also ganz normal auf subraum.
+- **Deep-Link-Schema** ist jetzt `subraum://`. **`squadlink://` funktioniert
+  weiter** — beide Schemas werden registriert und geparst, identisches Format.
+  Bereits verteilte Fleetplanner-Direktlinks bleiben also gültig.
+- **Alte Share-Links** (`squadlink.raumdock.org/j/<code>`) funktionieren weiter:
+  der alte Host bleibt in der CSP erlaubt, und serverseitig leitet er die Seiten
+  auf subraum.cc um, während `/ws` weiterhin echt proxied wird (bestehende
+  Installationen haben diese WS-URL fest eingebaut).
+- **Release-Tags** heißen jetzt `subraum-v*`.
+- **Neues Logo für die Website.** Das Zeichen ist die Topologie selbst: eine
+  Oberflächenlinie, darunter vier Peers mit allen sechs Verbindungen, ein Knoten
+  durchstößt die Linie. Keine Mitte — es gibt keinen Server im Gespräch. Logo und
+  Social-Preview sind in die Server-Binary einkompiliert (`/assets/logo.svg`,
+  `/assets/og-image.png`) und müssen nicht mehr von Hand auf den Host kopiert
+  werden; `pull-installer.sh` muss sie entsprechend nicht mehr über den
+  Verzeichnistausch retten.
+- Unverändert: das Wire-Protokoll und das KDF-Label der PQC-Session
+  (`rdoc-squadlink-pqc-v1`) — eine Änderung dort wäre ein Protokollbruch und
+  würde alte gegen neue Clients inkompatibel machen.
 
 ## Angekündigt — 2026-07-26 — Multi-Plattform-Rollout
 

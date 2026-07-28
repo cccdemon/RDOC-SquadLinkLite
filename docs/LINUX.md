@@ -1,4 +1,4 @@
-# RDOC SquadLink Lite — Linux
+# subraum — Linux
 
 Installation, Voraussetzungen und Fehlerbehebung für die Linux-Version.
 Unterstützt **Ubuntu/Debian**, **Fedora**, **Arch**, **SteamOS / Steam Deck**
@@ -6,7 +6,7 @@ und die gängigen Gaming-Distributionen.
 
 Alle Builds sind **unsigniert** (Prototyp). Prüfsummen: siehe
 [Prüfsummen verifizieren](#prüfsummen-verifizieren).
-Download-Übersicht: **https://squadlink.raumdock.org/get**
+Download-Übersicht: **https://subraum.cc/get**
 
 ---
 
@@ -36,7 +36,7 @@ Download-Übersicht: **https://squadlink.raumdock.org/get**
 - **ALSA** (`libasound2`) bzw. **PipeWire/PulseAudio** — für Mikrofon und
   Wiedergabe. Moderne Distributionen (inkl. SteamOS) nutzen PipeWire.
 - **Mikrofonzugriff** — Voice-App; ohne Mikro kein Senden.
-- Netzwerk: ausgehend zum Signaling-Server (`wss://squadlink.raumdock.org`) und
+- Netzwerk: ausgehend zum Signaling-Server (`wss://subraum.cc`) und
   P2P/STUN zu den Mitspielern. Kein eingehender Port nötig.
 
 Opus ist statisch in die Binary gelinkt — kein `libopus`-Laufzeitpaket nötig.
@@ -48,22 +48,22 @@ Opus ist statisch in die Binary gelinkt — kein `libopus`-Laufzeitpaket nötig.
 ### Debian / Ubuntu / Mint / Pop!_OS (`.deb`)
 
 ```sh
-sudo apt install ./RDOC\ SquadLink\ Lite_*_amd64.deb
+sudo apt install ./subraum_*_amd64.deb
 # oder, falls Abhängigkeiten fehlen:
-sudo dpkg -i ./RDOC\ SquadLink\ Lite_*_amd64.deb && sudo apt -f install
+sudo dpkg -i ./subraum_*_amd64.deb && sudo apt -f install
 ```
 
 ### Fedora / Nobara (`.rpm`)
 
 ```sh
-sudo dnf install ./RDOC\ SquadLink\ Lite-*.x86_64.rpm
+sudo dnf install ./subraum-*.x86_64.rpm
 ```
 
 ### Arch / Manjaro / beliebige Distribution (`.AppImage`)
 
 ```sh
-chmod +x ./RDOC\ SquadLink\ Lite_*_amd64.AppImage
-./RDOC\ SquadLink\ Lite_*_amd64.AppImage
+chmod +x ./subraum_*_amd64.AppImage
+./subraum_*_amd64.AppImage
 ```
 
 Braucht **FUSE 2** (`libfuse2`). Fehlt sie: `sudo apt install libfuse2` bzw.
@@ -76,15 +76,15 @@ mit `--appimage-extract-and-run` starten.
 flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
 # App aus dem Bundle installieren:
-flatpak install --user ./rdoc-squadlink-lite.flatpak
+flatpak install --user ./subraum.flatpak
 
 # Start:
-flatpak run org.raumdock.SquadLinkLite
+flatpak run org.raumdock.Subraum
 ```
 
 **Steam Deck:** im **Desktop-Modus** installieren (oben). Für den **Gaming-Modus**
 die App in Steam als „Nicht-Steam-Spiel hinzufügen" aufnehmen (Ziel:
-`flatpak run org.raumdock.SquadLinkLite`).
+`flatpak run org.raumdock.Subraum`).
 
 ---
 
@@ -113,16 +113,16 @@ WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 <start-befehl
 PulseAudio-/PipeWire-Socket. Fehlt das Mikro trotzdem, Berechtigung prüfen:
 
 ```sh
-flatpak info --show-permissions org.raumdock.SquadLinkLite
+flatpak info --show-permissions org.raumdock.Subraum
 # Notlösung (breiter Geräte-Zugriff), falls ALSA direkt gebraucht wird:
-flatpak override --user --device=all org.raumdock.SquadLinkLite
+flatpak override --user --device=all org.raumdock.Subraum
 ```
 
-**`squadlink://`-Links öffnen die App nicht.** Bei `.deb`/`.rpm` registriert die
+**`subraum://`-Links öffnen die App nicht.** Bei `.deb`/`.rpm` registriert die
 App das Schema beim ersten Start über `xdg`. Prüfen/erzwingen:
 
 ```sh
-xdg-mime query default x-scheme-handler/squadlink
+xdg-mime query default x-scheme-handler/subraum
 update-desktop-database ~/.local/share/applications
 ```
 
@@ -137,7 +137,7 @@ Jeder Download hat eine `.sha256`-Datei; pro Release liegt zusätzlich eine
 `SHA256SUMS-linux-<arch>.txt` bei.
 
 ```sh
-sha256sum -c RDOC\ SquadLink\ Lite_*_amd64.deb.sha256
+sha256sum -c subraum_*_amd64.deb.sha256
 # oder gegen die Sammel-Datei:
 sha256sum -c SHA256SUMS-linux-amd64.txt
 ```

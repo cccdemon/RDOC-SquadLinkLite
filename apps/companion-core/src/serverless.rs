@@ -96,7 +96,7 @@ async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc
             ..Default::default()
         },
         "audio".to_owned(),
-        "rdoc-sa".to_owned(),
+        "subraum".to_owned(),
     ));
     {
         let local = local.clone();

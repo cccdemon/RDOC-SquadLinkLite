@@ -1,4 +1,4 @@
-name: Build SquadLink Lite (Flatpak)
+name: Build subraum (Flatpak)
 
 # Builds the Flatpak bundle for SteamOS / Steam Deck and the immutable gaming
 # distros (Bazzite, ChimeraOS, Nobara atomic, …), where .deb/.rpm don't apply
@@ -6,18 +6,18 @@ name: Build SquadLink Lite (Flatpak)
 #
 # Two jobs: `deb` compiles the app natively (real webkit2gtk link) and uploads
 # the .deb; `flatpak` unpacks that .deb inside the GNOME 47 SDK and installs the
-# payload into /app via apps/companion/flatpak/org.raumdock.SquadLinkLite.yml.
+# payload into /app via apps/companion/flatpak/org.raumdock.Subraum.yml.
 #
 # - push to main / manual run       → uploads the .flatpak as a workflow artifact
-# - push a tag `squadlink-lite-v*`  → also attaches the .flatpak to the Release
+# - push a tag `subraum-v*`  → also attaches the .flatpak to the Release
 #
 # The build is UNSIGNED (no Flatpak GPG signing) — a single-file bundle users
-# install with `flatpak install ./rdoc-squadlink-lite.flatpak`.
+# install with `flatpak install ./subraum.flatpak`.
 
 on:
   push:
     branches: [main]
-    tags: ["squadlink-lite-v*"]
+    tags: ["subraum-v*"]
     paths:
       - "apps/companion/**"
       - "apps/companion-core/**"
@@ -87,14 +87,14 @@ jobs:
           deb=$(find apps/companion/src-tauri/target/release/bundle/deb -name '*.deb' | head -n1)
           echo "Found: $deb"
           test -n "$deb"
-          cp "$deb" rdoc-squadlink-lite.deb
+          cp "$deb" subraum.deb
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: squadlink-deb-amd64
+          name: subraum-deb-amd64
           if-no-files-found: error
-          path: rdoc-squadlink-lite.deb
+          path: subraum.deb
 
   # ── 2. Flatpak bundle from the .deb ─────────────────────────────────────────
   flatpak:
@@ -111,14 +111,14 @@ jobs:
       - name: Fetch the .deb built in job 1
         uses: actions/download-artifact@v4
         with:
-          name: squadlink-deb-amd64
+          name: subraum-deb-amd64
           path: apps/companion/flatpak
 
       - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: rdoc-squadlink-lite.flatpak
-          manifest-path: apps/companion/flatpak/org.raumdock.SquadLinkLite.yml
+          bundle: subraum.flatpak
+          manifest-path: apps/companion/flatpak/org.raumdock.Subraum.yml
           cache-key: flatpak-builder-${{ github.sha }}
           arch: x86_64
           upload-artifact: true
@@ -126,8 +126,8 @@ jobs:
       - name: SHA-256 checksum
         if: always()
         run: |
-          if [ -f rdoc-squadlink-lite.flatpak ]; then
-            sha256sum rdoc-squadlink-lite.flatpak | tee SHA256SUMS-flatpak.txt
+          if [ -f subraum.flatpak ]; then
+            sha256sum subraum.flatpak | tee SHA256SUMS-flatpak.txt
           fi
 
       - name: Attach bundle to Release (tag only)
@@ -136,5 +136,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            rdoc-squadlink-lite.flatpak SHA256SUMS-flatpak.txt \
+            subraum.flatpak SHA256SUMS-flatpak.txt \
             --clobber --repo "${{ github.repository }}"

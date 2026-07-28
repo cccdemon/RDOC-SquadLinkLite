@@ -1,13 +1,13 @@
 [package]
-name = "rdoc-squadlink-lite"
-version = "0.1.33"
+name = "subraum"
+version = "0.2.0"
 edition = "2021"
 
 # The Tauri app is built as a library so desktop (main.rs) and mobile
 # (Android/iOS, via tauri::mobile_entry_point) share one `run()`. Mobile builds
 # the app as a cdylib; desktop still produces the normal binary from main.rs.
 [lib]
-name = "rdoc_squadlink_lite_lib"
+name = "subraum_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
-# Deep link (squadlink://) config — supported on desktop + mobile.
+# Deep link (subraum://) config — supported on desktop + mobile.
 tauri-plugin-deep-link = "2"
 
 # Single-instance (launch-URL forwarding) is desktop-only — the plugin has no
@@ -41,7 +41,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_Devices_HumanInterfaceDevice",
 ] }
 # Ergonomic COM for WASAPI per-session audio ducking (lower other apps' volume
-# while SquadLink voice is active). windows-sys raw vtable calls would be far
+# while subraum voice is active). windows-sys raw vtable calls would be far
 # more error-prone for COM.
 windows = { version = "0.59", features = [
   "Win32_Foundation",

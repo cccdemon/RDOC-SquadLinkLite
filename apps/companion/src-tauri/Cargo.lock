@@ -3793,8 +3793,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "rdoc-squadlink-lite"
-version = "0.1.33"
+name = "subraum"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "companion-core",

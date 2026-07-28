@@ -1,4 +1,4 @@
-# Microsoft Store — Submission Guide (RDOC SquadLink Lite)
+# Microsoft Store — Submission Guide (subraum)
 
 > **Decision: the project now ships via MSIX (Weg B).** Microsoft signs the package,
 > so **no own code-signing certificate is needed**. See
@@ -13,7 +13,7 @@ rework:
 
 | Concern                         | Unpackaged (chosen) | MSIX |
 | ------------------------------- | ------------------- | ---- |
-| `squadlink://` via registry     | works               | must move to AppxManifest `uap:Protocol` |
+| `subraum://` via registry     | works               | must move to AppxManifest `uap:Protocol` |
 | GitHub self-update prompt       | allowed             | forbidden (Store policy) — must remove |
 | Raw Input global PTT hook       | works               | works, but flagged more often |
 | Code signing                    | **you must sign**   | Microsoft signs |
@@ -25,9 +25,30 @@ The only hard purchase: an **Authenticode code-signing certificate**.
 
 ## 0. What only you can do (start these first — they have lead time)
 
-1. **Reserve the app name** in Partner Center → Apps & Games → *New product* →
-   *EXE or MSI app* → reserve "RDOC SquadLink Lite". Note the assigned **Publisher**
-   (`CN=...`) and **Store ID**.
+1. **App name reserved: `Subraum Communicator`** — added to the *existing*
+   product, not a new one. `<Properties><DisplayName>` in `AppxManifest.xml`
+   carries exactly that string; it must match the reservation character for
+   character. The in-app wordmark stays lowercase `subraum`; only the Store
+   listing uses the longer name.
+   - **Product identity is unchanged and must stay unchanged** (Partner Center →
+     App management → *Product identity*):
+
+     | Field | Value |
+     | --- | --- |
+     | `Package/Identity/Name` | `raumdock.org.RDOC-SquadLinkLite` |
+     | `Package/Identity/Publisher` | `CN=1889C9C8-C357-4F28-BCFC-DFE786BD3996` |
+     | `Package/Properties/PublisherDisplayName` | `raumdock.org` |
+     | Package Family Name | `raumdock.org.RDOC-SquadLinkLite_ygen2gzj5h81m` |
+     | Store ID / URL | `9N9NR49QFBF4` · <https://apps.microsoft.com/detail/9N9NR49QFBF4> |
+
+     The Store assigns these; they keep the pre-rename spelling. Because they are
+     unchanged, **Store installs of SquadLink Lite update straight into subraum**
+     — the listing is the same product under a new name. Rewriting `Identity Name`
+     to something "subraum"-shaped would fork the package family and orphan every
+     existing Store install.
+   - Direct-installer users (NSIS/MSI) are the exception: the Tauri identifier
+     did change (`org.raumdock.subraum`), so those installs do not upgrade in
+     place and land beside the old app.
 2. **Get a code-signing certificate.** The cert *Subject* must match the Partner
    Center Publisher exactly.
    - **Recommended: Azure Trusted Signing** (~10 USD/month, Microsoft-managed, no
@@ -36,7 +57,7 @@ The only hard purchase: an **Authenticode code-signing certificate**.
      (token, not required here).
 3. **Host a privacy policy** (mandatory — the app uses the microphone + network).
    Use [PRIVACY-POLICY.md](PRIVACY-POLICY.md), publish it at a stable URL
-   (e.g. `https://squadlink.raumdock.org/privacy`).
+   (e.g. `https://subraum.cc/privacy`).
 
 ---
 
@@ -84,12 +105,12 @@ support them — pick one target to submit.
 
 **NSIS** (recommended — can install per-user, no UAC):
 - Set in `tauri.conf.json`: `"bundle": { "windows": { "nsis": { "installMode": "currentUser" } } }`
-- Silent install: `RDOC SquadLink Lite_x64-setup.exe /S`
+- Silent install: `subraum_x64-setup.exe /S`
 - Silent uninstall: `"%LOCALAPPDATA%\...\uninstall.exe" /S`
 - Success exit code: `0`.
 
 **MSI** (per-machine, needs admin):
-- Silent install: `msiexec /i "RDOC SquadLink Lite_x64_en-US.msi" /qn /norestart`
+- Silent install: `msiexec /i "subraum_x64_en-US.msi" /qn /norestart`
 - Silent uninstall: `msiexec /x {PRODUCT-CODE-GUID} /qn`
 - ProductCode is in the MSI: `Get-MsiProductCode` or open with Orca. Changes per
   version — re-read on each release.
@@ -110,7 +131,7 @@ run silent uninstall, confirm clean removal + exit code 0.
 - **Store listing**: DE + EN description, ≥1 screenshot (≥1366×768 PNG), app icon.
 - **Notes for certification** (free text to reviewer): explain the global keyboard
   hook = configurable in-game push-to-talk; explain microphone = voice chat; explain
-  `squadlink://` deep link = one-click join from the Fleetplanner.
+  `subraum://` deep link = one-click join from the Fleetplanner.
 
 ---
 

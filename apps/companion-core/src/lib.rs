@@ -539,7 +539,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
             ..Default::default()
         },
         "audio".to_owned(),
-        "rdoc-squadlink-lite".to_owned(),
+        "subraum".to_owned(),
     ));
     // Group-audio keying, shared by the outbound writer below, the mesh RX
     // tasks, and the engine loop (which installs keys from the authority).

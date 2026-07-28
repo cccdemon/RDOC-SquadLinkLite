@@ -1,4 +1,4 @@
-//! Signaling wire format for RDOC SquadLink Lite.
+//! Signaling wire format for subraum.
 //!
 //! JSON over WebSocket. Tag field is `t`; variants are kebab-case
 //! (`peer-joined`, `room-full`). This crate is the single source of truth —

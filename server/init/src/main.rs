@@ -1,4 +1,4 @@
-//! InitConnection — WebSocket signaling for the RDOC SquadLink Lite mesh.
+//! InitConnection — WebSocket signaling for the subraum mesh.
 //!
 //! Dumb relay: routes offer/answer/ice by `to`, keeps the per-room roster,
 //! enforces room-auth + cap, mints ephemeral TURN creds. No media here.
@@ -42,10 +42,10 @@ use turn::TurnConfig;
 
 /// Public base URL (for share links) + ws URL handed back on join.
 fn public_base() -> String {
-    std::env::var("PUBLIC_BASE").unwrap_or_else(|_| "https://squadlink.raumdock.org".into())
+    std::env::var("PUBLIC_BASE").unwrap_or_else(|_| "https://subraum.cc".into())
 }
 fn public_ws() -> String {
-    std::env::var("PUBLIC_WS").unwrap_or_else(|_| "wss://squadlink.raumdock.org/ws".into())
+    std::env::var("PUBLIC_WS").unwrap_or_else(|_| "wss://subraum.cc/ws".into())
 }
 
 /// Soft cap → quality warning. Hard cap → join refused. (ARCHITECTURE §10.)
@@ -143,7 +143,7 @@ fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
 /// via EXTRA_CORS_ORIGINS for a future browser participant.
 fn build_cors() -> CorsLayer {
     let mut origins: Vec<HeaderValue> = [
-        "https://squadlink.raumdock.org",
+        "https://subraum.cc",
         "http://tauri.localhost",
         "https://tauri.localhost",
         "tauri://localhost",
@@ -241,6 +241,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/changelog", get(changelog_page))
         .route("/ws", get(ws_handler))
         .route("/healthz", get(|| async { "ok" }))
+        // Brand assets are compiled into the binary, so a fresh deploy serves the
+        // right logo with no files to copy onto the host.
+        .route("/assets/logo.svg", get(logo_svg))
+        .route("/assets/og-image.png", get(og_image))
         // PIN-protected session brokering (REST, called by the app webview → CORS).
         .route("/session", post(create_session))
         .route("/session/:code/join", post(join_session))
@@ -361,7 +365,7 @@ async fn landing(Path(code): Path<String>, RawQuery(q): RawQuery, headers: Heade
     let lang = lang_of(&q, &headers);
     let code = esc(&code.chars().take(32).collect::<String>());
     let body = i18n::landing(lang, &public_base(), &code);
-    shell(lang, &format!("/j/{code}"), "RDOC SquadLink Lite", &body)
+    shell(lang, &format!("/j/{code}"), "subraum", &body)
 }
 
 const PAGE_CSS: &str = r#"<style>
@@ -371,7 +375,8 @@ main{max-width:40rem;margin:0 auto;padding:1.4rem 1.2rem 3rem}
 .top{display:flex;align-items:center;gap:.55rem;padding:.9rem 1.2rem;border-bottom:1px solid #242833}
 .top img{width:26px;height:26px;display:block}
 .top a{color:#dfe3e8;text-decoration:none;font-weight:600}
-h1{font-size:1.45rem;font-weight:600;margin:.3rem 0 .7rem}
+h1{font-size:1.45rem;font-weight:600;margin:.3rem 0 .2rem}
+.tagline{margin:0 0 .9rem;color:#9aa3ad;font-size:.85rem;text-transform:lowercase;letter-spacing:.12em}
 h2{font-size:1.05rem;font-weight:600;margin:1.5rem 0 .3rem}
 h2.ver{border-top:1px solid #242833;padding-top:.9rem;margin-top:1.6rem;color:#cfe0ff}
 h3{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9aa3ad;margin:.8rem 0 .1rem}
@@ -399,8 +404,38 @@ footer a{color:#9aa3ad;margin-right:1rem;display:inline-block}
 code{background:#1a1d23;padding:.1rem .3rem;border-radius:3px}
 </style>"#;
 
-// The standard raumdock logo (same SVG used across the RDOC web surfaces).
-const LOGO: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230a0a0a'/%3E%3Cpath d='M22 62 q28 14 56 0 l-6-22 q-24-10-44 0 z' fill='%23444'/%3E%3Cellipse cx='50' cy='46' rx='26' ry='18' fill='%23f6c200'/%3E%3Cellipse cx='62' cy='40' rx='8' ry='5' fill='%23ffffff' opacity='.5'/%3E%3C/svg%3E";
+/// The subraum mark: a surface line with the peer mesh hanging below it, one node
+/// breaking through. Four peers, all six links, nothing in the middle — the
+/// topology the product actually uses.
+const LOGO_SVG: &str = include_str!("../assets/logo.svg");
+/// Social preview card, pre-rendered from `assets/og-image.svg` (scrapers do not
+/// render SVG, so this one ships as a PNG).
+const OG_IMAGE_PNG: &[u8] = include_bytes!("../assets/og-image.png");
+
+/// Cache for a day: the assets only change when a new binary is deployed.
+const ASSET_CACHE: &str = "public, max-age=86400";
+
+async fn logo_svg() -> Response {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
+            (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+        ],
+        LOGO_SVG,
+    )
+        .into_response()
+}
+
+async fn og_image() -> Response {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+        ],
+        OG_IMAGE_PNG,
+    )
+        .into_response()
+}
 
 fn footer(base: &str, lang: Lang) -> String {
     let n = i18n::nav(lang);
@@ -415,32 +450,30 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
     let base = public_base();
     let lc = lang.code();
     let desc = i18n::meta_desc(lang);
-    let og_title = format!("{title} — RDOC SquadLink Lite");
-    let og_image = format!("{base}/download/og-image.png");
+    let og_title = format!("{title} — subraum");
+    let og_image = format!("{base}/assets/og-image.png");
     let og_url = format!("{base}{path}");
     Html(format!(
         "<!doctype html><html lang=\"{lc}\"><head><meta charset=\"utf-8\">{HTML_CSP}\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{title} — RDOC SquadLink Lite</title>\
+<title>{title} — subraum</title>\
 <meta name=\"description\" content=\"{desc}\">\
 <meta property=\"og:type\" content=\"website\">\
-<meta property=\"og:site_name\" content=\"RDOC SquadLink Lite\">\
+<meta property=\"og:site_name\" content=\"subraum\">\
 <meta property=\"og:title\" content=\"{og_title}\">\
 <meta property=\"og:description\" content=\"{desc}\">\
 <meta property=\"og:url\" content=\"{og_url}\">\
 <meta property=\"og:image\" content=\"{og_image}\">\
 <meta property=\"og:image:width\" content=\"1200\"><meta property=\"og:image:height\" content=\"630\">\
-<meta property=\"og:image:alt\" content=\"RDOC SquadLink Lite\">\
+<meta property=\"og:image:alt\" content=\"subraum\">\
 <meta name=\"twitter:card\" content=\"summary_large_image\">\
 <meta name=\"twitter:title\" content=\"{og_title}\">\
 <meta name=\"twitter:description\" content=\"{desc}\">\
 <meta name=\"twitter:image\" content=\"{og_image}\">\
-<meta name=\"theme-color\" content=\"#f6c200\">\
-<link rel=\"icon\" href=\"{base}/download/sl-logo.png\">{css}</head><body>\
-<header class=\"top\"><img src=\"{base}/download/sl-logo.png\" alt=\"SquadLink Lite\" onerror=\"this.onerror=null;this.src='{logo}'\"><a href=\"/?lang={lc}\">RDOC SquadLink Lite</a>{sw}</header>\
+<meta name=\"theme-color\" content=\"#7fb0ff\">\
+<link rel=\"icon\" href=\"/assets/logo.svg\">{css}</head><body>\
+<header class=\"top\"><img src=\"/assets/logo.svg\" alt=\"\" width=\"26\" height=\"26\"><a href=\"/?lang={lc}\">subraum</a>{sw}</header>\
 <main>{body}</main><footer>{footer}</footer></body></html>",
-        base = base,
-        logo = LOGO,
         css = PAGE_CSS,
         sw = i18n::switcher(path, lang),
         footer = footer(&base, lang),
@@ -552,7 +585,7 @@ async fn downloads_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<Strin
 /// Parse the mirror manifest into (version, artifacts). Missing or invalid →
 /// empty, so the page degrades to a "no builds yet" notice instead of erroring.
 fn load_manifest() -> (Option<String>, Vec<i18n::Artifact>) {
-    let dir = std::env::var("DOWNLOADS_DIR").unwrap_or_else(|_| "/srv/downloads/squadlink".into());
+    let dir = std::env::var("DOWNLOADS_DIR").unwrap_or_else(|_| "/srv/downloads/subraum".into());
     let path = std::path::Path::new(&dir).join("manifest.json");
     let Ok(txt) = std::fs::read_to_string(&path) else {
         return (None, Vec::new());

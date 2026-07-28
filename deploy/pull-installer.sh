@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Mirror the newest published release (all platforms) from GitHub Releases into
-# the public download folder served by Caddy at squadlink.raumdock.org/download,
+# the public download folder served by Caddy at subraum.cc/download,
 # and emit a manifest.json the signaling server renders on /get.
 # Public repo → no auth/token needed. Run by a systemd timer on LXC 103.
 set -euo pipefail
 
 REPO="cccdemon/RDOC-SquadLinkLite"
-DEST="/opt/RDOC-Suite/downloads/squadlink"
+DEST="/opt/RDOC-Suite/downloads/subraum"
 API="https://api.github.com/repos/${REPO}"
 # Robust against transient GitHub/CDN 5xx right after a release is published.
 RETRY="--retry 6 --retry-delay 4 --retry-all-errors"
@@ -48,7 +48,7 @@ for su in $(printf '%s\n' "$urls" | grep -iE '/SHA256SUMS[^/]*\.txt$' || true); 
   $CURL "$su" >> "$sums" 2>/dev/null || true
 done
 
-# version digits for the manifest, e.g. squadlink-lite-v0.1.25 → 0.1.25
+# version digits for the manifest, e.g. subraum-v0.1.25 → 0.1.25
 VERSION="$(printf '%s' "$TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 
 # (platform, arch) for an asset filename. Echoes "platform arch".
@@ -79,10 +79,10 @@ process_asset() {
   $CURL -o "$STAGE/$fname" "$url"
 
   # Verify against the release's SHA256SUMS when available. Match by HASH
-  # presence, not filename: CI generates the sums from the on-disk bundle names
-  # ("RDOC SquadLink Lite_…") but GitHub serves the assets renamed with dots
-  # ("RDOC.SquadLink.Lite_…"), so filenames never line up — the content (hash)
-  # does. SHA-256 is collision-resistant, so a hash hit is a sound verification.
+  # presence, not filename: GitHub may serve assets under a renamed form (it
+  # rewrites characters it dislikes), so filenames don't always line up — the
+  # content (hash) does. SHA-256 is collision-resistant, so a hash hit is a
+  # sound verification.
   # Fail closed when sums exist but the hash is absent (tamper); with no
   # published sums (legacy releases) compute + warn.
   actual="$(sha256sum "$STAGE/$fname" | cut -d' ' -f1)"
@@ -114,15 +114,16 @@ done
 printf '{"version":"%s","tag":"%s","generated":"%s","artifacts":[%s]}\n' \
   "$VERSION" "$TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$entries" > "$STAGE/manifest.json"
 
-# Preserve the served logo across the swap.
-[ -f "$DEST/sl-logo.png" ] && cp -p "$DEST/sl-logo.png" "$STAGE/sl-logo.png"
+# Brand assets used to live here and had to survive the swap; they are compiled
+# into the server binary now (/assets/logo.svg, /assets/og-image.png), so this
+# directory holds installers and manifest.json only.
 rm -f "$STAGE/.sums"
 
 # 4) Atomic-ish publish: replace DEST contents with the verified staging set.
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete "$STAGE"/ "$DEST"/
 else
-  find "$DEST" -mindepth 1 ! -name 'sl-logo.png' -delete
+  find "$DEST" -mindepth 1 -delete
   cp -a "$STAGE"/. "$DEST"/
 fi
 echo "published $(printf '%s' "$entries" | grep -o '"file"' | wc -l) artifact(s) from $TAG to $DEST"

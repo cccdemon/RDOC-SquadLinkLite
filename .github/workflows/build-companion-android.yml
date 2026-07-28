@@ -1,6 +1,6 @@
-name: Build SquadLink Lite (Android)
+name: Build subraum (Android)
 
-# Builds the RDOC SquadLink Lite app for Android via Tauri 2 mobile.
+# Builds the subraum app for Android via Tauri 2 mobile.
 #
 # Strategy: `tauri android init` runs fresh in CI (the gen/android scaffold is
 # NOT committed), then the AndroidManifest is patched to request RECORD_AUDIO +
@@ -138,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rdoc-squadlink-lite-android
+          name: subraum-android
           if-no-files-found: warn
           path: |
             apps/companion/src-tauri/gen/android/app/build/outputs/apk/**/*.apk

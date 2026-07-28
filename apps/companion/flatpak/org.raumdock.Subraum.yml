@@ -1,17 +1,17 @@
-# Flatpak manifest for RDOC SquadLink Lite — the delivery path for SteamOS /
+# Flatpak manifest for subraum — the delivery path for SteamOS /
 # Steam Deck and the immutable gaming distros (Bazzite, ChimeraOS, …) where
 # .deb/.rpm don't apply and Flatpak is the native install channel.
 #
 # Rather than rebuild the Rust app inside the (offline) Flatpak sandbox, this
 # manifest unpacks the .deb that CI already built and installs its payload into
 # /app, renaming the .desktop / icons / metainfo to the Flatpak app-id. The .deb
-# is placed next to this manifest as `rdoc-squadlink-lite.deb` by the CI job.
-id: org.raumdock.SquadLinkLite
+# is placed next to this manifest as `subraum.deb` by the CI job.
+id: org.raumdock.Subraum
 runtime: org.gnome.Platform
 runtime-version: "47"
 sdk: org.gnome.Sdk
-# Executable name inside the .deb (usr/bin/rdoc-squadlink-lite).
-command: rdoc-squadlink-lite
+# Executable name inside the .deb (usr/bin/subraum).
+command: subraum
 
 finish-args:
   # Windowing: Wayland with an X11 fallback (Steam Deck Gaming Mode = Wayland).
@@ -32,34 +32,34 @@ finish-args:
   - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
 
 modules:
-  - name: rdoc-squadlink-lite
+  - name: subraum
     buildsystem: simple
     build-commands:
       # Crack the .deb (ar → data.tar.gz) and lay out its payload.
-      - ar x rdoc-squadlink-lite.deb
+      - ar x subraum.deb
       - tar -xf data.tar.gz
-      - install -Dm755 usr/bin/rdoc-squadlink-lite /app/bin/rdoc-squadlink-lite
+      - install -Dm755 usr/bin/subraum /app/bin/subraum
       # Icons, renamed to the Flatpak app-id at each installed size.
-      - install -Dm644 usr/share/icons/hicolor/32x32/apps/rdoc-squadlink-lite.png
+      - install -Dm644 usr/share/icons/hicolor/32x32/apps/subraum.png
         /app/share/icons/hicolor/32x32/apps/${FLATPAK_ID}.png
-      - install -Dm644 usr/share/icons/hicolor/128x128/apps/rdoc-squadlink-lite.png
+      - install -Dm644 usr/share/icons/hicolor/128x128/apps/subraum.png
         /app/share/icons/hicolor/128x128/apps/${FLATPAK_ID}.png
-      - install -Dm644 usr/share/icons/hicolor/256x256/apps/rdoc-squadlink-lite.png
+      - install -Dm644 usr/share/icons/hicolor/256x256/apps/subraum.png
         /app/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
-      - install -Dm644 "usr/share/icons/hicolor/256x256@2/apps/rdoc-squadlink-lite.png"
+      - install -Dm644 "usr/share/icons/hicolor/256x256@2/apps/subraum.png"
         "/app/share/icons/hicolor/256x256@2/apps/${FLATPAK_ID}.png"
       # Desktop entry, renamed to <app-id>.desktop and pointed at the renamed
       # icon + given proper categories (the .deb ships an empty Categories=).
-      - install -Dm644 "usr/share/applications/RDOC SquadLink Lite.desktop"
+      - install -Dm644 "usr/share/applications/subraum.desktop"
         /app/share/applications/${FLATPAK_ID}.desktop
       - sed -i "s/^Icon=.*/Icon=${FLATPAK_ID}/" /app/share/applications/${FLATPAK_ID}.desktop
       - sed -i "s/^Categories=.*/Categories=Network;AudioVideo;Game;/"
         /app/share/applications/${FLATPAK_ID}.desktop
       # AppStream metadata.
-      - install -Dm644 org.raumdock.SquadLinkLite.metainfo.xml
+      - install -Dm644 org.raumdock.Subraum.metainfo.xml
         /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
     sources:
       - type: file
-        path: rdoc-squadlink-lite.deb
+        path: subraum.deb
       - type: file
-        path: org.raumdock.SquadLinkLite.metainfo.xml
+        path: org.raumdock.Subraum.metainfo.xml

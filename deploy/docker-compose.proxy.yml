@@ -1,5 +1,5 @@
 # InitConnection behind a TLS-terminating reverse proxy (the RDOC-Suite Caddy on
-# the same LXC). Caddy serves wss://squadlink.raumdock.org with a real Cloudflare
+# the same LXC). Caddy serves wss://subraum.cc with a real Cloudflare
 # cert and forwards plain ws to 127.0.0.1:8090 → no self-signed cert pin needed,
 # no home-router port-forward. coturn is intentionally omitted (STUN-only default,
 # ARCHITECTURE §8b) — add it later only if hard-NAT peers need a relay.
@@ -16,7 +16,7 @@ services:
     build:
       context: ..
       dockerfile: server/init/Dockerfile
-    container_name: squadlink-init
+    container_name: subraum-init
     restart: unless-stopped
     environment:
       - ROOM_AUTH_SECRET=${ROOM_AUTH_SECRET}
@@ -26,14 +26,14 @@ services:
       # Exposure is constrained to host loopback by the 127.0.0.1:8090 mapping below.
       - ALLOW_PLAIN_PUBLIC_BIND=1
       # Public URLs used to build share links + the ws URL returned on join.
-      - PUBLIC_BASE=https://squadlink.raumdock.org
-      - PUBLIC_WS=wss://squadlink.raumdock.org/ws
+      - PUBLIC_BASE=https://subraum.cc
+      - PUBLIC_WS=wss://subraum.cc/ws
       # Where pull-installer.sh writes manifest.json (the /get download page).
-      - DOWNLOADS_DIR=/srv/downloads/squadlink
+      - DOWNLOADS_DIR=/srv/downloads/subraum
     # Read-only view of the Caddy download folder so /get can list artifacts +
     # checksums. Same host path Caddy serves at /download/.
     volumes:
-      - /opt/RDOC-Suite/downloads/squadlink:/srv/downloads/squadlink:ro
+      - /opt/RDOC-Suite/downloads/subraum:/srv/downloads/subraum:ro
     # Loopback only — the host-network Caddy reaches it; not exposed directly.
     ports:
       - "127.0.0.1:8090:8080"

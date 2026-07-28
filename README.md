@@ -1,4 +1,4 @@
-# RDOC SquadLink Lite
+# subraum — encrypted communication
 
 Stand-Alone **serverless P2P-Voice-Mesh** für kleine Gruppen — ohne SFU (kein LiveKit),
 ohne Account, ohne Aufnahme. Native Audio/Netz in Rust, Tauri-GUI (React). Eigenständig,
@@ -9,11 +9,16 @@ außerhalb der RDOC-Suite.
   Roster, Session-PIN), **kein Media**. TURN-Relay nur optional (opt-in), Default STUN-only.
 - Zielgröße: kleine Squads (Warn-Cap 12, Hard-Cap 16).
 
+> **Früher „RDOC SquadLink Lite".** Umbenannt in **subraum**, weil bereits eine
+> andere Anwendung den Namen „SquadLink" trägt — die Umbenennung schließt
+> Verwechslungen aus. Gleiche App, gleiches Team. Im Microsoft Store läuft das
+> Listing als **Subraum Communicator**.
+
 → Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Änderungen: [CHANGELOG.md](CHANGELOG.md)
 
 ## Download
 
-**Jetzt Multi-Plattform** — alle Builds + Prüfsummen: **https://squadlink.raumdock.org/get**
+**Jetzt Multi-Plattform** — alle Builds + Prüfsummen: **https://subraum.cc/get**
 
 - **🪟 Windows** — signiert im Microsoft Store, sonst unsigniert (SmartScreen: „Weitere Informationen → Trotzdem ausführen").
 - **🐧 Linux** — `.deb` / `.rpm` / `.AppImage` (amd64 + arm64) sowie **Flatpak für SteamOS / Steam Deck** und gängige Gaming-Distributionen (Bazzite, ChimeraOS, Nobara, Garuda …). Installation + Voraussetzungen: [docs/LINUX.md](docs/LINUX.md).
@@ -46,10 +51,10 @@ Die App hat einen **eingebauten Update-Checker** (meldet neue Releases + Changel
 GitHub Actions baut die GUI auf einem sauberen Windows-Runner —
 Workflow [`.github/workflows/build-companion.yml`](.github/workflows/build-companion.yml):
 
-- **Push/Manuell:** Artefakt **`rdoc-squadlink-lite-windows`** (NSIS-`.exe` + `.msi`).
-- **Release:** Tag `squadlink-lite-v*` pushen → veröffentlichter (Pre-)Release mit Installern;
+- **Push/Manuell:** Artefakt **`subraum-windows`** (NSIS-`.exe` + `.msi`).
+- **Release:** Tag `subraum-v*` pushen → veröffentlichter (Pre-)Release mit Installern;
   der Server zieht den neuesten automatisch nach `…/download/`.
-- App-Icon wird im CI aus `apps/companion/src/Squad_Link_Lite.png` generiert (`tauri icon`).
+- App-Icon wird im CI aus `apps/companion/src/subraum.png` generiert (`tauri icon`).
 
 Lokaler Dev-Build (braucht Rust + Node + pnpm): `cd apps/companion && pnpm install && pnpm tauri dev`
 
@@ -74,7 +79,7 @@ Protokoll: `ClientMsg::Rekey` → Server-Broadcast `ServerMsg::Rekey` → `mesh.
 
 - **Loopback-Erkennung** parst den URL-Host (kein Substring): `ws://` nur zu
   `localhost`/`127.0.0.1`/`::1`, sonst `wss://` erzwungen (`server_url_ok`, Unit-getestet).
-- **Tauri-CSP** strikt (kein `null`, keine Wildcards): self + `squadlink.raumdock.org` (https/wss)
+- **Tauri-CSP** strikt (kein `null`, keine Wildcards): self + `subraum.cc` (https/wss)
   + GitHub (Update-Check) + IPC.
 - **Eingabevalidierung** Rust-seitig für alle Tauri-Commands; DSP-Werte werden an der IPC-Grenze
   normalisiert (finite + clamp).
@@ -101,7 +106,7 @@ Protokoll: `ClientMsg::Rekey` → Server-Broadcast `ServerMsg::Rekey` → `mesh.
 | `TURN_SECRET` / `TURN_URLS` | optionale coturn-Creds (NAT-Relay-Fallback; im Client opt-in). |
 | `EXTRA_CORS_ORIGINS` | zusätzliche erlaubte Origins (kommagetrennt). |
 
-Prod läuft hinter dem RDOC-Suite-Caddy auf `squadlink.raumdock.org`
+Prod läuft hinter dem RDOC-Suite-Caddy auf `subraum.cc`
 (`deploy/docker-compose.proxy.yml`); `.env` **muss** `ROOM_AUTH_SECRET` setzen (sonst
 Fail-Closed-Abbruch). Der Server serviert auch die mehrsprachige Website (EN/DE/IT/ES/FR):
 `/`, `/privacy`, `/legal`, `/license` und die Share-Landing `/j/:code`.
