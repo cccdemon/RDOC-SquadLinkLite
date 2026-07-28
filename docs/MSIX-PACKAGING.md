@@ -75,7 +75,7 @@ Place PNGs in `msix-staging/Assets/` (filenames must match the manifest):
 | `Square150x150Logo.png`  | 150×150 |
 | `Wide310x150Logo.png`    | 310×150 |
 
-Generate from `src/Squad_Link_Lite.png` (any image tool / `pnpm tauri icon` outputs a
+Generate from `src/subraum.png` (any image tool / `pnpm tauri icon` outputs a
 superset you can resize).
 
 ## 4. Stage + pack

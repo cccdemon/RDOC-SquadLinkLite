@@ -19,7 +19,7 @@ Frontend + Tauri app (from `apps/companion`, pnpm — **not** npm):
 pnpm install --frozen-lockfile   # CI uses this; matches the lockfile
 pnpm tauri dev                   # run the desktop app (needs Rust + Node)
 pnpm build                       # tsc typecheck + vite build (frontend only)
-pnpm tauri icon src/Squad_Link_Lite.png   # regenerate app icons
+pnpm tauri icon src/subraum.png  # regenerate app icons (source: subraum-icon.svg)
 ```
 
 Rust workspace (from repo root — members: `crates/protocol`, `server/init`,
@@ -229,9 +229,28 @@ Deliberately **not** renamed — don't "fix" these:
   the new name.
 - Infra under `raumdock.org`: the deploy box `ve.raumdock.org`, the publisher
   name "Raumdock", `commercialusage@raumdock.org`, the RDOC-Suite Caddy.
-- `apps/companion/src/Squad_Link_Lite.png` — the icon source still carries the
-  old artwork; icons/logo need to be redrawn before a release looks renamed.
 - Host-side deploy state (download dir, installer systemd unit, Caddy vhost) —
   see the migration checklist in `deploy/README.md`.
+
+## Public routing
+
+Requests reach InitConnection through three hops, none of which live in this
+repo — useful when a hostname "just doesn't resolve":
+
+```
+:443 → Proxmox DNAT (85.215.253.135) → LXC 101 "proxy", nginx stream, SNI map
+     → 10.10.10.99:9443 (LXC 103, rdoc-suite-caddy, ACME DNS-01 via Cloudflare)
+     → 127.0.0.1:8090 (the init container)
+```
+
+- The SNI map is `/etc/nginx/stream.d/minecraft.raumdock.org.conf` on LXC 101
+  (misleading filename — it holds every hostname). `subraum.cc` is already
+  mapped to the same backend as `squadlink.raumdock.org`.
+- Caddy issues certs over DNS-01, so its Cloudflare token needs `Zone:DNS:Edit`
+  on each zone it serves — including `subraum.cc`.
+- There is **no IPv6 path**: the Proxmox host has no global v6 address and
+  `net.ipv6.conf.all.forwarding = 0`. The AAAA record on
+  `squadlink.raumdock.org` points somewhere this infrastructure cannot serve.
+  Don't add AAAA records for new hostnames here.
 
 Git remote: `https://github.com/cccdemon/RDOC-SquadLinkLite.git`

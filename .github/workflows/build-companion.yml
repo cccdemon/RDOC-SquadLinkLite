@@ -65,7 +65,7 @@ jobs:
 
       - name: Generate app icons from the subraum logo
         working-directory: apps/companion
-        run: pnpm tauri icon src/Squad_Link_Lite.png
+        run: pnpm tauri icon src/subraum.png
 
       - name: Build Tauri app (+ release on tag)
         uses: tauri-apps/tauri-action@v0

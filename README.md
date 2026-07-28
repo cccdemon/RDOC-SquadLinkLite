@@ -54,7 +54,7 @@ Workflow [`.github/workflows/build-companion.yml`](.github/workflows/build-compa
 - **Push/Manuell:** Artefakt **`subraum-windows`** (NSIS-`.exe` + `.msi`).
 - **Release:** Tag `subraum-v*` pushen → veröffentlichter (Pre-)Release mit Installern;
   der Server zieht den neuesten automatisch nach `…/download/`.
-- App-Icon wird im CI aus `apps/companion/src/Squad_Link_Lite.png` generiert (`tauri icon`).
+- App-Icon wird im CI aus `apps/companion/src/subraum.png` generiert (`tauri icon`).
 
 Lokaler Dev-Build (braucht Rust + Node + pnpm): `cd apps/companion && pnpm install && pnpm tauri dev`
 

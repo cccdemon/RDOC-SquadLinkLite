@@ -4,7 +4,7 @@ import { listen, emitTo } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { currentMonitor, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import logo from "./Squad_Link_Lite.png";
+import logo from "./subraum.png";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
 
