@@ -114,15 +114,16 @@ done
 printf '{"version":"%s","tag":"%s","generated":"%s","artifacts":[%s]}\n' \
   "$VERSION" "$TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$entries" > "$STAGE/manifest.json"
 
-# Preserve the served logo across the swap.
-[ -f "$DEST/sl-logo.png" ] && cp -p "$DEST/sl-logo.png" "$STAGE/sl-logo.png"
+# Brand assets used to live here and had to survive the swap; they are compiled
+# into the server binary now (/assets/logo.svg, /assets/og-image.png), so this
+# directory holds installers and manifest.json only.
 rm -f "$STAGE/.sums"
 
 # 4) Atomic-ish publish: replace DEST contents with the verified staging set.
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete "$STAGE"/ "$DEST"/
 else
-  find "$DEST" -mindepth 1 ! -name 'sl-logo.png' -delete
+  find "$DEST" -mindepth 1 -delete
   cp -a "$STAGE"/. "$DEST"/
 fi
 echo "published $(printf '%s' "$entries" | grep -o '"file"' | wc -l) artifact(s) from $TAG to $DEST"

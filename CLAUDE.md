@@ -139,6 +139,12 @@ selection and mic gain versus a webview-based client).
   - `tls.rs` — self-signed cert generated on first run and **persisted**, so the
     SHA-256 fingerprint clients pin as `CERT_SHA256` stays stable across restarts.
   - `sessions.rs` — in-memory room/roster state.
+  - `assets/` — brand assets compiled into the binary (`include_str!`/
+    `include_bytes!`) and served at `/assets/logo.svg` + `/assets/og-image.png`,
+    so a deploy needs no files copied onto the host. `og-image.png` is rendered
+    from `og-image.svg` (scrapers don't render SVG) — regenerate with
+    `rsvg-convert -w 1200 -h 630 og-image.svg -o og-image.png` and the
+    JetBrains Mono font installed.
 
 `apps/web-participant` is a concept only (`CONCEPT.md`, no code). `deploy/` holds
 the docker-compose stacks, `turnserver.conf`, and `pull-installer.sh` (the target

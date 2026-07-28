@@ -241,6 +241,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/changelog", get(changelog_page))
         .route("/ws", get(ws_handler))
         .route("/healthz", get(|| async { "ok" }))
+        // Brand assets are compiled into the binary, so a fresh deploy serves the
+        // right logo with no files to copy onto the host.
+        .route("/assets/logo.svg", get(logo_svg))
+        .route("/assets/og-image.png", get(og_image))
         // PIN-protected session brokering (REST, called by the app webview → CORS).
         .route("/session", post(create_session))
         .route("/session/:code/join", post(join_session))
@@ -400,8 +404,38 @@ footer a{color:#9aa3ad;margin-right:1rem;display:inline-block}
 code{background:#1a1d23;padding:.1rem .3rem;border-radius:3px}
 </style>"#;
 
-// The standard raumdock logo (same SVG used across the RDOC web surfaces).
-const LOGO: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230a0a0a'/%3E%3Cpath d='M22 62 q28 14 56 0 l-6-22 q-24-10-44 0 z' fill='%23444'/%3E%3Cellipse cx='50' cy='46' rx='26' ry='18' fill='%23f6c200'/%3E%3Cellipse cx='62' cy='40' rx='8' ry='5' fill='%23ffffff' opacity='.5'/%3E%3C/svg%3E";
+/// The subraum mark: a surface line with the peer mesh hanging below it, one node
+/// breaking through. Four peers, all six links, nothing in the middle — the
+/// topology the product actually uses.
+const LOGO_SVG: &str = include_str!("../assets/logo.svg");
+/// Social preview card, pre-rendered from `assets/og-image.svg` (scrapers do not
+/// render SVG, so this one ships as a PNG).
+const OG_IMAGE_PNG: &[u8] = include_bytes!("../assets/og-image.png");
+
+/// Cache for a day: the assets only change when a new binary is deployed.
+const ASSET_CACHE: &str = "public, max-age=86400";
+
+async fn logo_svg() -> Response {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
+            (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+        ],
+        LOGO_SVG,
+    )
+        .into_response()
+}
+
+async fn og_image() -> Response {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+        ],
+        OG_IMAGE_PNG,
+    )
+        .into_response()
+}
 
 fn footer(base: &str, lang: Lang) -> String {
     let n = i18n::nav(lang);
@@ -417,7 +451,7 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
     let lc = lang.code();
     let desc = i18n::meta_desc(lang);
     let og_title = format!("{title} — subraum");
-    let og_image = format!("{base}/download/og-image.png");
+    let og_image = format!("{base}/assets/og-image.png");
     let og_url = format!("{base}{path}");
     Html(format!(
         "<!doctype html><html lang=\"{lc}\"><head><meta charset=\"utf-8\">{HTML_CSP}\
@@ -436,12 +470,10 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
 <meta name=\"twitter:title\" content=\"{og_title}\">\
 <meta name=\"twitter:description\" content=\"{desc}\">\
 <meta name=\"twitter:image\" content=\"{og_image}\">\
-<meta name=\"theme-color\" content=\"#f6c200\">\
-<link rel=\"icon\" href=\"{base}/download/sl-logo.png\">{css}</head><body>\
-<header class=\"top\"><img src=\"{base}/download/sl-logo.png\" alt=\"subraum\" onerror=\"this.onerror=null;this.src='{logo}'\"><a href=\"/?lang={lc}\">subraum</a>{sw}</header>\
+<meta name=\"theme-color\" content=\"#7fb0ff\">\
+<link rel=\"icon\" href=\"/assets/logo.svg\">{css}</head><body>\
+<header class=\"top\"><img src=\"/assets/logo.svg\" alt=\"\" width=\"26\" height=\"26\"><a href=\"/?lang={lc}\">subraum</a>{sw}</header>\
 <main>{body}</main><footer>{footer}</footer></body></html>",
-        base = base,
-        logo = LOGO,
         css = PAGE_CSS,
         sw = i18n::switcher(path, lang),
         footer = footer(&base, lang),

@@ -28,6 +28,13 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
   auf subraum.cc um, während `/ws` weiterhin echt proxied wird (bestehende
   Installationen haben diese WS-URL fest eingebaut).
 - **Release-Tags** heißen jetzt `subraum-v*`.
+- **Neues Logo für die Website.** Das Zeichen ist die Topologie selbst: eine
+  Oberflächenlinie, darunter vier Peers mit allen sechs Verbindungen, ein Knoten
+  durchstößt die Linie. Keine Mitte — es gibt keinen Server im Gespräch. Logo und
+  Social-Preview sind in die Server-Binary einkompiliert (`/assets/logo.svg`,
+  `/assets/og-image.png`) und müssen nicht mehr von Hand auf den Host kopiert
+  werden; `pull-installer.sh` muss sie entsprechend nicht mehr über den
+  Verzeichnistausch retten.
 - Unverändert: das Wire-Protokoll und das KDF-Label der PQC-Session
   (`rdoc-squadlink-pqc-v1`) — eine Änderung dort wäre ein Protokollbruch und
   würde alte gegen neue Clients inkompatibel machen.
