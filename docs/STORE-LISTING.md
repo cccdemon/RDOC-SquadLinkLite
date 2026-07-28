@@ -6,6 +6,10 @@ the wording is versioned alongside the release it describes.
 Fill one listing per language. English is the default listing; German is the
 second because that is the primary user base.
 
+**Partner Center renders no Markdown.** Paste these blocks verbatim: `**bold**`
+would show up as literal asterisks, so emphasis is done with plain uppercase
+section labels and `•` bullets instead.
+
 - **Product name (reserved):** `Subraum Communicator`
 - **Privacy policy URL:** <https://subraum.cc/privacy>
 - **Website:** <https://subraum.cc>
@@ -24,61 +28,65 @@ to player — no account, no recording, no media server in the middle.
 
 ### Description
 
-subraum is a serverless voice mesh for small groups. Every participant holds a
-direct encrypted connection to every other participant, and voice and chat
-travel only there. A small signaling service introduces peers to each other and
-keeps the roster and session PIN; it relays the handshake and then steps aside.
-It cannot decrypt what follows.
+```text
+subraum is voice and text chat for small squads — with one difference: there is
+no server listening in.
 
-Getting a squad in takes three steps and no configuration: the host creates a
-session and gets a link and a six-digit PIN, teammates open the link and enter
-code and PIN, and the session stays alive while members are connected.
+Audio goes straight from player to player. Every participant holds an encrypted
+connection to every other one, and voice and chat travel only there. A small
+service does nothing but introduce peers to each other: it brokers the
+connection, keeps the roster and the session PIN, and then steps aside. It
+cannot decrypt what is said afterwards.
 
-**Voice**
-- Push-to-talk on any key, mouse button, mouse wheel or gamepad button, plus a
+Three steps, no configuration:
+1. The host creates a session and gets a link and a six-digit PIN.
+2. Teammates open the link and enter code and PIN.
+3. The session stays alive as long as someone is connected.
+
+VOICE
+• Push-to-talk on any key, mouse button, mouse wheel or gamepad button — plus a
   toggle mode and an optional second key
-- Self-mute and deafen
-- Multiple radio channels per session, switchable by global hotkey
-- Optional in-game overlay showing the current channel
+• Self-mute and deafen
+• Several radio channels per session, switched by global hotkey
+• Optional in-game overlay showing the current channel
 
-**Audio quality**
-- Noise suppression, noise gate, compressor and limiter, each switchable
-- Per-participant volume and free choice of input and output device
-- Microphone self-test with local playback
-- Automatically lowers other applications while you speak (Windows)
-- Optional radio click so you can tell subraum apart from game audio
-- Low-bandwidth mode for weak connections
+AUDIO
+• Noise suppression, noise gate, compressor, limiter — each switchable
+• Per-participant volume, free choice of microphone and output device
+• Lowers other applications automatically while you speak
+• Radio click so you can tell subraum apart from game audio
+• Microphone self-test and a low-bandwidth mode for weak connections
 
-**Connection**
-- Direct peer-to-peer by default; optional TURN relay for strict NATs
-- Automatic reconnect with backoff — a signaling drop does not end the call
-- Network self-check for send, receive, STUN and signaling
-- Connection type shown per participant (direct or relay)
+CONNECTION
+• Direct peer-to-peer, optional relay for strict NATs
+• Automatic reconnect — losing the broker does not end the call
+• Network self-check; connection type shown per participant
 
-**Encryption**
-- Voice over DTLS-SRTP, chat over DTLS-SCTP, signaling over TLS
-- Additionally sealed with a post-quantum hybrid handshake (ML-KEM-768 with
-  X25519, ChaCha20-Poly1305)
-- Keys are ephemeral per session; a room-wide re-key can be triggered at any
-  time from the app
-- No accounts, no recording, no message history on any server
+ENCRYPTION
+• Voice over DTLS-SRTP, chat over DTLS-SCTP, brokering over TLS
+• Plus a post-quantum key exchange (ML-KEM-768 with X25519)
+• Keys live only for the session; re-encrypt at any time from the app
+• No accounts, no recording, no history on any server
 
-**Uses your microphone** for voice chat. Nothing is recorded and no audio
-reaches the signaling service.
+subraum uses your microphone for voice chat. Nothing is recorded.
 
-Previously published as SquadLink Lite. The app was renamed to subraum because
-an unrelated application already goes by "SquadLink"; the rename rules out the
-confusion. Same app, same team — existing Store installs update normally.
+Previously published as SquadLink Lite.
+```
 
 ### What's new in this version
 
-Version 0.2.0 — the app is now called subraum (previously SquadLink Lite). An
-unrelated application already goes by "SquadLink", so the rename rules out the
-confusion. Same app, same team.
+```text
+Version 0.2.0 — the app is now called subraum.
 
-- New name, new icon, new website at subraum.cc
-- Session links you already handed out keep working
-- Everything else is unchanged: same encryption, same features, same settings
+An unrelated application already goes by "SquadLink". We renamed to rule out the
+confusion. Same app, same team, same features — only the name, the icon and the
+website are new.
+
+• New name and new icon
+• New website: subraum.cc
+• Session links you already handed out keep working
+• Encryption, settings and handling unchanged
+```
 
 ### Search terms
 
@@ -96,67 +104,69 @@ Spieler zu Spieler — ohne Account, ohne Aufnahme, ohne Medienserver dazwischen
 
 ### Beschreibung
 
-subraum ist ein serverloses Voice-Mesh für kleine Gruppen. Jeder Teilnehmer
-hält eine direkte verschlüsselte Verbindung zu jedem anderen, und Sprache und
-Chat laufen ausschließlich dort. Ein kleiner Signaling-Dienst stellt die
-Teilnehmer einander vor und verwaltet Teilnehmerliste und Session-PIN; er
-vermittelt den Handshake und tritt dann zur Seite. Was danach läuft, kann er
-nicht entschlüsseln.
+```text
+subraum ist Sprach- und Textchat für kleine Crews — mit einem Unterschied: Es
+gibt keinen Server, der mithört.
 
-Eine Crew ist in drei Schritten drin, ohne Konfiguration: Der Host erstellt eine
-Session und erhält einen Link und eine sechsstellige PIN, die Mitspieler öffnen
-den Link und geben Code und PIN ein, und die Session bleibt bestehen, solange
-Teilnehmer verbunden sind.
+Der Ton läuft direkt von Spieler zu Spieler. Jeder Teilnehmer hält eine
+verschlüsselte Verbindung zu jedem anderen, und Sprache und Chat laufen
+ausschließlich dort. Ein kleiner Dienst stellt die Teilnehmer einander nur vor:
+Er vermittelt den Verbindungsaufbau, verwaltet Teilnehmerliste und Session-PIN
+und tritt dann zur Seite. Was danach gesprochen wird, kann er nicht
+entschlüsseln.
 
-**Sprache**
-- Push-to-Talk auf jeder Taste, Maustaste, dem Mausrad oder einer Gamepad-Taste,
-  dazu ein Umschaltmodus und eine optionale zweite Taste
-- Selbst stummschalten und Ton komplett aus
-- Mehrere Funkkanäle je Session, umschaltbar per globalem Hotkey
-- Optionales In-Game-Overlay mit dem aktuellen Kanal
+In drei Schritten drin, ohne Konfiguration:
+1. Der Host erstellt eine Session und bekommt einen Link und eine sechsstellige
+   PIN.
+2. Die Mitspieler öffnen den Link und geben Code und PIN ein.
+3. Die Session bleibt bestehen, solange jemand verbunden ist.
 
-**Audioqualität**
-- Rauschunterdrückung, Noise Gate, Kompressor und Limiter, einzeln schaltbar
-- Lautstärke je Teilnehmer, freie Wahl von Eingabe- und Ausgabegerät
-- Mikrofon-Selbsttest mit Eigenwiedergabe
-- Senkt automatisch die Lautstärke anderer Anwendungen, während du sprichst
-  (Windows)
-- Optionaler Funk-Klick, damit du subraum vom Spielton unterscheiden kannst
-- Low-Bandwidth-Modus für schwache Verbindungen
+SPRACHE
+• Push-to-Talk auf jeder Taste, Maustaste, dem Mausrad oder am Gamepad — dazu
+  Umschaltmodus und optionale zweite Taste
+• Selbst stummschalten und Ton komplett aus
+• Mehrere Funkkanäle je Session, umschaltbar per globalem Hotkey
+• Optionales Overlay im Spiel mit dem aktuellen Kanal
 
-**Verbindung**
-- Standardmäßig direkt Peer-zu-Peer; optionaler TURN-Relay für strenge NATs
-- Automatischer Reconnect mit Backoff — ein Signaling-Abriss beendet das
-  Gespräch nicht
-- Netzwerk-Selbsttest für Senden, Empfangen, STUN und Signaling
-- Verbindungsart je Teilnehmer sichtbar (direkt oder Relay)
+AUDIO
+• Rauschunterdrückung, Noise Gate, Kompressor, Limiter — einzeln schaltbar
+• Lautstärke je Teilnehmer, freie Wahl von Mikrofon und Ausgabegerät
+• Senkt andere Anwendungen automatisch, während du sprichst
+• Funk-Klick, damit du subraum vom Spielton unterscheidest
+• Mikrofon-Selbsttest und Low-Bandwidth-Modus für schwache Leitungen
 
-**Verschlüsselung**
-- Sprache über DTLS-SRTP, Chat über DTLS-SCTP, Signaling über TLS
-- Zusätzlich abgesichert durch einen post-quanten-sicheren Handshake (ML-KEM-768
-  mit X25519, ChaCha20-Poly1305)
-- Schlüssel sind pro Session flüchtig; eine room-weite Neuverschlüsselung lässt
-  sich jederzeit in der App auslösen
-- Keine Accounts, keine Aufnahmen, kein Nachrichtenverlauf auf einem Server
+VERBINDUNG
+• Direkt Peer-zu-Peer, optionaler Relay für strenge NATs
+• Automatischer Reconnect — ein Abriss der Vermittlung beendet das Gespräch
+  nicht
+• Netzwerk-Selbsttest; Verbindungsart je Teilnehmer sichtbar
 
-**Nutzt dein Mikrofon** für den Sprachchat. Es wird nichts aufgezeichnet, und
-kein Ton erreicht den Signaling-Dienst.
+VERSCHLÜSSELUNG
+• Sprache über DTLS-SRTP, Chat über DTLS-SCTP, Vermittlung über TLS
+• Zusätzlich post-quanten-sicherer Schlüsselaustausch (ML-KEM-768 mit X25519)
+• Schlüssel gelten nur für die Session; Neuverschlüsselung jederzeit per
+  Knopfdruck
+• Keine Accounts, keine Aufnahmen, kein Verlauf auf einem Server
 
-Früher veröffentlicht als SquadLink Lite. Die App wurde in subraum umbenannt,
-weil bereits eine andere Anwendung den Namen „SquadLink" trägt; die Umbenennung
-schließt Verwechslungen aus. Gleiche App, gleiches Team — bestehende
-Store-Installationen aktualisieren sich ganz normal.
+subraum nutzt dein Mikrofon für den Sprachchat. Es wird nichts aufgezeichnet.
+
+Früher veröffentlicht als SquadLink Lite.
+```
 
 ### Neuerungen in dieser Version
 
-Version 0.2.0 — die App heißt jetzt subraum (vorher SquadLink Lite). Es gibt
-bereits eine andere Anwendung namens „SquadLink"; die Umbenennung schließt
-Verwechslungen aus. Gleiche App, gleiches Team.
+```text
+Version 0.2.0 — die App heißt jetzt subraum.
 
-- Neuer Name, neues Icon, neue Website unter subraum.cc
-- Bereits verteilte Session-Links funktionieren weiter
-- Sonst unverändert: gleiche Verschlüsselung, gleiche Funktionen, gleiche
-  Einstellungen
+Es gibt bereits eine andere Anwendung namens „SquadLink". Um Verwechslungen
+auszuschließen, haben wir umbenannt. Gleiche App, gleiches Team, gleiche
+Funktionen — neu sind nur Name, Icon und Website.
+
+• Neuer Name und neues Icon
+• Neue Website: subraum.cc
+• Bereits verteilte Session-Links funktionieren weiter
+• Verschlüsselung, Einstellungen und Bedienung unverändert
+```
 
 ### Suchbegriffe
 
