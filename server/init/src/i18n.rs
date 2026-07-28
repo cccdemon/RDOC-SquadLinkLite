@@ -63,8 +63,14 @@ impl Lang {
 }
 
 /// Screenshot gallery for the home page. Images live in the Caddy download dir
-/// as `shot-1.png` … `shot-6.png`. Captions are localized (EN fallback).
-pub fn screenshots(l: Lang, base: &str) -> String {
+/// as `shot-1.png` … `shot-6.png`; `have` lists the ones that are actually on
+/// disk, so a missing file is skipped rather than linked as a broken image.
+/// Returns an empty string when nothing is published — the caller then drops
+/// the whole section instead of printing an empty heading.
+pub fn screenshots(l: Lang, base: &str, have: &[usize]) -> String {
+    if have.is_empty() {
+        return String::new();
+    }
     let (title, caps): (&str, [&str; 6]) = match l {
         Lang::De => (
             "Screenshots",
@@ -90,13 +96,16 @@ pub fn screenshots(l: Lang, base: &str) -> String {
         ),
     };
     let mut grid = String::new();
-    for (i, cap) in caps.iter().enumerate() {
-        let n = i + 1;
+    for &n in have {
+        // `have` is built from shot-1..shot-MAX_SHOTS, so the caption index is
+        // always in range; fall back to the first caption rather than panicking.
+        let cap = caps.get(n - 1).copied().unwrap_or(caps[0]);
         grid.push_str(&format!(
             r#"<figure class="shot"><a href="{base}/download/shot-{n}.png" target="_blank" rel="noopener"><img src="{base}/download/shot-{n}.png" alt="{cap}" loading="lazy"></a><figcaption>{cap}</figcaption></figure>"#
         ));
     }
-    format!(r#"<h2>{title}</h2><div class="shots">{grid}</div>"#)
+    let _ = title;
+    format!(r#"<div class="shots">{grid}</div>"#)
 }
 
 /// Short social-share (OpenGraph) description, one line per language. No quotes
@@ -233,9 +242,18 @@ struct HomeText {
     l_lic: &'static str,
 }
 
-pub fn home(l: Lang, base: &str) -> (&'static str, String) {
+pub fn home(l: Lang, base: &str, shots: &[usize]) -> (&'static str, String) {
     let t = home_text(l);
     let lc = l.code();
+    // No screenshots on disk → no gallery section at all, rather than a heading
+    // over six broken images.
+    let shots_section = match screenshots(l, base, shots) {
+        s if s.is_empty() => String::new(),
+        s => format!(
+            "<section class=\"sec\">\n<p class=\"eyebrow\">{}</p>\n{s}\n</section>\n",
+            t.shots_eyebrow
+        ),
+    };
     // First three rows are what the signaling service must see to broker a
     // connection; the last three are what it structurally cannot see.
     let spec: String = t
@@ -288,11 +306,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
 <p class="announce prose">{announce}</p>
 </section>
 
-<section class="sec">
-<p class="eyebrow">{shots_eyebrow}</p>
 {shots}
-</section>
-
 <section class="sec">
 <p class="eyebrow">{links_eyebrow}</p>
 <p class="links">
@@ -326,8 +340,7 @@ pub fn home(l: Lang, base: &str) -> (&'static str, String) {
         store_note = t.store_note,
         all_dl = t.all_dl,
         announce = t.announce,
-        shots_eyebrow = t.shots_eyebrow,
-        shots = screenshots(l, base),
+        shots = shots_section,
         links_eyebrow = t.links_eyebrow,
         l_fleet = t.l_fleet,
         l_src = t.l_src,

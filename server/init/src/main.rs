@@ -592,7 +592,7 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
 
 async fn home(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
     let lang = lang_of(&q, &headers);
-    let (title, body) = i18n::home(lang, &public_base());
+    let (title, body) = i18n::home(lang, &public_base(), &available_shots());
     shell(lang, "/", title, &body)
 }
 
@@ -692,10 +692,25 @@ async fn downloads_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<Strin
     shell(lang, "/get", title, &body)
 }
 
+fn downloads_dir() -> String {
+    std::env::var("DOWNLOADS_DIR").unwrap_or_else(|_| "/srv/downloads/subraum".into())
+}
+
+/// Which `shot-N.png` files actually exist in the mirror. The home page only
+/// links the ones it finds — a missing screenshot must never render as a broken
+/// image, and the gallery disappears entirely when none are published yet.
+fn available_shots() -> Vec<usize> {
+    let dir = std::path::PathBuf::from(downloads_dir());
+    (1..=MAX_SHOTS).filter(|n| dir.join(format!("shot-{n}.png")).is_file()).collect()
+}
+
+/// Upper bound on the screenshot gallery; files are `shot-1.png` … `shot-6.png`.
+const MAX_SHOTS: usize = 6;
+
 /// Parse the mirror manifest into (version, artifacts). Missing or invalid →
 /// empty, so the page degrades to a "no builds yet" notice instead of erroring.
 fn load_manifest() -> (Option<String>, Vec<i18n::Artifact>) {
-    let dir = std::env::var("DOWNLOADS_DIR").unwrap_or_else(|_| "/srv/downloads/subraum".into());
+    let dir = downloads_dir();
     let path = std::path::Path::new(&dir).join("manifest.json");
     let Ok(txt) = std::fs::read_to_string(&path) else {
         return (None, Vec::new());

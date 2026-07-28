@@ -114,9 +114,14 @@ done
 printf '{"version":"%s","tag":"%s","generated":"%s","artifacts":[%s]}\n' \
   "$VERSION" "$TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$entries" > "$STAGE/manifest.json"
 
-# Brand assets used to live here and had to survive the swap; they are compiled
-# into the server binary now (/assets/logo.svg, /assets/og-image.png), so this
-# directory holds installers and manifest.json only.
+# The logo and social card are compiled into the server binary now
+# (/assets/logo.svg, /assets/og-image.png) and need no rescuing. The app
+# screenshots cannot be: they are published by hand and the home page links
+# them out of this directory, so carry them across the swap or the next release
+# silently empties the gallery.
+for shot in "$DEST"/shot-*.png; do
+  [ -e "$shot" ] && cp -p "$shot" "$STAGE/"
+done
 rm -f "$STAGE/.sums"
 
 # 4) Atomic-ish publish: replace DEST contents with the verified staging set.
