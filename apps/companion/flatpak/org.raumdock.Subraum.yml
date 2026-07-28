@@ -39,15 +39,22 @@ modules:
       - ar x subraum.deb
       - tar -xf data.tar.gz
       - install -Dm755 usr/bin/subraum /app/bin/subraum
-      # Icons, renamed to the Flatpak app-id at each installed size.
-      - install -Dm644 usr/share/icons/hicolor/32x32/apps/subraum.png
-        /app/share/icons/hicolor/32x32/apps/${FLATPAK_ID}.png
-      - install -Dm644 usr/share/icons/hicolor/128x128/apps/subraum.png
-        /app/share/icons/hicolor/128x128/apps/${FLATPAK_ID}.png
-      - install -Dm644 usr/share/icons/hicolor/256x256/apps/subraum.png
-        /app/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
-      - install -Dm644 "usr/share/icons/hicolor/256x256@2/apps/subraum.png"
-        "/app/share/icons/hicolor/256x256@2/apps/${FLATPAK_ID}.png"
+      # Icons, renamed to the Flatpak app-id at whatever sizes the .deb ships.
+      # Do not hardcode the size list: `tauri icon` derives the installed hicolor
+      # directories from the source image's dimensions, so regenerating the icons
+      # from a differently sized master silently changes which ones exist. A
+      # pinned list broke the build exactly that way once.
+      - |
+        found=0
+        for src in usr/share/icons/hicolor/*/apps/subraum.png; do
+          [ -e "$src" ] || continue
+          size=$(basename "$(dirname "$(dirname "$src")")")
+          install -Dm644 "$src" "/app/share/icons/hicolor/$size/apps/${FLATPAK_ID}.png"
+          found=$((found + 1))
+        done
+        # An icon-less app is a broken Flatpak, so fail loudly rather than ship it.
+        [ "$found" -gt 0 ] || { echo "no icons found in the .deb"; exit 1; }
+        echo "installed $found icon size(s)"
       # Desktop entry, renamed to <app-id>.desktop and pointed at the renamed
       # icon + given proper categories (the .deb ships an empty Categories=).
       - install -Dm644 "usr/share/applications/subraum.desktop"
