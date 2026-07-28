@@ -120,6 +120,9 @@ run silent uninstall, confirm clean removal + exit code 0.
 
 ---
 
+> Listing copy (EN + DE), search terms, "what's new" text and the age-rating
+> answers are written out in [STORE-LISTING.md](STORE-LISTING.md).
+
 ## 3. Partner Center listing
 
 - **Packages**: upload the signed installer (or its download URL). Enter the silent
