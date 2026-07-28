@@ -368,40 +368,149 @@ async fn landing(Path(code): Path<String>, RawQuery(q): RawQuery, headers: Heade
     shell(lang, &format!("/j/{code}"), "subraum", &body)
 }
 
+/// Page styling. The look is deliberately a datasheet, not a landing page: the
+/// product's whole claim is topological (nothing sits in the middle of a call),
+/// so the page is built from schematics, hairlines and mono labels rather than
+/// marketing furniture. No webfont — the CSP allows no font-src, and the system
+/// mono stack is what a spec sheet would use anyway.
 const PAGE_CSS: &str = r#"<style>
-:root{color-scheme:dark}
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f1115;color:#dfe3e8;margin:0;line-height:1.6}
-main{max-width:40rem;margin:0 auto;padding:1.4rem 1.2rem 3rem}
-.top{display:flex;align-items:center;gap:.55rem;padding:.9rem 1.2rem;border-bottom:1px solid #242833}
-.top img{width:26px;height:26px;display:block}
-.top a{color:#dfe3e8;text-decoration:none;font-weight:600}
-h1{font-size:1.45rem;font-weight:600;margin:.3rem 0 .2rem}
-.tagline{margin:0 0 .9rem;color:#9aa3ad;font-size:.85rem;text-transform:lowercase;letter-spacing:.12em}
-h2{font-size:1.05rem;font-weight:600;margin:1.5rem 0 .3rem}
-h2.ver{border-top:1px solid #242833;padding-top:.9rem;margin-top:1.6rem;color:#cfe0ff}
-h3{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9aa3ad;margin:.8rem 0 .1rem}
-p{margin:.6rem 0}
-a{color:#7fb0ff}
-.muted{color:#9aa3ad;font-size:.9rem}
-.announce{border:1px solid #7fb0ff;background:#13203a;border-radius:6px;padding:.7rem .9rem;color:#cfe0ff}
-ul{padding-left:1.25rem;margin:.5rem 0}
-.links a{display:block;margin:.25rem 0}
-.links span{display:block;margin:.25rem 0;color:#9aa3ad}
-.dl{display:inline-block;margin:.5rem 0;padding:.5rem .9rem;border:1px solid #3a414e;border-radius:5px;text-decoration:none;color:#dfe3e8}
-.dl.store{display:inline-flex;align-items:center;gap:.5rem;border-color:#7fb0ff;background:#13203a;color:#cfe0ff;font-weight:600;padding:.6rem 1.1rem;font-size:1.05rem}
-.dl.store svg{display:block}
-.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.85rem;margin:.7rem 0}
+:root{
+color-scheme:dark;
+--void:#0A0D13;--panel:#0F131B;--panel2:#141A24;
+--line:#1C232F;--line-hi:#2B3646;
+--ink:#E4E8EE;--dim:#8C96A6;--faint:#5D6878;
+--signal:#7FB0FF;--deep:#3D6FD8;--ok:#3FCF8E;--warn:#E0A244;
+--mono:ui-monospace,"JetBrains Mono","SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--wrap:64rem;--prose:41rem;
+}
+*{box-sizing:border-box}
+body{font-family:var(--sans);background:var(--void);color:var(--ink);margin:0;line-height:1.65;
+font-size:16px;-webkit-text-size-adjust:100%}
+a{color:var(--signal);text-decoration:none;border-bottom:1px solid rgba(127,176,255,.32)}
+a:hover{border-bottom-color:var(--signal)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+img{max-width:100%;height:auto}
+
+/* ── Frame ─────────────────────────────────────────────────────────────── */
+.top{display:flex;align-items:center;gap:.6rem;padding:.85rem 1.4rem;
+border-bottom:1px solid var(--line);background:var(--void)}
+.top img{width:26px;height:26px;display:block;flex:none}
+.top .brand{color:var(--ink);font-weight:600;letter-spacing:.01em;border:0}
+.lang{margin-left:auto;display:flex;gap:.1rem;font-family:var(--mono);font-size:.72rem}
+.lang a{color:var(--faint);padding:.15rem .4rem;border:0;letter-spacing:.06em}
+.lang a:hover{color:var(--dim)}
+.lang a.on{color:var(--signal);background:rgba(127,176,255,.1)}
+main{max-width:var(--wrap);margin:0 auto;padding:0 1.4rem 4rem}
+footer{max-width:var(--wrap);margin:0 auto;padding:1.4rem;border-top:1px solid var(--line);
+color:var(--faint);font-size:.8rem;display:flex;flex-wrap:wrap;gap:.2rem 1.3rem}
+footer a{color:var(--dim);border:0}
+footer a:hover{color:var(--signal)}
+
+/* ── Sections: a full-bleed hairline plus a mono eyebrow. The eyebrow names
+      the layer being described, so the page reads as a spec, not a pitch. ── */
+.sec{border-top:1px solid var(--line);padding:2.4rem 0 .4rem;margin-top:2.4rem}
+.sec:first-of-type{border-top:0;margin-top:0}
+.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;
+color:var(--faint);margin:0 0 .9rem}
+.eyebrow b{color:var(--signal);font-weight:500}
+.prose{max-width:var(--prose)}
+h1{font-size:clamp(1.9rem,4.6vw,2.7rem);font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 .5rem}
+h2{font-size:1.28rem;font-weight:600;letter-spacing:-.01em;margin:0 0 .5rem}
+h3{font-size:.98rem;font-weight:600;margin:1.4rem 0 .3rem}
+p{margin:.65rem 0}
+ul{padding-left:1.1rem;margin:.6rem 0}
+li{margin:.3rem 0}
+.muted{color:var(--dim);font-size:.9rem}
+.tagline{font-family:var(--mono);font-size:.82rem;letter-spacing:.2em;color:var(--dim);margin:0 0 1.6rem}
+code{font-family:var(--mono);font-size:.86em;background:var(--panel2);border:1px solid var(--line);
+padding:.05rem .32rem;border-radius:2px}
+
+/* ── Hero ──────────────────────────────────────────────────────────────── */
+.hero{padding:3rem 0 0}
+.lede{font-size:1.12rem;color:var(--ink);max-width:var(--prose)}
+
+/* ── Schematic: the load-bearing element. Scales by viewBox, so it stays
+      readable on a phone without a second layout. ─────────────────────── */
+.diagram{margin:1.8rem 0 .6rem;border:1px solid var(--line);background:var(--panel);
+padding:1.2rem;overflow-x:auto}
+.diagram svg{display:block;width:100%;height:auto;min-width:24rem}
+.diagram figcaption{font-family:var(--mono);font-size:.72rem;color:var(--faint);
+margin-top:.9rem;letter-spacing:.04em}
+
+/* ── Plane cards: data plane vs control plane, the page's spine. ───────── */
+.planes{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:1px;
+background:var(--line);border:1px solid var(--line);margin:1.4rem 0}
+.plane{background:var(--panel);padding:1.1rem 1.2rem}
+.plane h3{margin:.15rem 0 .5rem;font-size:1rem}
+.plane .tag{font-family:var(--mono);font-size:.68rem;letter-spacing:.16em;text-transform:uppercase}
+.plane.p2p .tag{color:var(--ok)}
+.plane.srv .tag{color:var(--warn)}
+.plane p{margin:.4rem 0;font-size:.92rem;color:var(--dim)}
+
+/* ── Spec rows: label · dotted leader · value. The datasheet texture. ──── */
+.spec{border-top:1px solid var(--line);margin:1.2rem 0 0;max-width:52rem}
+.spec div{display:flex;align-items:baseline;gap:.6rem;padding:.55rem 0;
+border-bottom:1px solid var(--line);font-size:.9rem}
+.spec dt,.spec .k{font-family:var(--mono);font-size:.78rem;letter-spacing:.04em;color:var(--dim);
+flex:none;min-width:14rem}
+.spec dd,.spec .v{margin:0;color:var(--ink)}
+.spec .no{color:var(--ok)}
+.spec .yes{color:var(--warn)}
+
+/* ── Steps: a real sequence, so it is numbered. ────────────────────────── */
+.steps{counter-reset:s;list-style:none;padding:0;margin:1.1rem 0;max-width:var(--prose)}
+.steps li{counter-increment:s;position:relative;padding-left:2.6rem;margin:.9rem 0}
+.steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.05rem;
+font-family:var(--mono);font-size:.75rem;color:var(--signal);letter-spacing:.06em}
+
+/* ── Actions ───────────────────────────────────────────────────────────── */
+.dl{display:inline-block;margin:.4rem .5rem .4rem 0;padding:.6rem 1rem;border:1px solid var(--line-hi);
+color:var(--ink);font-size:.92rem;background:var(--panel)}
+.dl:hover{border-color:var(--signal);background:var(--panel2)}
+.dl.store{display:inline-flex;align-items:center;gap:.6rem;border-color:var(--signal);
+background:rgba(127,176,255,.09);color:#CFE0FF;font-weight:600;padding:.7rem 1.15rem;font-size:1rem}
+.dl.store svg{display:block;flex:none}
+.announce{border:1px solid var(--line-hi);border-left:2px solid var(--warn);background:var(--panel);
+padding:.85rem 1rem;color:var(--dim);font-size:.92rem}
+.announce strong{color:var(--ink)}
+
+/* ── Downloads ─────────────────────────────────────────────────────────── */
+.arts{list-style:none;padding:0;margin:.8rem 0;border-top:1px solid var(--line)}
+.arts li{border-bottom:1px solid var(--line);padding:.8rem 0}
+.arts .file{font-family:var(--mono);font-size:.88rem;color:var(--ink);border:0;word-break:break-all}
+.arts .file:hover{color:var(--signal)}
+.arts .meta{font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.05em;
+margin-top:.25rem;display:block}
+.arts .sha{font-family:var(--mono);font-size:.7rem;color:var(--faint);word-break:break-all;
+display:block;margin-top:.2rem}
+
+/* ── Screenshots ───────────────────────────────────────────────────────── */
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:1rem;margin:1.1rem 0}
 .shot{margin:0}
-.shot a{display:block}
-.shot img{width:100%;height:auto;display:block;border:1px solid #242833;border-radius:8px;background:#0b0e14}
-.shot figcaption{color:#9aa3ad;font-size:.82rem;margin-top:.35rem}
-.code{font-size:1.5rem;font-weight:700;letter-spacing:.1em;background:#0b1626;border:1px solid #1e293b;border-radius:8px;padding:.5rem 1rem;display:inline-block}
-.lang{margin-left:auto;display:flex;gap:.45rem}
-.lang a{color:#9aa3ad;font-size:.78rem;text-decoration:none}
-.lang a.on{color:#7fb0ff;font-weight:700}
-footer{max-width:40rem;margin:0 auto;padding:1rem 1.2rem;border-top:1px solid #242833;color:#9aa3ad;font-size:.82rem}
-footer a{color:#9aa3ad;margin-right:1rem;display:inline-block}
-code{background:#1a1d23;padding:.1rem .3rem;border-radius:3px}
+.shot a{display:block;border:0}
+.shot img{display:block;border:1px solid var(--line);background:var(--panel)}
+.shot img:hover{border-color:var(--line-hi)}
+.shot figcaption{color:var(--faint);font-size:.78rem;margin-top:.4rem;line-height:1.45}
+
+/* ── Invite landing ────────────────────────────────────────────────────── */
+.code{font-family:var(--mono);font-size:clamp(1.6rem,6vw,2.2rem);font-weight:600;letter-spacing:.22em;
+background:var(--panel);border:1px solid var(--line-hi);padding:.7rem 1.1rem;display:inline-block;
+color:var(--signal)}
+.links a{display:block;margin:.35rem 0;width:fit-content}
+
+/* ── Changelog ─────────────────────────────────────────────────────────── */
+h2.ver{font-family:var(--mono);font-size:.95rem;letter-spacing:.04em;color:var(--signal);
+border-top:1px solid var(--line);padding-top:1.1rem;margin-top:2rem}
+
+@media (max-width:34rem){
+.top{padding:.75rem 1rem}
+main{padding:0 1rem 3rem}
+.diagram{padding:.8rem}
+.spec div{flex-direction:column;gap:.15rem}
+.spec dt,.spec .k{min-width:0}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>"#;
 
 /// The subraum mark: a surface line with the peer mesh hanging below it, one node
@@ -472,7 +581,8 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
 <meta name=\"twitter:image\" content=\"{og_image}\">\
 <meta name=\"theme-color\" content=\"#7fb0ff\">\
 <link rel=\"icon\" href=\"/assets/logo.svg\">{css}</head><body>\
-<header class=\"top\"><img src=\"/assets/logo.svg\" alt=\"\" width=\"26\" height=\"26\"><a href=\"/?lang={lc}\">subraum</a>{sw}</header>\
+<header class=\"top\"><img src=\"/assets/logo.svg\" alt=\"\" width=\"26\" height=\"26\">\
+<a class=\"brand\" href=\"/?lang={lc}\">subraum</a>{sw}</header>\
 <main>{body}</main><footer>{footer}</footer></body></html>",
         css = PAGE_CSS,
         sw = i18n::switcher(path, lang),
@@ -511,7 +621,7 @@ const CHANGELOG_MD: &str = include_str!("../../../CHANGELOG.md");
 
 async fn changelog_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
     let lang = lang_of(&q, &headers);
-    let body = render_changelog(CHANGELOG_MD);
+    let body = i18n::doc(&render_changelog(CHANGELOG_MD));
     shell(lang, "/changelog", "Changelog", &body)
 }
 
