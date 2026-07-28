@@ -245,6 +245,7 @@ async fn main() -> anyhow::Result<()> {
         // right logo with no files to copy onto the host.
         .route("/assets/logo.svg", get(logo_svg))
         .route("/assets/og-image.png", get(og_image))
+        .route("/assets/shot/:n", get(shot_png))
         // PIN-protected session brokering (REST, called by the app webview → CORS).
         .route("/session", post(create_session))
         .route("/session/:code/join", post(join_session))
@@ -486,10 +487,15 @@ margin-top:.25rem;display:block}
 display:block;margin-top:.2rem}
 
 /* ── Screenshots ───────────────────────────────────────────────────────── */
-.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:1rem;margin:1.1rem 0}
+/* Screenshots differ wildly in aspect (a settings panel is tall, a channel strip
+   is wide), so cap the height and let each sit at the top of its row instead of
+   stretching the grid to the tallest one. */
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));gap:1.1rem;
+margin:1.1rem 0;align-items:start}
 .shot{margin:0}
 .shot a{display:block;border:0}
-.shot img{display:block;border:1px solid var(--line);background:var(--panel)}
+.shot img{display:block;width:100%;height:auto;max-height:24rem;object-fit:contain;
+object-position:top;border:1px solid var(--line);background:var(--panel)}
 .shot img:hover{border-color:var(--line-hi)}
 .shot figcaption{color:var(--faint);font-size:.78rem;margin-top:.4rem;line-height:1.45}
 
@@ -520,6 +526,33 @@ const LOGO_SVG: &str = include_str!("../assets/logo.svg");
 /// Social preview card, pre-rendered from `assets/og-image.svg` (scrapers do not
 /// render SVG, so this one ships as a PNG).
 const OG_IMAGE_PNG: &[u8] = include_bytes!("../assets/og-image.png");
+
+/// App screenshots for the home page gallery, in display order. They live in the
+/// repo and ship inside the binary on purpose: the earlier arrangement kept them
+/// in the download mirror, which `pull-installer.sh` empties on every release —
+/// screenshots put there survived at most an hour. Order must match the captions
+/// in `i18n::screenshots`.
+const SHOTS: [&[u8]; 5] = [
+    include_bytes!("../assets/shot-1.png"),
+    include_bytes!("../assets/shot-2.png"),
+    include_bytes!("../assets/shot-3.png"),
+    include_bytes!("../assets/shot-4.png"),
+    include_bytes!("../assets/shot-5.png"),
+];
+
+async fn shot_png(Path(n): Path<usize>) -> Response {
+    match n.checked_sub(1).and_then(|i| SHOTS.get(i)) {
+        Some(bytes) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "image/png"),
+                (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+            ],
+            *bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
 
 /// Cache for a day: the assets only change when a new binary is deployed.
 const ASSET_CACHE: &str = "public, max-age=86400";
@@ -592,7 +625,7 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
 
 async fn home(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
     let lang = lang_of(&q, &headers);
-    let (title, body) = i18n::home(lang, &public_base(), &available_shots());
+    let (title, body) = i18n::home(lang, &public_base(), SHOTS.len());
     shell(lang, "/", title, &body)
 }
 
@@ -695,17 +728,6 @@ async fn downloads_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<Strin
 fn downloads_dir() -> String {
     std::env::var("DOWNLOADS_DIR").unwrap_or_else(|_| "/srv/downloads/subraum".into())
 }
-
-/// Which `shot-N.png` files actually exist in the mirror. The home page only
-/// links the ones it finds — a missing screenshot must never render as a broken
-/// image, and the gallery disappears entirely when none are published yet.
-fn available_shots() -> Vec<usize> {
-    let dir = std::path::PathBuf::from(downloads_dir());
-    (1..=MAX_SHOTS).filter(|n| dir.join(format!("shot-{n}.png")).is_file()).collect()
-}
-
-/// Upper bound on the screenshot gallery; files are `shot-1.png` … `shot-6.png`.
-const MAX_SHOTS: usize = 6;
 
 /// Parse the mirror manifest into (version, artifacts). Missing or invalid →
 /// empty, so the page degrades to a "no builds yet" notice instead of erroring.

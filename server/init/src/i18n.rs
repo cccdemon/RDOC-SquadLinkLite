@@ -62,49 +62,58 @@ impl Lang {
     }
 }
 
-/// Screenshot gallery for the home page. Images live in the Caddy download dir
-/// as `shot-1.png` … `shot-6.png`; `have` lists the ones that are actually on
-/// disk, so a missing file is skipped rather than linked as a broken image.
-/// Returns an empty string when nothing is published — the caller then drops
-/// the whole section instead of printing an empty heading.
-pub fn screenshots(l: Lang, base: &str, have: &[usize]) -> String {
-    if have.is_empty() {
+/// Screenshot gallery for the home page. The images ship inside the binary and
+/// are served from `/assets/shot/<n>`; `count` says how many exist. Captions
+/// describe the actual screenshots, so adding one means adding its caption here
+/// in the same position.
+pub fn screenshots(l: Lang, base: &str, count: usize) -> String {
+    if count == 0 {
         return String::new();
     }
-    let (title, caps): (&str, [&str; 6]) = match l {
-        Lang::De => (
-            "Screenshots",
-            [
-                "In der Session — Kanäle, Squad-Liste, Push-to-Talk",
-                "Senden — zum Sprechen halten, pro Kanal",
-                "Start — Session hosten oder mit Link + PIN beitreten",
-                "Audio — Mikro, Push-to-Talk, App-Ducking, Funk-Klick",
-                "Experte — In-Game-Overlay, Cycle-Hotkeys, neu verschlüsseln",
-                "Verbindungs-Selbsttest",
-            ],
-        ),
-        _ => (
-            "Screenshots",
-            [
-                "In a session — channels, squad roster, push-to-talk",
-                "Transmitting — hold to talk, per channel",
-                "Start — host a session or join with link + PIN",
-                "Audio — mic, push-to-talk, app ducking, radio-click",
-                "Expert — in-game overlay, cycle hotkeys, re-encrypt",
-                "Connection self-check",
-            ],
-        ),
+    let caps: [&str; 5] = match l {
+        Lang::De => [
+            "In der Session — Kanäle, Teilnehmer, Push-to-Talk, Chat",
+            "Start — Session hosten oder mit Link und PIN beitreten",
+            "Mehrere Funkkanäle, Wechsel per Hotkey",
+            "Audio — Mikrofon, Push-to-Talk, App-Ducking, Funk-Klick",
+            "Experte — Overlay, Kanal-Hotkeys, neu verschlüsseln, Selbsttest",
+        ],
+        Lang::It => [
+            "In sessione — canali, partecipanti, push-to-talk, chat",
+            "Avvio — ospita una sessione o entra con link e PIN",
+            "Più canali radio, cambio con tasto rapido",
+            "Audio — microfono, push-to-talk, abbassamento app, clic radio",
+            "Esperto — overlay, tasti canale, nuova cifratura, autotest",
+        ],
+        Lang::Es => [
+            "En sesión — canales, participantes, pulsar para hablar, chat",
+            "Inicio — alojar una sesión o entrar con enlace y PIN",
+            "Varios canales de radio, cambio por atajo",
+            "Audio — micrófono, pulsar para hablar, atenuar apps, clic de radio",
+            "Experto — superposición, atajos de canal, recifrar, autodiagnóstico",
+        ],
+        Lang::Fr => [
+            "En session — canaux, participants, push-to-talk, chat",
+            "Démarrage — héberger une session ou rejoindre avec lien et PIN",
+            "Plusieurs canaux radio, changement par raccourci",
+            "Audio — micro, push-to-talk, atténuation des apps, clic radio",
+            "Expert — overlay, raccourcis de canal, rechiffrer, autotest",
+        ],
+        Lang::En => [
+            "In a session — channels, roster, push-to-talk, chat",
+            "Start — host a session or join with link and PIN",
+            "Several radio channels, switched by hotkey",
+            "Audio — mic, push-to-talk, app ducking, radio click",
+            "Expert — overlay, channel hotkeys, re-encrypt, self-check",
+        ],
     };
     let mut grid = String::new();
-    for &n in have {
-        // `have` is built from shot-1..shot-MAX_SHOTS, so the caption index is
-        // always in range; fall back to the first caption rather than panicking.
-        let cap = caps.get(n - 1).copied().unwrap_or(caps[0]);
+    for n in 1..=count.min(caps.len()) {
+        let cap = caps[n - 1];
         grid.push_str(&format!(
-            r#"<figure class="shot"><a href="{base}/download/shot-{n}.png" target="_blank" rel="noopener"><img src="{base}/download/shot-{n}.png" alt="{cap}" loading="lazy"></a><figcaption>{cap}</figcaption></figure>"#
+            r#"<figure class="shot"><a href="{base}/assets/shot/{n}" target="_blank" rel="noopener"><img src="{base}/assets/shot/{n}" alt="{cap}" loading="lazy"></a><figcaption>{cap}</figcaption></figure>"#
         ));
     }
-    let _ = title;
     format!(r#"<div class="shots">{grid}</div>"#)
 }
 
@@ -242,7 +251,7 @@ struct HomeText {
     l_lic: &'static str,
 }
 
-pub fn home(l: Lang, base: &str, shots: &[usize]) -> (&'static str, String) {
+pub fn home(l: Lang, base: &str, shots: usize) -> (&'static str, String) {
     let t = home_text(l);
     let lc = l.code();
     // No screenshots on disk → no gallery section at all, rather than a heading
