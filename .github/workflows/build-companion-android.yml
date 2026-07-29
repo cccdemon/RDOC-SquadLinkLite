@@ -28,7 +28,7 @@ jobs:
       # the emulator. Drop i686 (legacy 32-bit emulator) to speed builds.
       NDK_VERSION: "26.3.11579264"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # audiopus_sys cross-compiles vendored libopus for each Android ABI
       # (host libopus-dev is the wrong arch) → needs autotools + clang/bindgen.
@@ -38,25 +38,25 @@ jobs:
           sudo apt-get install -y autoconf automake libtool clang
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: apps/companion/pnpm-lock.yaml
 
       - name: Setup Java (Temurin 17)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android NDK
         run: |
@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload APK artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: subraum-android
           if-no-files-found: warn
