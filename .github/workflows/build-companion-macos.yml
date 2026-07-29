@@ -53,6 +53,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/companion/pnpm-lock.yaml
 
+      # audiopus_sys finds no system Opus on a macOS runner, so it falls back to
+      # building the vendored copy — and its autogen.sh needs autotools, which
+      # the image does not ship ("autoreconf: command not found" → "Failed to
+      # autogen Opus"). Deliberately NOT `brew install opus`: linking a Homebrew
+      # dylib would make the .app depend on Homebrew being installed on the
+      # user's Mac. The vendored build is static, so the bundle stays portable.
+      - name: Install Opus build tooling
+        run: brew install autoconf automake libtool
+
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
