@@ -1166,3 +1166,66 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error running tauri app");
 }
+
+/// Input guards at the IPC boundary. The webview is the only caller today, but a
+/// Tauri command is reachable by anything running in it, so these are the
+/// last check before untrusted strings reach the engine and the signaling wire.
+#[cfg(test)]
+mod ipc_validation_tests {
+    use super::*;
+
+    #[test]
+    fn valid_id_accepts_the_ids_we_generate() {
+        assert!(valid_id("squad-1a2b3c4d", 64));
+        assert!(valid_id("a1b2c3d4", 64)); // crypto.randomUUID().slice(0,8)
+        assert!(valid_id("Room_9", 64));
+    }
+
+    #[test]
+    fn valid_id_rejects_empty_overlong_and_unsafe_charsets() {
+        assert!(!valid_id("", 64), "empty");
+        assert!(!valid_id(&"a".repeat(65), 64), "over the cap");
+        assert!(valid_id(&"a".repeat(64), 64), "exactly at the cap is fine");
+
+        // Anything that could change the meaning of a URL, a JSON document or a
+        // rendered page downstream.
+        for bad in ["room/../etc", "room?a=b", "room#frag", "a b", "a\nb", "<script>", "ro'om", "a\"b", "café", "room."] {
+            assert!(!valid_id(bad, 64), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn valid_user_id_additionally_allows_a_dot() {
+        // Deep links carry a Discord name as `uid`, which may contain a dot.
+        assert!(valid_user_id("some.player", 64));
+        assert!(valid_user_id("plain", 64));
+        assert!(!valid_id("some.player", 64), "the stricter guard still says no");
+        // but nothing beyond that
+        assert!(!valid_user_id("", 64));
+        assert!(!valid_user_id("a/b", 64));
+        assert!(!valid_user_id(&"a".repeat(65), 64));
+    }
+
+    #[test]
+    fn valid_hex_accepts_only_hex() {
+        assert!(valid_hex("deadBEEF01", 64));
+        assert!(!valid_hex("", 64));
+        assert!(!valid_hex("xyz", 64));
+        assert!(!valid_hex("dead beef", 64));
+        assert!(!valid_hex(&"a".repeat(65), 64));
+    }
+
+    /// Volumes arrive as f32 straight from JS, where NaN and Infinity are one
+    /// arithmetic slip away. An unclamped value reaches the mixer gain.
+    #[test]
+    fn clamp_vol_bounds_every_float_js_can_send() {
+        assert_eq!(clamp_vol(1.0), 1.0);
+        assert_eq!(clamp_vol(0.0), 0.0);
+        assert_eq!(clamp_vol(2.0), 2.0);
+        assert_eq!(clamp_vol(-5.0), 0.0);
+        assert_eq!(clamp_vol(99.0), 2.0);
+        assert_eq!(clamp_vol(f32::NAN), 1.0, "NaN falls back to unity gain");
+        assert_eq!(clamp_vol(f32::INFINITY), 1.0);
+        assert_eq!(clamp_vol(f32::NEG_INFINITY), 1.0);
+    }
+}

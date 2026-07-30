@@ -273,6 +273,12 @@ pub enum DevCmd {
 /// opens the new device, and publishes its sample rate via `in_rate`/`out_rate`
 /// so the encode/mixer resamplers retune. A new device's rate can differ (e.g.
 /// 48k vs 192k), which is why the rates are shared atomics, not constructor args.
+// `in_s` / `out_s` ARE the running streams: cpal stops capture/playback the
+// moment a `Stream` is dropped, so assigning a freshly opened one on a device
+// switch is exactly how the old device is released and the new one kept alive.
+// rustc sees the stored value is never read back and calls those assignments
+// dead — they are not; holding the value IS the effect.
+#[allow(unused_assignments)]
 #[allow(clippy::too_many_arguments)]
 pub fn run_devices(
     cap: Buf,

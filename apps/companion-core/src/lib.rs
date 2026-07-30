@@ -706,7 +706,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
 
     let sig = signaling::connect(&cfg.server, cfg.cert_sha256.as_deref()).await?;
     let out = sig.out.clone();
-    let mut incoming = sig.incoming;
+    let incoming = sig.incoming;
     out.send(ClientMsg::Join {
         room: cfg.room.clone(),
         user_id: cfg.user_id.clone(),

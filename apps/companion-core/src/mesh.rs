@@ -238,8 +238,11 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    // Crate-internal: it takes a `MeshEvent` sender, which is `pub(crate)`. As
+    // `pub` it was unusable from outside anyway, and rustc warned about the
+    // leaked private type.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         api: Arc<API>,
         local: Arc<TrackLocalStaticSample>,
         my_id: String,

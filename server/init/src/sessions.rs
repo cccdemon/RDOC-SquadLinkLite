@@ -128,3 +128,138 @@ impl Sessions {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sessions() -> Sessions {
+        Sessions::default()
+    }
+
+    /// Mints a token the way `AuthConfig::Hmac` would, without pulling auth in.
+    fn token_for(room: &str) -> Option<String> {
+        Some(format!("token-for-{room}"))
+    }
+
+    #[test]
+    fn create_yields_a_usable_code_pin_and_room() {
+        let s = sessions();
+        let (code, pin, room, token) = s.create(token_for);
+
+        assert_eq!(pin.len(), 6);
+        assert!(pin.chars().all(|c| c.is_ascii_digit()), "PIN is 6 digits");
+        assert!(room.starts_with("squad-"));
+        assert_eq!(token.as_deref(), Some(format!("token-for-{room}").as_str()));
+
+        // The share code must survive being read off a link out loud.
+        assert_eq!(code.len(), 8);
+        assert!(
+            code.chars().all(|c| "abcdefghijkmnpqrstuvwxyz23456789".contains(c)),
+            "no 0/o/1/l in the share alphabet: {code}"
+        );
+
+        let (got_room, got_token) = s.join(&code, &pin).ok().expect("correct PIN joins");
+        assert_eq!(got_room, room);
+        assert_eq!(got_token, token);
+    }
+
+    #[test]
+    fn codes_and_pins_differ_between_sessions() {
+        let s = sessions();
+        let (c1, p1, r1, _) = s.create(token_for);
+        let (c2, _, r2, _) = s.create(token_for);
+        assert_ne!(c1, c2);
+        assert_ne!(r1, r2);
+        // One session's PIN must not open another's code.
+        assert!(matches!(s.join(&c2, &p1), Err(JoinError::BadPin) | Ok(_)) );
+        if let Ok(_) = s.join(&c2, &p1) {
+            // 1-in-a-million collision; only a real leak would be systematic.
+            let (c3, _, _, _) = s.create(token_for);
+            assert!(matches!(s.join(&c3, &p1), Err(JoinError::BadPin)));
+        }
+    }
+
+    #[test]
+    fn unknown_code_is_not_found() {
+        let s = sessions();
+        assert!(matches!(s.join("nosuch12", "123456"), Err(JoinError::NotFound)));
+    }
+
+    /// A 6-digit PIN is only safe because guessing is capped — without this the
+    /// share code is brute-forceable in a few thousand requests.
+    #[test]
+    fn wrong_pins_lock_the_code_out() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        let wrong = if pin == "000000" { "111111" } else { "000000" };
+
+        for i in 0..MAX_ATTEMPTS {
+            assert!(matches!(s.join(&code, wrong), Err(JoinError::BadPin)), "attempt {i}");
+        }
+        assert!(matches!(s.join(&code, wrong), Err(JoinError::Locked)));
+        // Locked means locked: the CORRECT PIN no longer helps either.
+        assert!(matches!(s.join(&code, &pin), Err(JoinError::Locked)));
+    }
+
+    #[test]
+    fn a_correct_pin_does_not_count_against_the_attempt_budget() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        for _ in 0..(MAX_ATTEMPTS * 3) {
+            assert!(s.join(&code, &pin).is_ok());
+        }
+    }
+
+    #[test]
+    fn reap_keeps_a_session_whose_room_is_occupied() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        s.reap(|_| true);
+        assert!(s.join(&code, &pin).is_ok(), "occupied room must survive the sweep");
+    }
+
+    /// Freshly created and still empty: the host has not connected yet, so the
+    /// grace window must keep it alive or every share link would die on birth.
+    #[test]
+    fn reap_keeps_a_brand_new_empty_session_during_the_grace() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        s.reap(|_| false);
+        assert!(s.join(&code, &pin).is_ok());
+    }
+
+    #[test]
+    fn reap_drops_a_session_once_it_is_past_the_grace() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        // Backdate last_active past EMPTY_GRACE — the sweep reads the clock, so
+        // this is the only way to exercise expiry without waiting five minutes.
+        {
+            let mut map = s.inner.lock().unwrap();
+            let sess = map.get_mut(&code).unwrap();
+            sess.last_active = now().saturating_sub(EMPTY_GRACE_SECS + 1);
+        }
+        s.reap(|_| false);
+        assert!(matches!(s.join(&code, &pin), Err(JoinError::NotFound)));
+    }
+
+    #[test]
+    fn reap_drops_a_session_past_the_24h_cap_even_if_occupied() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        {
+            let mut map = s.inner.lock().unwrap();
+            map.get_mut(&code).unwrap().created = now().saturating_sub(MAX_AGE_SECS + 1);
+        }
+        s.reap(|_| true); // still busy — the hard cap wins anyway
+        assert!(matches!(s.join(&code, &pin), Err(JoinError::NotFound)));
+    }
+
+    #[test]
+    fn ct_eq_matches_plain_comparison() {
+        assert!(ct_eq(b"123456", b"123456"));
+        assert!(!ct_eq(b"123456", b"123457"));
+        assert!(!ct_eq(b"123456", b"12345"));
+    }
+}
