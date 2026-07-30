@@ -18,9 +18,13 @@ Frontend + Tauri app (from `apps/companion`, pnpm — **not** npm):
 ```sh
 pnpm install --frozen-lockfile   # CI uses this; matches the lockfile
 pnpm tauri dev                   # run the desktop app (needs Rust + Node)
+pnpm dev                         # vite only — webview in a browser, no Tauri IPC
 pnpm build                       # tsc typecheck + vite build (frontend only)
 pnpm tauri icon src/subraum.png  # regenerate app icons (source: subraum-icon.svg)
 ```
+
+There is **no frontend test runner and no linter** — `pnpm build` (i.e. `tsc`) is the
+only static check the UI gets. Don't go looking for `pnpm test` / `pnpm lint`.
 
 Rust workspace (from repo root — members: `crates/protocol`, `server/init`,
 `apps/companion-core`):
@@ -37,14 +41,18 @@ cargo build --release            # headless engine binary
 its own directory (`cd apps/companion/src-tauri && cargo check`). `spikes/*` are
 standalone throwaway crates, also excluded.
 
-Tests live in `#[cfg(test)]` modules inside `mesh.rs`, `crypto.rs`, `signaling.rs`
-(companion-core) and `crates/protocol/src/lib.rs`. There is no separate test dir.
+Tests live in `#[cfg(test)]` modules inside `lib.rs`, `mesh.rs`, `crypto.rs`,
+`signaling.rs` (companion-core) and `crates/protocol/src/lib.rs`. There is no
+separate test dir, and `server/init` + `src-tauri` currently have no tests.
 
 ## Build hosts
 
 ### Linux / Android builds — Proxmox LXC 103
-Local Windows `cargo` is unreliable here (aws-lc-sys C compile fails) — verify Rust
-changes on LXC 103. Ubuntu 24.04.4 LTS, x86_64 (container hostname `streamer`).
+Local Windows `cargo` does not work at all — verify **every** Rust change on LXC
+103. Two separate breakages: aws-lc-sys fails its C compile, and the MSVC linker
+can't find `msvcrt.lib`, which kills even a pure-Rust crate's build scripts
+(`cargo test -p protocol` → `LINK : fatal error LNK1104`). Don't burn a cycle
+trying locally first. Ubuntu 24.04.4 LTS, x86_64 (container hostname `streamer`).
 Reached through the Proxmox host `ve.raumdock.org` with the `claude_deploy` key,
 then `pct exec`:
 
@@ -59,6 +67,18 @@ ssh -i ~/.ssh/claude_deploy root@ve.raumdock.org 'pct exec 103 -- bash -lc "<cmd
   `audiopus_sys` — else "Failed to autogen Opus").
 - Verified Linux x86_64 build: `cargo build --release` → 27 MB
   `target/release/subraum` in ~1m10s (2026-06-17).
+- Checkouts live in `/root`: `RDOC-SquadLinkLite` (git clone) and `depupd` (a
+  plain copy, no `.git`, carrying the dep-update tree with a warm ~5.6 GB
+  `target/`). Building in one of those is the difference between ~2 min and a
+  full cold dependency build.
+- There is **no direct file transfer** — `pct exec` is the only channel, and it
+  forwards stdin, so pipe the file in rather than reaching for scp:
+
+```sh
+base64 -w0 path/to/file.rs > /tmp/b64.txt
+ssh -i ~/.ssh/claude_deploy root@ve.raumdock.org \
+  "pct exec 103 -- bash -lc 'base64 -d > /root/depupd/path/to/file.rs'" < /tmp/b64.txt
+```
 
 ### Per-platform GitHub Actions
 Every platform has its own workflow; all of them attach bundles to the GitHub
@@ -78,9 +98,24 @@ no Flatpak GPG key yet.
 `ve.raumdock.org` is also the deploy box: CI uses a locked forced-command key
 (`DEPLOY_PULL_KEY`) that can only run the installer-pull service.
 
-Releases are cut by pushing a tag — bump the version in **both**
-`apps/companion/package.json` and `apps/companion/src-tauri/tauri.conf.json`
-(the MSIX job reads the version out of `tauri.conf.json`).
+The Windows workflow gates the build on `pnpm audit --audit-level moderate` — a
+**blocking** step, so any moderate transitive advisory fails CI before anything is
+built (fix via `pnpm.overrides` in `apps/companion/package.json`; `esbuild` and
+`postcss` are pinned there today). `cargo audit` runs right after but is
+`|| true` — advisory only.
+
+### Cutting a release
+Push a `subraum-v*` tag. Before tagging:
+
+1. Bump the version in **both** `apps/companion/package.json` and
+   `apps/companion/src-tauri/tauri.conf.json`.
+2. Add the release section to `CHANGELOG.md` (German, user-facing; older releases
+   are tagged `squadlink-lite-v*`).
+
+`apps/companion/msix/AppxManifest.xml` carries a hardcoded `Identity/@Version`
+that is **deliberately stale** (0.1.35.0 while the app is 0.2.0) — the MSIX job
+rewrites it from `tauri.conf.json` as `"$ver.0"` before packing. Don't hand-sync
+it and don't "fix" the mismatch.
 
 ## Architecture
 
@@ -110,6 +145,15 @@ selection and mic gain versus a webview-based client).
     encode-once). The authority (smallest `user_id`) mints + rotates it (on
     join/leave/manual-rekey) and distributes it sealed over the pairwise
     sessions; a rekey grace defers the send-switch so no audio drops.
+    Two consequences of "authority = smallest id" that bit once already:
+    ids are random, so a **later** joiner can become authority — it must learn
+    the live generation via `CtrlMsg::RoomGen` before minting, or it starts at
+    generation 1 and every member rejects that key as stale (silence both ways).
+    And the key only ever travels the pairwise session **with the authority**, so
+    an unreachable authority (STUN-only, strict NAT) leaves a peer keyless on
+    otherwise-healthy links — it is heard (raw fallback) but hears nothing.
+    Encode-once rules out serving that peer plaintext, so the engine warns
+    instead (`KEYLESS_WARN_AFTER`).
   - `signaling.rs` — WS client to InitConnection, keepalive, reconnect with backoff.
   - `serverless.rs` — the no-server 1:1 mode: base64 copy-paste SDP exchange,
     non-trickle ICE, STUN only (no TURN, since there is no cred server).
@@ -139,6 +183,10 @@ selection and mic gain versus a webview-based client).
   - `tls.rs` — self-signed cert generated on first run and **persisted**, so the
     SHA-256 fingerprint clients pin as `CERT_SHA256` stays stable across restarts.
   - `sessions.rs` — in-memory room/roster state.
+  - `i18n.rs` — every string of the server-rendered site, hardcoded for **5
+    languages** (EN/DE/IT/ES/FR; `?lang=` > `Accept-Language` > English). It is
+    the biggest file in the server (~1k lines) — adding one page string means
+    adding five `match` arms, not one.
   - `assets/` — brand assets compiled into the binary (`include_str!`/
     `include_bytes!`) and served at `/assets/logo.svg` + `/assets/og-image.png`,
     so a deploy needs no files copied onto the host. `og-image.png` is rendered
@@ -148,9 +196,13 @@ selection and mic gain versus a webview-based client).
 
 `apps/web-participant` is a concept only (`CONCEPT.md`, no code). `deploy/` holds
 the docker-compose stacks, `turnserver.conf`, and `pull-installer.sh` (the target
-of the CI forced-command deploy key). Per-topic design docs live in `docs/`
-(`LINUX.md`, `MACOS-IOS-PLAN.md`, `MSIX-PACKAGING.md`, `STORE-SUBMISSION.md`,
-`TURN-RELAY-FALLBACK-CONCEPT.md`, …).
+of the CI forced-command deploy key). Per-topic docs live in `docs/`: shipped
+platforms (`LINUX.md`, `MACOS-IOS-PLAN.md`, `MSIX-PACKAGING.md`,
+`STORE-SUBMISSION.md`, `STORE-LISTING.md`, `PRIVACY-POLICY.md`,
+`FLEETPLANNER-DEEPLINK.md`) and **unbuilt concepts** —
+`TURN-RELAY-FALLBACK-CONCEPT.md`, `NATIVE-VIDEO-CONCEPT.md`,
+`VIDEO-FILESHARING-CONCEPT.md` describe designs with no code behind them, so
+don't read them as documentation of what exists.
 
 Encode-once fan-out is the load-bearing performance assumption: one
 `TrackLocalStaticRTP` is attached to all peer connections and a single `write_rtp()`
@@ -162,6 +214,10 @@ Opus encodes once per 20 ms frame regardless of peer count. Verified in
 
 - Windows-only code is gated `#[cfg(windows)]` and **must** have a Linux fallback —
   global PTT is Windows-only, but the in-app PTT button works everywhere.
+- Language split: code, comments, doc-comments and commit messages are **English**;
+  user-facing prose (`README.md`, `CHANGELOG.md`, `docs/STORE-LISTING.md`, the UI
+  strings, the site copy in `i18n.rs`) is **German** first. Match whichever side of
+  the line you're editing.
 - Linux runtime: `main()` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` +
   `WEBKIT_DISABLE_COMPOSITING_MODE=1` if unset — webkitgtk 2.42+ DMABUF renderer
   gives a blank window on many GPU/driver combos.

@@ -64,6 +64,18 @@ pub enum CtrlMsg {
     /// so a member can't spoof which authority minted the key. Recipients accept
     /// it only from the elected authority (smallest room user_id).
     RoomKey { gen: u32, key: String },
+    /// Member → authority: "the room is already at generation `gen`". Sent SEALED
+    /// (like `RoomKey`) by any peer that holds a room key to the peer it considers
+    /// the elected authority, as soon as that pairwise session comes up.
+    ///
+    /// Needed because the authority is the smallest user_id in the room and ids
+    /// are random: a peer that joins LATER can be the new authority while
+    /// starting from an empty key state. Without this it would mint generation 1,
+    /// which every existing member rejects (their staged generation is higher) —
+    /// leaving the newcomer sealing under a key nobody else holds and unable to
+    /// open anyone else's. Carries no key material, only the generation counter,
+    /// so it discloses nothing an on-path DTLS peer couldn't already count.
+    RoomGen { gen: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +154,16 @@ mod tests {
                 assert_eq!(c.text, "hi");
                 assert_eq!(c.ts, 7);
             }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn room_gen_round_trips() {
+        let j = serde_json::to_string(&CtrlMsg::RoomGen { gen: 7 }).unwrap();
+        assert!(j.contains("\"t\":\"room-gen\""));
+        match serde_json::from_str::<CtrlMsg>(&j).unwrap() {
+            CtrlMsg::RoomGen { gen } => assert_eq!(gen, 7),
             _ => panic!("wrong variant"),
         }
     }

@@ -131,6 +131,11 @@ fn dispatch_inner(peer: &str, msg: CtrlMsg, events: &UnboundedSender<MeshEvent>,
                 }
             }
         }
+        CtrlMsg::RoomGen { gen } => {
+            // Same authenticated-sender reasoning as RoomKey: this arrives already
+            // unwrapped from `Enc`, so `peer` is the DTLS+PQC-authenticated sender.
+            let _ = events.send(MeshEvent::RoomGen { from: peer.to_string(), gen });
+        }
         _ => {}
     }
 }
@@ -541,8 +546,22 @@ impl Mesh {
     /// peer's pairwise PQC session. No-op if the peer has no session yet (the
     /// engine retries when the peer becomes secure).
     pub async fn send_room_key(&self, peer: &str, gen: u32, key: &[u8; 32]) {
-        let msg = CtrlMsg::RoomKey { gen, key: STANDARD.encode(key) };
-        let inner = match serde_json::to_vec(&msg) {
+        self.send_sealed(peer, &CtrlMsg::RoomKey { gen, key: STANDARD.encode(key) }).await;
+    }
+
+    /// Tell `peer` (which we believe is the room-key authority) what generation
+    /// the room is already on, so a late-joining authority doesn't mint a
+    /// generation below the one everyone else has staged. Sealed like the key
+    /// itself so the counter is bound to an authenticated sender.
+    pub async fn send_room_gen(&self, peer: &str, gen: u32) {
+        self.send_sealed(peer, &CtrlMsg::RoomGen { gen }).await;
+    }
+
+    /// AEAD-seal one control message into an `Enc` envelope and push it down the
+    /// peer's DataChannel. Silently drops when there is no session or no channel
+    /// yet — every caller is driven by an event that fires again.
+    async fn send_sealed(&self, peer: &str, msg: &CtrlMsg) {
+        let inner = match serde_json::to_vec(msg) {
             Ok(b) => b,
             Err(_) => return,
         };
@@ -637,6 +656,98 @@ mod rekey_tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         false
+    }
+
+    /// Two real meshes over a mock relay: A tells B the room's key generation and
+    /// B surfaces it as `MeshEvent::RoomGen`. Exercises the whole new wire path —
+    /// seal over the pairwise PQC session, `Enc` envelope, `dispatch_inner` — so a
+    /// mis-tagged variant or a missing dispatch arm fails here rather than in the
+    /// field, where the symptom is silent audio for one member.
+    #[tokio::test]
+    async fn room_gen_reaches_the_peer_sealed() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (out_a_tx, mut out_a_rx) = unbounded_channel::<ClientMsg>();
+        let (out_b_tx, mut out_b_rx) = unbounded_channel::<ClientMsg>();
+        let (dec_a, mut dec_a_rx) = unbounded_channel::<(String, Bytes)>();
+        let (dec_b, mut dec_b_rx) = unbounded_channel::<(String, Bytes)>();
+        let (ev_a, mut ev_a_rx) = unbounded_channel::<MeshEvent>();
+        let (ev_b, mut ev_b_rx) = unbounded_channel::<MeshEvent>();
+        tokio::spawn(async move { while dec_a_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while dec_b_rx.recv().await.is_some() {} });
+
+        let crypto_a = Arc::new(crate::crypto::PeerCrypto::new("a".into()));
+        let a = Arc::new(AsyncMutex::new(Mesh::new(
+            Arc::new(build_api().unwrap()), track(), "a".into(), out_a_tx, dec_a, ev_a,
+            Arc::new(ChanState::new()), crypto_a.clone(),
+            Arc::new(crate::crypto::RoomAudio::new()),
+        )));
+        let b = Arc::new(AsyncMutex::new(Mesh::new(
+            Arc::new(build_api().unwrap()), track(), "b".into(), out_b_tx, dec_b, ev_b,
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("b".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
+        )));
+
+        {
+            let b2 = b.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = out_a_rx.recv().await {
+                    let mut g = b2.lock().await;
+                    match msg {
+                        ClientMsg::Offer { sdp, .. } => { let _ = g.on_offer("a", sdp).await; }
+                        ClientMsg::Answer { sdp, .. } => { let _ = g.on_answer("a", sdp).await; }
+                        ClientMsg::Ice { candidate, .. } => { g.on_ice("a", candidate).await; }
+                        _ => {}
+                    }
+                }
+            });
+        }
+        {
+            let a2 = a.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = out_b_rx.recv().await {
+                    let mut g = a2.lock().await;
+                    match msg {
+                        ClientMsg::Offer { sdp, .. } => { let _ = g.on_offer("b", sdp).await; }
+                        ClientMsg::Answer { sdp, .. } => { let _ = g.on_answer("b", sdp).await; }
+                        ClientMsg::Ice { candidate, .. } => { g.on_ice("b", candidate).await; }
+                        _ => {}
+                    }
+                }
+            });
+        }
+
+        a.lock().await.on_peer("b").await.unwrap();
+        assert!(wait_connected(&a, "b").await, "A->B connect failed");
+        assert!(wait_connected(&b, "a").await, "B->A connect failed");
+
+        // The seal only exists once the PQC handshake finished on A's side.
+        let mut secure = false;
+        for _ in 0..100 {
+            if crypto_a.is_secure("b") {
+                secure = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(secure, "PQC session A<->B never came up");
+
+        a.lock().await.send_room_gen("b", 5).await;
+
+        let mut got = None;
+        for _ in 0..100 {
+            match tokio::time::timeout(Duration::from_millis(100), ev_b_rx.recv()).await {
+                Ok(Some(MeshEvent::RoomGen { from, gen })) => {
+                    got = Some((from, gen));
+                    break;
+                }
+                Ok(Some(_)) => continue, // Secure / Badge / Channel noise
+                Ok(None) => break,
+                Err(_) => continue,
+            }
+        }
+        // `from` must be the authenticated channel owner, never a body field.
+        assert_eq!(got, Some(("a".to_string(), 5)), "B never got the sealed RoomGen");
+        while ev_a_rx.try_recv().is_ok() {}
     }
 
     // Two real meshes wired through a mock relay: connect, rotate keys, and

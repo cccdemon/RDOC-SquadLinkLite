@@ -100,6 +100,10 @@ pub(crate) enum MeshEvent {
     /// A peer sent us the group-audio room key. `from` is the DTLS+PQC-
     /// authenticated sender (used to verify it's really the elected authority).
     RoomKey { from: String, gen: u32, key: [u8; 32] },
+    /// A peer told us the room's current key generation. Only acted on when WE
+    /// are the authority — it's how a late-joining authority learns the live
+    /// generation instead of restarting the counter at 1.
+    RoomGen { from: String, gen: u32 },
 }
 
 /// Default channel (frequency) every client starts on.
@@ -139,6 +143,11 @@ const ROOM_GEN_BOUND: u32 = 1024;
 /// activating it for sealing. Long enough that every peer has received+staged
 /// the key before anyone seals with it, so a rekey drops no audio.
 const ROOM_KEY_GRACE: Duration = Duration::from_millis(400);
+
+/// How long a node may sit with a working PQC link but no group-audio key before
+/// the UI is told. Well past a normal handshake + key hand-out, so it only fires
+/// when the authority is genuinely unreachable.
+const KEYLESS_WARN_AFTER: Duration = Duration::from_secs(8);
 
 /// Stage `k` for decryption immediately, then activate it for sealing — at once
 /// if it's our first key (nothing to coordinate), else after `ROOM_KEY_GRACE` so
@@ -631,6 +640,15 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         // Auto-reconnect of the signaling link: when down, retry with backoff.
         let mut next_try: Option<tokio::time::Instant> = None;
         let mut backoff = 2u64;
+        // Group-audio watchdog: since when do we have a working PQC link to some
+        // peer but still no room key? The key only ever travels over the pairwise
+        // session with the AUTHORITY, so if that one peer is the one we can't
+        // reach (STUN-only + a hostile NAT), every other link comes up fine and we
+        // stay deaf to sealed audio while our own raw frames are still heard.
+        // Inherent to encode-once fan-out — one sealed payload for all peers means
+        // we can't be served plaintext selectively — so surface it instead.
+        let mut keyless_since: Option<std::time::Instant> = None;
+        let mut keyless_warned = false;
         loop {
             tokio::select! {
                 _ = net_iv.tick() => {
@@ -646,6 +664,20 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         last_bytes = (up, down);
                         last_inst = std::time::Instant::now();
                         sink(UiEvent::Net { peers: members.len(), up_kbps, down_kbps });
+                    }
+                    // Group-audio watchdog (see `keyless_since`): a secure link but
+                    // no room key means the authority is unreachable, not that the
+                    // handshake is still running. Warn once per stuck episode.
+                    if room.generation().is_none() && members.values().any(|m| m.secure) {
+                        let since = *keyless_since.get_or_insert_with(std::time::Instant::now);
+                        if !keyless_warned && since.elapsed() >= KEYLESS_WARN_AFTER {
+                            keyless_warned = true;
+                            sink(UiEvent::Log { text:
+                                "Sprach-Schluessel nicht erhalten - der Schluessel-Verwalter (kleinste ID) ist nicht direkt erreichbar. Du hoerst die anderen nicht, wirst aber gehoert. Relay (TURN) aktivieren oder neu verbinden.".into() });
+                        }
+                    } else {
+                        keyless_since = None;
+                        keyless_warned = false;
                     }
                 }
                 // Forward mesh-originated signaling to the current connection.
@@ -849,6 +881,16 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                     mesh.send_room_key(&peer, k.generation(), &k.key_bytes()).await;
                                 }
                                 sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            } else if is_authority_peer(&peer, &me_id, &members) {
+                                // This peer is the authority and we already hold a
+                                // key: tell it which generation the room is on. It
+                                // may have joined after us (ids are random, so a
+                                // late joiner can be the new authority) and would
+                                // otherwise mint generation 1 — a key every
+                                // existing member rejects as older than its own.
+                                if let Some(g) = room.generation() {
+                                    mesh.send_room_gen(&peer, g).await;
+                                }
                             }
                         }
                         Some(MeshEvent::RoomKey { from, gen, key }) => {
@@ -863,6 +905,24 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             {
                                 adopt_room_key(&room, crypto::RoomKey::from_bytes(gen, from, key), &mut room_gen, &promote_tx);
                                 sink(UiEvent::RoomAudio { gen: room.generation(), authority: am_authority(&me_id, &members) });
+                            }
+                        }
+                        Some(MeshEvent::RoomGen { from, gen }) => {
+                            // Only the authority mints, so only the authority acts on
+                            // this. Rotating (rather than adopting `gen`) is what
+                            // makes it safe: we never take key MATERIAL from a
+                            // member, only the counter, and the fresh key we mint at
+                            // `gen + 1` supersedes everyone's staged key by the
+                            // normal generation rule. Bounded like an inbound key so
+                            // a member can't pin the room at u32::MAX.
+                            if am_authority(&me_id, &members)
+                                && members.contains_key(&from)
+                                && gen > room_gen
+                                && gen <= room_gen.saturating_add(ROOM_GEN_BOUND)
+                            {
+                                room_gen = gen;
+                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
+                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
                             }
                         }
                         None => {}
@@ -1008,6 +1068,48 @@ mod authority_tests {
             ["alice", "carol", "dave"].into_iter().map(|id| (id.to_string(), member())).collect();
         assert!(is_authority_peer("alice", "bob", &with_alice)); // accepted
         assert!(!is_authority_peer("carol", "bob", &with_alice)); // alice is smaller → carol rejected
+    }
+
+    /// Regression: a peer that joins LATER can be the new room-key authority,
+    /// because user ids are random and the authority is just the smallest one.
+    /// Minting from an empty state then produces generation 1, which every
+    /// existing member rejects as older than what it has staged — the newcomer
+    /// seals under a key nobody holds and can't open anyone else's, so it is
+    /// silent in both directions while the rest of the room is fine. The fix is
+    /// `CtrlMsg::RoomGen`: members report the live generation, the new authority
+    /// mints above it.
+    #[test]
+    fn late_joining_authority_converges_on_a_higher_generation() {
+        // Room has been running under authority "b", now at generation 2.
+        let held = crypto::RoomAudio::new();
+        held.install(crypto::RoomKey::generate(2, "b".into()));
+
+        // "a" joins with the smallest id → authority flips to the newcomer.
+        let a_view: HashMap<String, Member> =
+            ["b", "c"].into_iter().map(|id| (id.to_string(), member())).collect();
+        let b_view: HashMap<String, Member> =
+            ["a", "c"].into_iter().map(|id| (id.to_string(), member())).collect();
+        assert!(am_authority("a", &a_view));
+        assert!(!am_authority("b", &b_view));
+        // ...and "b" accepts "a" as authority, so it reports its generation there.
+        assert!(is_authority_peer("a", "b", &b_view));
+
+        // The bug: generation 1 from the fresh authority is a no-op everywhere.
+        assert!(!held.stage(crypto::RoomKey::generate(1, "a".into())));
+        assert_eq!(held.generation(), Some(2));
+
+        // The fix: `RoomGen { gen: 2 }` lifts the newcomer's counter, so it mints 3.
+        let mut new_auth_gen = 0u32;
+        new_auth_gen = new_auth_gen.max(2); // what the RoomGen arm does
+        let fresh = crypto::RoomKey::generate(new_auth_gen + 1, "a".into());
+        assert!(held.stage(fresh.clone()));
+        assert_eq!(held.generation(), Some(3));
+
+        // Both sides are now on one generation → audio opens again.
+        let newcomer = crypto::RoomAudio::new();
+        newcomer.install(fresh);
+        let wire = newcomer.seal_outbound("a", b"opus");
+        assert_eq!(held.open_inbound("a", &wire), Some(b"opus".to_vec()));
     }
 
     fn member_on(ch: &str) -> Member {

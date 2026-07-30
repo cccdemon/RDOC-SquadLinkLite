@@ -3,6 +3,31 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## v0.2.1 — 2026-07-30
+
+### Fixed
+- **Teilnehmer hörten sich teilweise gar nicht.** Betrifft alle Versionen ab
+  v0.1.35 (Einführung der PQC-Sprachverschlüsselung) — wer von v0.1.34 oder
+  älter direkt auf v0.2.0 gewechselt ist, hat es beim Umstieg bemerkt.
+  Der Raum-Schlüssel wird vom Teilnehmer mit der kleinsten ID verwaltet, und
+  diese IDs sind zufällig — wer später beitritt, kann also der neue Verwalter
+  werden. Er begann dann bei **Generation 1**, die alle anderen als veraltet
+  verwarfen, weil sie längst höher standen. Folge: dieser eine Teilnehmer
+  versiegelte mit einem Schlüssel, den niemand hatte, und konnte umgekehrt
+  niemanden öffnen — **in beide Richtungen stumm**, bis er den Raum verließ,
+  während der restliche Raum normal weiterlief.
+  Jetzt melden die Mitglieder dem Verwalter die laufende Generation (versiegelt
+  über die paarweise PQC-Session) und er prägt darüber. Ältere Clients ignorieren
+  diese Meldung folgenlos, gemischte Räume funktionieren also weiter.
+
+### Added
+- **Hinweis, wenn der Sprach-Schlüssel ausbleibt.** Der Schlüssel läuft
+  ausschließlich über die direkte Verbindung zum Verwalter. Ist ausgerechnet
+  dieser eine Teilnehmer nicht erreichbar (ohne Relay hinter striktem NAT),
+  bekommt man keinen Schlüssel, obwohl alle anderen Verbindungen stehen — man
+  wird gehört, hört aber selbst nichts. Statt still taub zu bleiben, sagt die App
+  das nach 8 Sekunden und empfiehlt, das Relay (TURN) einzuschalten.
+
 ## v0.2.0 — 2026-07-28 — Umbenennung: RDOC SquadLink Lite → subraum
 
 - **Warum umbenannt**: es existiert bereits eine andere Anwendung namens
