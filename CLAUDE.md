@@ -67,10 +67,14 @@ ssh -i ~/.ssh/claude_deploy root@ve.raumdock.org 'pct exec 103 -- bash -lc "<cmd
   `audiopus_sys` — else "Failed to autogen Opus").
 - Verified Linux x86_64 build: `cargo build --release` → 27 MB
   `target/release/subraum` in ~1m10s (2026-06-17).
-- Checkouts live in `/root`: `RDOC-SquadLinkLite` (git clone) and `depupd` (a
-  plain copy, no `.git`, carrying the dep-update tree with a warm ~5.6 GB
-  `target/`). Building in one of those is the difference between ~2 min and a
-  full cold dependency build.
+- Checkouts live in `/root`: `RDOC-SquadLinkLite` (git clone, stale) and
+  `depupd` (a plain copy, no `.git`, carrying the dep-update tree). Point
+  `CARGO_TARGET_DIR` at a shared `target/` to reuse a warm cache across them.
+- **The container is disk-tight and shares the box with production** —
+  `subraum-init`, `rdoc-suite-fleetplanner`, `cc-postgres` and friends run here.
+  Rust `target/` dirs filled it to 100% once (2026-07-30), which would have
+  broken the release's installer pull. Check `df -h /` before a big build and
+  `rm -rf /root/*/target` when it gets tight; those are pure build caches.
 - There is **no direct file transfer** — `pct exec` is the only channel, and it
   forwards stdin, so pipe the file in rather than reaching for scp:
 
