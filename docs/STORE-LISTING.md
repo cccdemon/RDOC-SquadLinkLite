@@ -76,6 +76,24 @@ Previously published as SquadLink Lite.
 ### What's new in this version
 
 ```text
+Version 0.2.1 — fixes a bug that could leave one participant silent.
+
+In some sessions a single participant could neither hear the others nor be heard
+by them, while everyone else was fine. Whether it happened depended on who
+joined when, so it looked random. The cause was in how the session's voice key
+is handed out: someone joining later could end up holding a key nobody else had.
+
+• Fixed: a participant is no longer left on a voice key of their own
+• The app now tells you when it cannot obtain the voice key, instead of staying
+  silently deaf
+• Nothing changes in how you use it — sessions, links and settings are untouched
+
+Older versions are affected too, so everyone in a session should update.
+```
+
+Previous version, for reference:
+
+```text
 Version 0.2.0 — the app is now called subraum.
 
 An unrelated application already goes by "SquadLink". We renamed to rule out the
@@ -154,6 +172,27 @@ Früher veröffentlicht als SquadLink Lite.
 ```
 
 ### Neuerungen in dieser Version
+
+```text
+Version 0.2.1 — behebt einen Fehler, der einzelne Teilnehmer stumm ließ.
+
+In manchen Sessions konnte ein einzelner Teilnehmer die anderen weder hören noch
+von ihnen gehört werden, während der Rest normal funktionierte. Ob es auftrat,
+hing davon ab, wer wann beitrat — es wirkte deshalb zufällig. Ursache war die
+Verteilung des Sprach-Schlüssels: Wer später beitrat, konnte auf einem Schlüssel
+landen, den sonst niemand hatte.
+
+• Behoben: Teilnehmer landen nicht mehr auf einem eigenen Sprach-Schlüssel
+• Die App meldet jetzt, wenn sie den Sprach-Schlüssel nicht bekommt, statt still
+  taub zu bleiben
+• An der Bedienung ändert sich nichts — Sessions, Links und Einstellungen
+  bleiben unberührt
+
+Ältere Versionen sind ebenfalls betroffen; alle Teilnehmer einer Session sollten
+aktualisieren.
+```
+
+Vorherige Version, zur Referenz:
 
 ```text
 Version 0.2.0 — die App heißt jetzt subraum.
