@@ -100,8 +100,6 @@ jobs:
   flatpak:
     needs: deb
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write # attach the .flatpak to a Release on a tag
     container:
       image: bilelmoussaoui/flatpak-github-actions:gnome-47
       options: --privileged
@@ -123,18 +121,31 @@ jobs:
           arch: x86_64
           upload-artifact: true
 
-      - name: SHA-256 checksum
-        if: always()
-        run: |
-          if [ -f subraum.flatpak ]; then
-            sha256sum subraum.flatpak | tee SHA256SUMS-flatpak.txt
-          fi
+  # Attach from the plain runner, NOT from inside the flatpak-builder container:
+  # that image ships no `gh`, so uploading there dies with "gh: command not
+  # found". It went unnoticed until v0.2.1 because this step is tag-only and the
+  # one earlier tag run (v0.2.0) already failed in the build step above, so the
+  # upload had never actually executed. The builder step publishes the bundle as
+  # an artifact (`upload-artifact: true`), so this job just fetches it back.
+  release:
+    needs: flatpak
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # attach the .flatpak to the Release
+    steps:
+      - name: Fetch the built bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: subraum-x86_64.flatpak
+          path: bundle
 
-      - name: Attach bundle to Release (tag only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Attach bundle to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: bundle
         run: |
+          sha256sum subraum.flatpak | tee SHA256SUMS-flatpak.txt
           gh release upload "${{ github.ref_name }}" \
             subraum.flatpak SHA256SUMS-flatpak.txt \
             --clobber --repo "${{ github.repository }}"
