@@ -19,8 +19,17 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
   **FX Tiefen abschneiden** (50–1000 Hz), **FX Höhen abschneiden**
   (1,2–12 kHz), **Saturation** und **FX Destruction** (Dezimierung +
   Quantisierung, das „kaputtes Handfunkgerät"-Kratzen). Wirkt nur lokal beim
-  Hörer: Gesendetes bleibt unverändert, Mikrofon-Selbsttest und eigene Stimme
-  sind nicht betroffen. Einstellungen bleiben gespeichert.
+  Hörer: Gesendetes bleibt unverändert. Der Mikrofon-Selbsttest läuft durch den
+  Effekt mit — so lässt er sich ohne Gegenstelle probehören. Einstellungen
+  bleiben gespeichert.
+
+### Fixed
+- **Irreführender Hinweis entfernt.** Die Warnung „Sprach-Schlüssel nicht
+  erhalten" empfahl, das TURN-Relay zu aktivieren — das es serverseitig gar
+  nicht gibt. Jetzt empfiehlt sie, was wirklich hilft: „Session neu
+  verschlüsseln" (baut jede Verbindung neu auf und verteilt den Schlüssel
+  erneut), sonst Session-Neubeitritt des Schlüssel-Verwalters (der Teilnehmer
+  mit dem ★ in der Verschlüsselungs-Zeile).
 
 ## v0.2.1 — 2026-07-30
 
