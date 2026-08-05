@@ -85,7 +85,7 @@ fn decode_code(code: &str) -> Result<String> {
 
 /// Build a single PeerConnection wired to the audio rig + chat slot + UI sink.
 async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc<AtomicBool>, ChatSlot)> {
-    let (transmit, mut opus_rx, decode_tx, _gains, _dsp, _monitor, _stop, _br, _dtx, _dev_tx, _earcon) =
+    let (transmit, mut opus_rx, decode_tx, _gains, _dsp, _radio, _monitor, _stop, _br, _dtx, _dev_tx, _earcon) =
         setup_audio(None, None)?;
     let api = build_api()?;
     let local = Arc::new(TrackLocalStaticSample::new(

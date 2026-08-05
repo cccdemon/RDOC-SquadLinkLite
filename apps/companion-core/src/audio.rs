@@ -444,6 +444,137 @@ impl Dsp {
     }
 }
 
+/// Radio-effect config ("Funk-Effekt"): band-limit + light saturation +
+/// optional degradation, applied to the RECEIVE mix bus in `mixer_loop` — every
+/// incoming voice, after per-peer gains, before master volume.
+///
+/// Receive-side on purpose: it is each listener's own immersion choice, it
+/// never touches what the mesh carries (no protocol change, encode-once
+/// untouched), and a destruction stage in the send path would fight RNNoise and
+/// the Opus encoder while being baked into what everyone else hears. The mic
+/// self-test and the sender's own voice are unaffected.
+///
+/// Cutoffs are Hz at the 48 kHz mixer rate; `saturation`/`destruction` are
+/// 0..1. Defaults approximate a narrow-band FM voice channel (300–3400 Hz).
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct RadioCfg {
+    pub enabled: bool,
+    /// High-pass cutoff — "FX Tiefen abschneiden".
+    pub low_cut: f32,
+    /// Low-pass cutoff — "FX Höhen abschneiden".
+    pub high_cut: f32,
+    /// Drive into a tanh waveshaper, 0 = clean.
+    pub saturation: f32,
+    /// Bitcrush: sample-hold decimation + amplitude quantization, 0 = off.
+    pub destruction: f32,
+}
+impl Default for RadioCfg {
+    fn default() -> Self {
+        RadioCfg { enabled: false, low_cut: 300.0, high_cut: 3400.0, saturation: 0.35, destruction: 0.15 }
+    }
+}
+
+/// RBJ-cookbook biquad (Q = 0.707), coefficients recomputed only when the
+/// cutoff moves. Direct form 1; state is tiny, one instance per filter.
+struct Biquad {
+    b0: f32, b1: f32, b2: f32, a1: f32, a2: f32,
+    x1: f32, x2: f32, y1: f32, y2: f32,
+    /// Cutoff the coefficients were computed for (0 = never).
+    tuned_for: f32,
+    highpass: bool,
+}
+impl Biquad {
+    fn new(highpass: bool) -> Self {
+        Biquad { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0, x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0, tuned_for: 0.0, highpass }
+    }
+    fn tune(&mut self, cutoff: f32) {
+        if cutoff == self.tuned_for {
+            return;
+        }
+        self.tuned_for = cutoff;
+        let w = 2.0 * std::f32::consts::PI * cutoff / OPUS_SR as f32;
+        let (sw, cw) = (w.sin(), w.cos());
+        let q = std::f32::consts::FRAC_1_SQRT_2; // Butterworth Q = 0.707
+        let alpha = sw / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        if self.highpass {
+            self.b0 = (1.0 + cw) / 2.0 / a0;
+            self.b1 = -(1.0 + cw) / a0;
+            self.b2 = self.b0;
+        } else {
+            self.b0 = (1.0 - cw) / 2.0 / a0;
+            self.b1 = (1.0 - cw) / a0;
+            self.b2 = self.b0;
+        }
+        self.a1 = -2.0 * cw / a0;
+        self.a2 = (1.0 - alpha) / a0;
+    }
+    fn process(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2 - self.a1 * self.y1 - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y
+    }
+}
+
+/// Per-bus radio-effect state. Mono −1..1 at the 48 kHz mixer rate.
+pub struct RadioFx {
+    hp: Biquad,
+    lp: Biquad,
+    /// Bitcrush sample-hold: the value being repeated and the repeat phase.
+    held: f32,
+    hold_phase: f32,
+}
+impl Default for RadioFx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl RadioFx {
+    pub fn new() -> Self {
+        RadioFx { hp: Biquad::new(true), lp: Biquad::new(false), held: 0.0, hold_phase: 0.0 }
+    }
+
+    /// Process one sample. Chain: HPF → LPF → saturation → destruction.
+    /// Saturation is drive→tanh with makeup, so turning it up changes texture
+    /// more than loudness. Destruction decimates (repeat every Nth sample) and
+    /// quantizes amplitude — the "cheap handset" grit.
+    pub fn process(&mut self, x: f32, c: &RadioCfg) -> f32 {
+        if !c.enabled {
+            return x;
+        }
+        self.hp.tune(c.low_cut);
+        self.lp.tune(c.high_cut);
+        let mut s = self.lp.process(self.hp.process(x));
+        if c.saturation > 0.0 {
+            let drive = 1.0 + c.saturation * 9.0; // 0..1 → 1..10
+            // Makeup normalized at a −6 dB reference: a typical voice level maps
+            // back onto itself, so the slider changes texture, not loudness.
+            // (Unit-gain-at-full-scale makeup turned −9 dB voice into a nearly
+            // full-scale square — a 2.7× loudness jump.)
+            const REF: f32 = 0.5;
+            s = (s * drive).tanh() * (REF / (REF * drive).tanh());
+        }
+        if c.destruction > 0.0 {
+            // Decimation: hold each sample for 1..=12 ticks (48 kHz → down to 4 kHz).
+            let factor = 1.0 + c.destruction * 11.0;
+            self.hold_phase += 1.0;
+            if self.hold_phase >= factor {
+                self.hold_phase -= factor;
+                self.held = s;
+            }
+            s = self.held;
+            // Quantization: 16 → ~5 bit equivalent.
+            let bits = 16.0 - c.destruction * 11.0;
+            let steps = 2f32.powf(bits - 1.0);
+            s = (s * steps).round() / steps;
+        }
+        s.clamp(-1.0, 1.0)
+    }
+}
+
 /// Capture → resample(in→48k) → RNNoise noise-suppression (10ms blocks) →
 /// compressor → 20ms frame → (if transmitting) Opus encode → WebRTC writer task.
 ///
@@ -577,9 +708,17 @@ pub fn decode_loop(mut rx: UnboundedReceiver<(String, Bytes)>, mix: MixMap) {
 /// granularity) → the ring drains → underrun crackle; producing on demand
 /// decouples from sleep precision. Sum is soft-limited (tanh) so several
 /// simultaneous speakers can't hard-clip.
-pub fn mixer_loop(mix: MixMap, play: Buf, out_rate: Arc<AtomicU32>, gains: Arc<Gains>, stop: Arc<AtomicBool>) {
+pub fn mixer_loop(
+    mix: MixMap,
+    play: Buf,
+    out_rate: Arc<AtomicU32>,
+    gains: Arc<Gains>,
+    radio: Arc<Mutex<RadioCfg>>,
+    stop: Arc<AtomicBool>,
+) {
     let mut cur_rate = out_rate.load(Ordering::SeqCst);
     let mut down = Resampler::new(OPUS_SR, cur_rate);
+    let mut fx = RadioFx::new();
     let mut target = cur_rate as usize * 60 / 1000; // ~60ms buffered (absorbs OS jitter)
     let mut cap = cur_rate as usize / 2; // hard cap ~0.5s
     loop {
@@ -614,9 +753,16 @@ pub fn mixer_loop(mix: MixMap, play: Buf, out_rate: Arc<AtomicU32>, gains: Arc<G
                 }
             }
             let master = gains.master_v();
+            let rc = *radio.lock().unwrap();
+            // Radio effect on the summed voice bus, BEFORE master volume and the
+            // tanh guard: saturating the sum gives the intermodulation a shared
+            // radio channel would, and the master fader stays a clean fader.
             // tanh ≈ linear for quiet signals, smoothly saturates near ±1 → no
             // hard-clip clicks when multiple peers speak at once.
-            let f: Vec<f32> = mixed.iter().map(|&v| (v as f32 * master / 32768.0).tanh()).collect();
+            let f: Vec<f32> = mixed
+                .iter()
+                .map(|&v| (fx.process(v as f32 / 32768.0, &rc) * master).tanh())
+                .collect();
             let mut o: Vec<f32> = Vec::new();
             down.process(&f, &mut o);
             {
@@ -630,5 +776,110 @@ pub fn mixer_loop(mix: MixMap, play: Buf, out_rate: Arc<AtomicU32>, gains: Arc<G
             }
         }
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(test)]
+mod radio_fx_tests {
+    use super::*;
+
+    /// RMS of a pure sine pushed through the effect, transient skipped.
+    fn rms_through(fx: &mut RadioFx, c: &RadioCfg, freq: f32) -> f32 {
+        let sr = OPUS_SR as f32;
+        let n = OPUS_SR as usize; // 1 s
+        let mut acc = 0.0f64;
+        let mut counted = 0usize;
+        for i in 0..n {
+            let x = (2.0 * std::f32::consts::PI * freq * i as f32 / sr).sin() * 0.5;
+            let y = fx.process(x, c);
+            if i >= n / 4 {
+                acc += (y as f64) * (y as f64);
+                counted += 1;
+            }
+        }
+        (acc / counted as f64).sqrt() as f32
+    }
+
+    fn band_only() -> RadioCfg {
+        RadioCfg { enabled: true, saturation: 0.0, destruction: 0.0, ..RadioCfg::default() }
+    }
+
+    #[test]
+    fn disabled_is_a_bit_exact_passthrough() {
+        let mut fx = RadioFx::new();
+        let c = RadioCfg { enabled: false, ..RadioCfg::default() };
+        for i in 0..1000 {
+            let x = ((i * 7919) % 2001) as f32 / 1000.0 - 1.0;
+            assert_eq!(fx.process(x, &c), x);
+        }
+    }
+
+    /// The band edges must actually cut: 300–3400 Hz passband, a rumble below
+    /// and a hiss above both land well under the in-band level.
+    #[test]
+    fn bandpass_shapes_the_spectrum() {
+        let c = band_only();
+        let inband = rms_through(&mut RadioFx::new(), &c, 1000.0);
+        let rumble = rms_through(&mut RadioFx::new(), &c, 60.0);
+        let hiss = rms_through(&mut RadioFx::new(), &c, 12000.0);
+        assert!(inband > 0.3, "1 kHz must pass, rms={inband}");
+        assert!(rumble < inband * 0.25, "60 Hz must be cut: {rumble} vs {inband}");
+        assert!(hiss < inband * 0.25, "12 kHz must be cut: {hiss} vs {inband}");
+    }
+
+    /// Tighter cutoffs must bite harder — the sliders have to do something.
+    #[test]
+    fn cutoffs_respond_to_the_sliders() {
+        let wide = band_only();
+        let narrow = RadioCfg { low_cut: 600.0, high_cut: 1800.0, ..band_only() };
+        let lo_wide = rms_through(&mut RadioFx::new(), &wide, 300.0);
+        let lo_narrow = rms_through(&mut RadioFx::new(), &narrow, 300.0);
+        assert!(lo_narrow < lo_wide * 0.6, "raising low_cut must cut 300 Hz harder");
+        let hi_wide = rms_through(&mut RadioFx::new(), &wide, 3000.0);
+        let hi_narrow = rms_through(&mut RadioFx::new(), &narrow, 3000.0);
+        assert!(hi_narrow < hi_wide * 0.6, "lowering high_cut must cut 3 kHz harder");
+    }
+
+    /// Saturation reshapes without a level jump (makeup) and never exceeds ±1.
+    #[test]
+    fn saturation_is_bounded_and_level_stable() {
+        let clean = band_only();
+        let hot = RadioCfg { saturation: 1.0, ..band_only() };
+        let r_clean = rms_through(&mut RadioFx::new(), &clean, 1000.0);
+        let r_hot = rms_through(&mut RadioFx::new(), &hot, 1000.0);
+        assert!(r_hot <= 1.0 && r_hot > r_clean * 0.5 && r_hot < r_clean * 2.0,
+            "saturation must not double or halve the level: {r_clean} -> {r_hot}");
+
+        let mut fx = RadioFx::new();
+        for i in 0..4800 {
+            let x = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / OPUS_SR as f32).sin();
+            let y = fx.process(x, &hot);
+            assert!((-1.0..=1.0).contains(&y));
+        }
+    }
+
+    /// Full destruction still yields signal (not silence, not NaN) — it is a
+    /// texture, not a mute.
+    #[test]
+    fn destruction_degrades_but_never_kills() {
+        let c = RadioCfg { destruction: 1.0, ..band_only() };
+        let r = rms_through(&mut RadioFx::new(), &c, 1000.0);
+        assert!(r.is_finite() && r > 0.05, "destroyed signal must survive, rms={r}");
+    }
+
+    /// Retuning mid-stream (slider drag) must not blow up the filter state.
+    #[test]
+    fn live_retune_stays_finite() {
+        let mut fx = RadioFx::new();
+        let mut c = band_only();
+        for i in 0..(OPUS_SR as usize) {
+            if i % 4800 == 0 {
+                c.low_cut = 100.0 + (i / 4800) as f32 * 80.0;
+                c.high_cut = 8000.0 - (i / 4800) as f32 * 500.0;
+            }
+            let x = (2.0 * std::f32::consts::PI * 700.0 * i as f32 / OPUS_SR as f32).sin();
+            let y = fx.process(x, &c);
+            assert!(y.is_finite());
+        }
     }
 }

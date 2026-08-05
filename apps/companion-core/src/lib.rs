@@ -321,6 +321,7 @@ pub struct Engine {
     cmd_tx: mpsc::UnboundedSender<Cmd>,
     gains: Arc<audio::Gains>,
     dsp: Arc<Mutex<audio::DspConfig>>,
+    radio: Arc<Mutex<audio::RadioCfg>>,
     monitor: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
@@ -369,6 +370,10 @@ impl Engine {
     /// Live capture-path DSP config (noise gate / compressor / limiter).
     pub fn set_dsp(&self, cfg: audio::DspConfig) {
         *self.dsp.lock().unwrap() = cfg;
+    }
+    /// Receive-bus radio effect ("Funk-Effekt") — live, read by the mixer.
+    pub fn set_radio(&self, cfg: audio::RadioCfg) {
+        *self.radio.lock().unwrap() = cfg;
     }
     /// Mic self-check: route the (processed) mic to local playback.
     pub fn set_monitor(&self, on: bool) {
@@ -427,6 +432,7 @@ pub(crate) fn setup_audio(
     mpsc::UnboundedSender<(String, Bytes)>,
     Arc<audio::Gains>,
     Arc<Mutex<audio::DspConfig>>,
+    Arc<Mutex<audio::RadioCfg>>, // receive-bus radio effect ("Funk-Effekt")
     Arc<AtomicBool>, // mic self-check (monitor) toggle
     Arc<AtomicBool>, // shutdown flag for the audio threads
     Arc<AtomicU32>,  // encoder bitrate (0 = auto; low-bw mode)
@@ -440,6 +446,7 @@ pub(crate) fn setup_audio(
     let transmit = Arc::new(AtomicBool::new(false));
     let gains = Arc::new(audio::Gains::new());
     let dsp_cfg = Arc::new(Mutex::new(audio::DspConfig::default()));
+    let radio_cfg = Arc::new(Mutex::new(audio::RadioCfg::default()));
     let monitor = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
     let bitrate = Arc::new(AtomicU32::new(0)); // 0 = Opus auto
@@ -479,11 +486,11 @@ pub(crate) fn setup_audio(
         std::thread::spawn(move || audio::decode_loop(decode_rx, mix));
     }
     {
-        let (gains, stop) = (gains.clone(), stop.clone());
-        std::thread::spawn(move || audio::mixer_loop(mix, play, out_rate, gains, stop));
+        let (gains, radio_cfg, stop) = (gains.clone(), radio_cfg.clone(), stop.clone());
+        std::thread::spawn(move || audio::mixer_loop(mix, play, out_rate, gains, radio_cfg, stop));
     }
 
-    Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon))
+    Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, radio_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon))
 }
 
 struct Member {
@@ -533,7 +540,7 @@ fn emit_roster(
 pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon) =
+    let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, radio_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon) =
         setup_audio(cfg.input_device.clone(), cfg.output_device.clone())?;
     // Cloned into the mesh loop (fires the click); the original stays in Engine
     // so the frontend can toggle it on/off.
@@ -1019,7 +1026,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         }
     });
 
-    Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon })
+    Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, radio: radio_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon })
 }
 
 #[cfg(test)]

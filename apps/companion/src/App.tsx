@@ -192,6 +192,23 @@ const DSP_DEFAULT: DspConfig = {
   limiter_ceiling: 0.97,
 };
 
+// Funk-Effekt: Bandpass + Saturation + Destruction auf den EMPFANGS-Mix (alle
+// eingehenden Stimmen). Reine Hörer-Einstellung — ändert nichts am Gesendeten.
+type RadioCfg = {
+  enabled: boolean;
+  low_cut: number;   // Hz — FX Tiefen abschneiden
+  high_cut: number;  // Hz — FX Höhen abschneiden
+  saturation: number;  // 0..1
+  destruction: number; // 0..1
+};
+const RADIO_DEFAULT: RadioCfg = {
+  enabled: false,
+  low_cut: 300,
+  high_cut: 3400,
+  saturation: 0.35,
+  destruction: 0.15,
+};
+
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [transmitting, setTransmitting] = useState(false);
@@ -292,6 +309,13 @@ export default function App() {
       return { ...DSP_DEFAULT, ...JSON.parse(localStorage.getItem("sa.dsp") || "{}") };
     } catch {
       return DSP_DEFAULT;
+    }
+  });
+  const [radioFx, setRadioFx] = useState<RadioCfg>(() => {
+    try {
+      return { ...RADIO_DEFAULT, ...JSON.parse(localStorage.getItem("sa.radiofx") || "{}") };
+    } catch {
+      return RADIO_DEFAULT;
     }
   });
   const [monitoring, setMonitoring] = useState(false);
@@ -524,6 +548,18 @@ export default function App() {
       return nv;
     });
   };
+  const updateRadio = (patch: Partial<RadioCfg>) => {
+    setRadioFx((r) => {
+      const nv = { ...r, ...patch };
+      try {
+        localStorage.setItem("sa.radiofx", JSON.stringify(nv));
+      } catch {
+        /* ignore */
+      }
+      invoke("set_radio_fx", { cfg: nv }).catch(() => {});
+      return nv;
+    });
+  };
   const onPeerVol = (userId: string, v: number) => {
     setPeerVol((m) => ({ ...m, [userId]: v }));
     invoke("set_peer_volume", { userId, volume: v / 100 }).catch(() => {});
@@ -643,6 +679,7 @@ export default function App() {
   useEffect(() => {
     if (connected) {
       invoke("set_dsp", { cfg: dsp }).catch(() => {});
+      invoke("set_radio_fx", { cfg: radioFx }).catch(() => {});
       invoke("set_low_bandwidth", { on: lowBw }).catch(() => {});
       invoke("set_earcon", { on: earcon }).catch(() => {});
       invoke("set_earcon_volume", { volume: earconVol / 100 }).catch(() => {});
@@ -1233,6 +1270,36 @@ export default function App() {
           <span>Ceiling</span>
           <input type="range" min={50} max={100} value={Math.round(dsp.limiter_ceiling * 100)} disabled={!dsp.limiter} onChange={(e) => updateDsp({ limiter_ceiling: Number(e.target.value) / 100 })} />
           <span className="vval">{Math.round(dsp.limiter_ceiling * 100)}%</span>
+        </div>
+      </div>
+
+          <label>📻 Funk-Effekt</label>
+          <div className="dsp">
+        <div className="dsphead">
+          <label className="chk"><input type="checkbox" checked={radioFx.enabled} onChange={(e) => updateRadio({ enabled: e.target.checked })} /> Funk-Effekt (Bandpass + leichte Saturation)</label>
+        </div>
+        <div className="sub2" style={{ opacity: 0.7 }}>
+          Färbt alle eingehenden Stimmen wie ein Funkgerät. Wirkt nur bei dir — was du sendest, bleibt unverändert.
+        </div>
+        <div className="dsprow">
+          <span>FX Tiefen abschneiden</span>
+          <input type="range" min={50} max={1000} step={10} value={Math.round(radioFx.low_cut)} disabled={!radioFx.enabled} onChange={(e) => updateRadio({ low_cut: Number(e.target.value) })} />
+          <span className="vval">{Math.round(radioFx.low_cut)} Hz</span>
+        </div>
+        <div className="dsprow">
+          <span>FX Höhen abschneiden</span>
+          <input type="range" min={1200} max={12000} step={100} value={Math.round(radioFx.high_cut)} disabled={!radioFx.enabled} onChange={(e) => updateRadio({ high_cut: Number(e.target.value) })} />
+          <span className="vval">{radioFx.high_cut >= 1000 ? (radioFx.high_cut / 1000).toFixed(1) + " kHz" : Math.round(radioFx.high_cut) + " Hz"}</span>
+        </div>
+        <div className="dsprow">
+          <span>Saturation</span>
+          <input type="range" min={0} max={100} value={Math.round(radioFx.saturation * 100)} disabled={!radioFx.enabled} onChange={(e) => updateRadio({ saturation: Number(e.target.value) / 100 })} />
+          <span className="vval">{Math.round(radioFx.saturation * 100)}%</span>
+        </div>
+        <div className="dsprow">
+          <span>FX Destruction</span>
+          <input type="range" min={0} max={100} value={Math.round(radioFx.destruction * 100)} disabled={!radioFx.enabled} onChange={(e) => updateRadio({ destruction: Number(e.target.value) / 100 })} />
+          <span className="vval">{Math.round(radioFx.destruction * 100)}%</span>
         </div>
       </div>
         </>
