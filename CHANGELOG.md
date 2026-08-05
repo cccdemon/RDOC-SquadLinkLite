@@ -24,6 +24,9 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
   bleiben gespeichert.
 
 ### Fixed
+- **Schließen schließt jetzt wirklich.** Das X des Hauptfensters beendet die
+  App vollständig — vorher blieb das (unsichtbare oder sichtbare)
+  In-Game-Overlay-Fenster übrig und hielt den Prozess samt Audio am Leben.
 - **Irreführender Hinweis entfernt.** Die Warnung „Sprach-Schlüssel nicht
   erhalten" empfahl, das TURN-Relay zu aktivieren — das es serverseitig gar
   nicht gibt. Jetzt empfiehlt sie, was wirklich hilft: „Session neu

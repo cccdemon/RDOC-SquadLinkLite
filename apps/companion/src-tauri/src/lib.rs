@@ -1137,6 +1137,18 @@ pub fn run() {
     }
     builder
         .plugin(tauri_plugin_deep_link::init())
+        // Closing the MAIN window must end the app, full stop. The in-game
+        // overlay is a second window; without this, Tauri's "exit when the last
+        // window closes" default keeps the process (overlay, engine, audio,
+        // control server) alive after the user hit X. Overlay-close stays
+        // harmless: it only removes that one window.
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .manage(AppState { engine: Mutex::new(None), serverless: Mutex::new(None), control: Mutex::new(None) })
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
