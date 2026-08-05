@@ -43,7 +43,9 @@ standalone throwaway crates, also excluded.
 
 Tests live in `#[cfg(test)]` modules inside `lib.rs`, `mesh.rs`, `crypto.rs`,
 `signaling.rs` (companion-core) and `crates/protocol/src/lib.rs`. There is no
-separate test dir, and `server/init` + `src-tauri` currently have no tests.
+separate test dir. On `main`, `server/init` + `src-tauri` have no tests yet —
+the pushed branch `fix/keyless-guidance` adds them (auth/turn/sessions + IPC
+guards) plus a 3-node room-key simulation; drop this sentence when it merges.
 
 ## Build hosts
 
@@ -92,8 +94,8 @@ Release on a `subraum-v*` tag.
 | --- | --- | --- |
 | `build-companion.yml` | `windows-latest` | NSIS + MSI, unsigned MSIX for the Store; on a tag also cuts the prerelease and tells the server to pull the installer |
 | `build-companion-linux.yml` | `ubuntu-22.04` amd64 + arm64 matrix | deb/rpm/AppImage per arch |
-| `build-companion-flatpak.yml` | `ubuntu-22.04`, two jobs | job 1 compiles the `.deb` natively, job 2 unpacks it into `/app` in the GNOME 47 SDK → `.flatpak` for SteamOS / Steam Deck / immutable distros |
-| `build-companion-macos.yml` | `macos-14` (arm64) + `macos-13` (Intel) | dmg + app per arch, **unsigned and un-notarized** (Gatekeeper blocks first launch) |
+| `build-companion-flatpak.yml` | `ubuntu-22.04`, three jobs | `deb` compiles natively, `flatpak` unpacks it into `/app` in the GNOME 47 SDK → `.flatpak` for SteamOS / Steam Deck / immutable distros, `release` (tag-only) attaches the bundle from a plain runner — the SDK container has no `gh`, uploading from inside it fails with "command not found" |
+| `build-companion-macos.yml` | `macos-14` (arm64) + `macos-13` (Intel) | dmg + app per arch, **unsigned and un-notarized** (Gatekeeper blocks first launch). `macos-13` is deprecated and starved — the Intel job can sit queued for hours; don't block a release on it |
 | `build-companion-android.yml` | `ubuntu-22.04` | debug-signed sideload APK; `workflow_dispatch` **only** — `gen/android` is not committed, `tauri android init` runs fresh in CI |
 
 Android/Flatpak/macOS builds are all unsigned — no Apple account, no Play keystore,
@@ -101,6 +103,10 @@ no Flatpak GPG key yet.
 
 `ve.raumdock.org` is also the deploy box: CI uses a locked forced-command key
 (`DEPLOY_PULL_KEY`) that can only run the installer-pull service.
+`deploy/pull-installer.sh` mirrors **only** `exe|msi|deb|rpm|AppImage|apk` into
+the `/get` download page — the Flatpak and macOS dmg exist solely as GitHub
+Release assets and never appear on `subraum.cc/get`, even though README and the
+Store copy advertise the Flatpak there.
 
 The Windows workflow gates the build on `pnpm audit --audit-level moderate` — a
 **blocking** step, so any moderate transitive advisory fails CI before anything is
@@ -240,6 +246,13 @@ Opus encodes once per 20 ms frame regardless of peer count. Verified in
 - The InitConnection server is **fail-closed**: without `ROOM_AUTH_SECRET` it refuses
   to start unless `ALLOW_OPEN_AUTH=1` (dev only). Server env vars are tabulated in
   `README.md`.
+- **TURN is not deployed.** Production `subraum-init` runs without
+  `TURN_SECRET`/`TURN_URLS` and no coturn exists, so `ServerMsg::Turn` is never
+  sent and the client's "TURN-Relay-Fallback" toggle does nothing (verified
+  2026-07-30). Never write user-facing text that recommends enabling the relay —
+  the 0.2.1 keyless warning made that mistake. `deploy/turnserver.conf` and the
+  compose stack are ready but unused; `turn.rs` is live code behind a dead env
+  var.
 - License is PolyForm Noncommercial 1.0.0, not MIT — despite `license = "MIT"` in
   the workspace `Cargo.toml`.
 
