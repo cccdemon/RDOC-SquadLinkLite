@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<!-- Property inspector for "Funkkanal wählen": one text field, stored as the
+     action's settings ({channel}). Speaks the raw PI registration protocol. -->
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: "Segoe UI", -apple-system, sans-serif; background: #2D2D2D; color: #D8D8D8; margin: 0; padding: 10px 14px; font-size: 13px; }
+    label { display: block; margin-bottom: 4px; color: #969696; }
+    input { width: 100%; box-sizing: border-box; background: #3D3D3D; color: #D8D8D8; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+    input:focus { outline: none; border-color: #7FB0FF; }
+    .hint { margin-top: 6px; color: #7A7A7A; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <label for="chan">Funkkanal</label>
+  <input id="chan" type="text" maxlength="32" placeholder="z. B. Funk 2" />
+  <div class="hint">Exakter Kanalname (Groß/Klein egal). Die Taste leuchtet, wenn du auf diesem Kanal bist.</div>
+  <script>
+    let ws = null, uuid = null;
+    // Stream Deck calls this global with the PI connection parameters.
+    window.connectElgatoStreamDeckSocket = (port, piUUID, registerEvent, info, actionInfo) => {
+      uuid = piUUID;
+      const parsed = JSON.parse(actionInfo);
+      document.getElementById("chan").value = (parsed.payload.settings && parsed.payload.settings.channel) || "";
+      ws = new WebSocket("ws://127.0.0.1:" + port);
+      ws.onopen = () => ws.send(JSON.stringify({ event: registerEvent, uuid: piUUID }));
+    };
+    document.getElementById("chan").addEventListener("input", (e) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ event: "setSettings", context: uuid, payload: { channel: e.target.value } }));
+      }
+    });
+  </script>
+</body>
+</html>

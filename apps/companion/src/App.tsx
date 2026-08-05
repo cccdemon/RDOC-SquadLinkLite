@@ -785,6 +785,52 @@ export default function App() {
     return () => { offCycle.then((f) => f()); offBound.then((f) => f()); offReady.then((f) => f()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Local control API (Stream Deck / Companion) ─────────────────────────────
+  // Commands arrive from Rust as a "ctl" event; PTT and chan-cycle reuse the
+  // existing "ptt"/"chan-cycle" events, so mute-gating and channel validation
+  // stay in the handlers above. Kept in a ref so the once-registered listener
+  // always sees current state, not the mount-time closure.
+  const ctlRef = useRef<(cmd: Record<string, unknown>) => void>(() => {});
+  ctlRef.current = (cmd) => {
+    switch (cmd.t) {
+      case "mic-toggle": toggleMic(); break;
+      case "deafen-toggle": toggleDeaf(); break;
+      case "channel": if (typeof cmd.name === "string") switchChannel(cmd.name); break;
+      case "rekey": if (connected && !rotating) rotateKey(); break;
+      case "disconnect": if (connected) onDisconnect(); break;
+      case "volume": {
+        const v = Number(cmd.value);
+        if (Number.isFinite(v)) onMaster(Math.round(Math.max(0, Math.min(200, v))));
+        break;
+      }
+      case "volume-delta": {
+        const d = Number(cmd.d);
+        if (Number.isFinite(d)) onMaster(Math.round(Math.max(0, Math.min(200, masterVol + d))));
+        break;
+      }
+    }
+  };
+  useEffect(() => {
+    const off = listen<Record<string, unknown>>("ctl", (e) => ctlRef.current(e.payload));
+    return () => { off.then((u) => u()); };
+  }, []);
+
+  // Report control-relevant state to the Rust side, which fans it out to every
+  // connected controller (button feedback: TX light, mute state, channel name).
+  useEffect(() => {
+    invoke("control_state", { snapshot: {
+      connected,
+      transmitting,
+      mic_muted: micMuted,
+      deafened: deaf,
+      channel: myChannel,
+      channels: orderedChannels().slice(0, 32),
+      volume: masterVol,
+      rekeying: rotating,
+    } }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, transmitting, micMuted, deaf, myChannel, sessionChannels, participants, masterVol, rotating]);
   const rebindChan = (slot: number) => {
     setCapturingChan(slot);
     invoke("start_chan_capture", { slot }).catch(() => {});

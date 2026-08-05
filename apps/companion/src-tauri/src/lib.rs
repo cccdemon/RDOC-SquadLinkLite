@@ -10,11 +10,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use companion_core::serverless::Serverless;
 use companion_core::{start, Engine, EngineConfig, Sink, UiEvent};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+mod control;
 
 struct AppState {
     engine: Mutex<Option<Engine>>,
     serverless: Mutex<Option<Arc<Serverless>>>,
+    /// Local control API (Stream Deck etc.); None until the server is up.
+    control: Mutex<Option<Arc<control::ControlServer>>>,
 }
 
 // ── Configurable PTT via Windows Raw Input (keyboard + mouse buttons) ─────────
@@ -945,6 +949,20 @@ fn set_radio_fx(state: State<AppState>, mut cfg: companion_core::audio::RadioCfg
     }
 }
 
+/// The webview reports its control-relevant state (connected, transmitting,
+/// mute, deafen, channel, channel list, volume); fanned out to every
+/// authenticated controller. Size-capped: this is a status blob, not a channel
+/// for bulk data.
+#[tauri::command]
+fn control_state(state: State<AppState>, snapshot: serde_json::Value) {
+    if serde_json::to_string(&snapshot).map(|s| s.len() > 16 * 1024).unwrap_or(true) {
+        return;
+    }
+    if let Some(srv) = state.control.lock().unwrap().as_ref() {
+        srv.publish_state(snapshot);
+    }
+}
+
 #[tauri::command]
 fn set_monitor(state: State<AppState>, on: bool) {
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -1119,10 +1137,40 @@ pub fn run() {
     }
     builder
         .plugin(tauri_plugin_deep_link::init())
-        .manage(AppState { engine: Mutex::new(None), serverless: Mutex::new(None) })
+        .manage(AppState { engine: Mutex::new(None), serverless: Mutex::new(None), control: Mutex::new(None) })
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
             start_raw_input();
+            // Local control API (Stream Deck / Companion): loopback WS + token.
+            // Commands land here and are re-emitted as the SAME events the
+            // Raw-Input hook and hotkeys use, so all gating (self-mute blocks
+            // PTT, channel validation) stays in one place — the webview.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+                    match control::ControlServer::start(out_tx).await {
+                        Ok(srv) => {
+                            if let Ok(dir) = handle.path().app_config_dir() {
+                                if let Err(e) = control::write_discovery(&dir, srv.port, &srv.token) {
+                                    eprintln!("control: discovery file failed: {e}");
+                                }
+                            }
+                            if let Some(state) = handle.try_state::<AppState>() {
+                                *state.control.lock().unwrap() = Some(srv);
+                            }
+                            while let Some(cmd) = out_rx.recv().await {
+                                match cmd {
+                                    control::CtlOut::Ptt(on) => { let _ = handle.emit("ptt", on); }
+                                    control::CtlOut::ChanCycle(d) => { let _ = handle.emit("chan-cycle", d); }
+                                    control::CtlOut::Ctl(v) => { let _ = handle.emit("ctl", v); }
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("control: server failed to start: {e}"),
+                    }
+                });
+            }
             // Cold start: stash the launch URL for the webview to drain on mount
             // (Windows delivers deep links via argv).
             if let Some(url) = std::env::args().find(|a| is_deeplink(a)) {
@@ -1166,6 +1214,7 @@ pub fn run() {
             remove_channel,
             set_dsp,
             set_radio_fx,
+            control_state,
             set_monitor,
             set_low_bandwidth,
             set_input_device,

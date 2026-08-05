@@ -27,3 +27,6 @@ Thumbs.db
 
 # Local CI-downloaded test binaries (installers + MSIX)
 test-build/
+
+# Stream Deck plugin: built artifact (packed at release time)
+streamdeck-plugin/subraum.streamDeckPlugin

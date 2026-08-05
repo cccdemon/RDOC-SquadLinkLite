@@ -1,0 +1,10 @@
+{
+  "name": "subraum-streamdeck",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Stream Deck plugin for subraum — runs inside the Stream Deck Node.js runtime.",
+  "main": "bin/plugin.js",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

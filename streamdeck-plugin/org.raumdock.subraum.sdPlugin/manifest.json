@@ -1,0 +1,98 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "subraum",
+  "Version": "0.1.0.0",
+  "Author": "Raumdock",
+  "Description": "Steuert subraum (encrypted communication): Push-to-Talk, Mikro, Deafen, Funkkanäle, Lautstärke, Session — mit Live-Status auf den Tasten.",
+  "URL": "https://subraum.cc",
+  "Icon": "imgs/plugin",
+  "CodePath": "bin/plugin.js",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": ""
+  },
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.4"
+  },
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "12" }
+  ],
+  "Category": "subraum",
+  "CategoryIcon": "imgs/plugin",
+  "Actions": [
+    {
+      "UUID": "org.raumdock.subraum.ptt",
+      "Name": "Push-to-Talk",
+      "Tooltip": "Halten = senden. Leuchtet, solange du sendest. Respektiert Mikro-stumm.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "org.raumdock.subraum.mic",
+      "Name": "Mikro stumm",
+      "Tooltip": "Mikrofon stummschalten/freigeben. Zeigt den aktuellen Zustand.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.deafen",
+      "Name": "Deafen",
+      "Tooltip": "Ton komplett aus/an (du wirst weiter gehört, solange du sendest).",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.channel",
+      "Name": "Funkkanal wählen",
+      "Tooltip": "Wechselt direkt auf den eingestellten Funkkanal. Leuchtet, wenn du auf diesem Kanal bist.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }],
+      "PropertyInspectorPath": "pi/channel.html"
+    },
+    {
+      "UUID": "org.raumdock.subraum.channelnext",
+      "Name": "Kanal vor",
+      "Tooltip": "Nächster Funkkanal. Zeigt den aktuellen Kanal.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.channelprev",
+      "Name": "Kanal zurück",
+      "Tooltip": "Vorheriger Funkkanal. Zeigt den aktuellen Kanal.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.volup",
+      "Name": "Lauter",
+      "Tooltip": "Gesamtlautstärke +5 %. Zeigt den aktuellen Wert.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.voldown",
+      "Name": "Leiser",
+      "Tooltip": "Gesamtlautstärke −5 %. Zeigt den aktuellen Wert.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.rekey",
+      "Name": "Neu verschlüsseln",
+      "Tooltip": "Session neu verschlüsseln (raumweit neue Keys).",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    },
+    {
+      "UUID": "org.raumdock.subraum.disconnect",
+      "Name": "Session verlassen",
+      "Tooltip": "Trennt die aktuelle subraum-Session.",
+      "Icon": "imgs/action",
+      "States": [{ "Image": "imgs/key" }]
+    }
+  ]
+}

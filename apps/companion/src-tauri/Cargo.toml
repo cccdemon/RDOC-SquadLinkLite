@@ -20,6 +20,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
+# Local control API (Stream Deck etc.): loopback WS server + token generation.
+tokio-tungstenite = "0.24"
+futures = "0.3"
+getrandom = "0.2"
 # Deep link (subraum://) config — supported on desktop + mobile.
 tauri-plugin-deep-link = "2"
 

@@ -1,0 +1,10 @@
+{
+  "name": "subraum-streamdeck-tools",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Icon generation + packaging for the subraum Stream Deck plugin.",
+  "type": "module",
+  "devDependencies": {
+    "sharp": "^0.33.0"
+  }
+}
