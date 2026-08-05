@@ -39,3 +39,8 @@ bytes = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# `test-util` gives the tests a paused clock, so the room-key grace period
+# (ROOM_KEY_GRACE) elapses instantly instead of really sleeping.
+tokio = { version = "1", features = ["full", "test-util"] }

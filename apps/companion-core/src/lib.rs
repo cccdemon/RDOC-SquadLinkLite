@@ -149,50 +149,180 @@ const ROOM_KEY_GRACE: Duration = Duration::from_millis(400);
 /// when the authority is genuinely unreachable.
 const KEYLESS_WARN_AFTER: Duration = Duration::from_secs(8);
 
-/// Stage `k` for decryption immediately, then activate it for sealing — at once
-/// if it's our first key (nothing to coordinate), else after `ROOM_KEY_GRACE` so
-/// every peer has staged it first. Bumps `room_gen` to the accepted generation.
-fn adopt_room_key(
-    room: &Arc<crypto::RoomAudio>,
-    k: crypto::RoomKey,
-    room_gen: &mut u32,
-    promote_tx: &mpsc::UnboundedSender<u32>,
-) {
-    let first = !room.has_send();
-    if room.stage(k) {
-        let g = room.generation().unwrap_or(0);
-        *room_gen = (*room_gen).max(g);
+/// Put the coordinator's decisions on the wire.
+async fn perform_key_actions(mesh: &Mesh, actions: Vec<KeyAction>) {
+    for a in actions {
+        match a {
+            KeyAction::SendKey { peer, gen, key } => mesh.send_room_key(&peer, gen, &key).await,
+            KeyAction::SendGen { peer, gen } => mesh.send_room_gen(&peer, gen).await,
+        }
+    }
+}
+
+/// Members we currently hold a pairwise PQC session with — the only peers a room
+/// key can be handed to, since it never travels outside one.
+fn secure_peer_ids(
+    members: &HashMap<String, Member>,
+    crypto: &crypto::PeerCrypto,
+) -> Vec<String> {
+    members.keys().filter(|id| crypto.is_secure(id)).cloned().collect()
+}
+
+/// One thing the engine must put on the wire after the coordinator processed an
+/// event. Returned rather than performed, so the coordinator carries no mesh,
+/// socket or audio dependency and can be driven straight from a test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KeyAction {
+    /// Hand the current room key to `peer`, sealed over its pairwise session.
+    SendKey { peer: String, gen: u32, key: [u8; 32] },
+    /// Tell `peer` — whom we hold to be the authority — the live generation.
+    SendGen { peer: String, gen: u32 },
+}
+
+/// Group-audio key coordination: who mints, at which generation, and who gets
+/// told what.
+///
+/// Lifted out of the engine's `select!` arms on purpose. The rules here are
+/// where the "one member silent in both directions" bug lived — a late-joining
+/// authority minting generation 1 — and inside the loop they could only be
+/// exercised by running three real clients with real audio devices. As a struct
+/// they can be wired up three-at-a-time in a unit test (see
+/// `room_key_tests::late_authority_converges_across_three_nodes`).
+struct RoomKeyCoordinator {
+    me_id: String,
+    room: Arc<crypto::RoomAudio>,
+    /// Highest generation ever minted or adopted. Deliberately monotonic and
+    /// separate from the live key: a key can be superseded, but a fresh mint
+    /// must still land above everything this node has already seen.
+    room_gen: u32,
+    promote_tx: mpsc::UnboundedSender<u32>,
+}
+
+impl RoomKeyCoordinator {
+    fn new(
+        me_id: String,
+        room: Arc<crypto::RoomAudio>,
+        promote_tx: mpsc::UnboundedSender<u32>,
+    ) -> Self {
+        RoomKeyCoordinator { me_id, room, room_gen: 0, promote_tx }
+    }
+
+    /// Newest staged generation, i.e. what the encryption footer shows.
+    fn generation(&self) -> Option<u32> {
+        self.room.generation()
+    }
+
+    /// Stage `k` for decryption immediately, then activate it for sealing — at
+    /// once if it's our first key (nothing to coordinate), else after
+    /// `ROOM_KEY_GRACE` so every peer has staged it before anyone seals with it.
+    ///
+    /// Returns whether the key was actually taken: `stage` rejects anything that
+    /// isn't strictly better than what we hold, so a stale or duplicate key is a
+    /// no-op and callers must not report a generation change for it.
+    fn adopt(&mut self, k: crypto::RoomKey) -> bool {
+        let first = !self.room.has_send();
+        if !self.room.stage(k) {
+            return false;
+        }
+        let g = self.room.generation().unwrap_or(0);
+        self.room_gen = self.room_gen.max(g);
         if first {
-            room.promote(g); // no prior key to coordinate → seal immediately
+            self.room.promote(g); // no prior key to coordinate → seal now
         } else {
-            let ptx = promote_tx.clone();
+            let ptx = self.promote_tx.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(ROOM_KEY_GRACE).await;
                 let _ = ptx.send(g);
             });
         }
+        true
     }
-}
 
-/// Authority action: mint the next-generation group-audio key, adopt it (stage
-/// now, activate for sealing after the grace), and hand it to every currently-
-/// secure peer (sealed over each pairwise session). Bumps `room_gen`.
-async fn rotate_room_key(
-    room_gen: &mut u32,
-    room: &Arc<crypto::RoomAudio>,
-    mesh: &Mesh,
-    members: &HashMap<String, Member>,
-    crypto: &Arc<crypto::PeerCrypto>,
-    me_id: &str,
-    promote_tx: &mpsc::UnboundedSender<u32>,
-) {
-    let g = room_gen.saturating_add(1);
-    adopt_room_key(room, crypto::RoomKey::generate(g, me_id.to_string()), room_gen, promote_tx);
-    if let Some(k) = room.current() {
-        let secure_peers: Vec<String> =
-            members.keys().filter(|id| crypto.is_secure(id)).cloned().collect();
-        for id in secure_peers {
-            mesh.send_room_key(&id, k.generation(), &k.key_bytes()).await;
+    /// Authority action: mint the next generation, adopt it, and hand it to every
+    /// currently-secure peer. `secure_peers` is the caller's view of which
+    /// pairwise sessions exist — the key can only travel over one of those.
+    fn rotate(&mut self, secure_peers: &[String]) -> Vec<KeyAction> {
+        let g = self.room_gen.saturating_add(1);
+        self.adopt(crypto::RoomKey::generate(g, self.me_id.clone()));
+        let Some(k) = self.room.current() else { return Vec::new() };
+        secure_peers
+            .iter()
+            .map(|id| KeyAction::SendKey {
+                peer: id.clone(),
+                gen: k.generation(),
+                key: k.key_bytes(),
+            })
+            .collect()
+    }
+
+    /// The pairwise PQC session with `peer` came up.
+    ///
+    /// As authority: mint the room's first key if we hold none, then hand the
+    /// current one over. As anyone else: if `peer` is the authority and we
+    /// already hold a key, report our generation — that is what stops a peer who
+    /// joined after us (ids are random, so a late joiner can be the authority)
+    /// from starting the counter over at 1 and being rejected by everyone.
+    fn on_secure(&mut self, peer: &str, members: &HashMap<String, Member>) -> Vec<KeyAction> {
+        if am_authority(&self.me_id, members) {
+            if self.room.generation().is_none() {
+                self.room_gen = self.room_gen.max(1);
+                let g = self.room_gen;
+                self.adopt(crypto::RoomKey::generate(g, self.me_id.clone()));
+            }
+            match self.room.current() {
+                Some(k) => vec![KeyAction::SendKey {
+                    peer: peer.to_string(),
+                    gen: k.generation(),
+                    key: k.key_bytes(),
+                }],
+                None => Vec::new(),
+            }
+        } else if is_authority_peer(peer, &self.me_id, members) {
+            match self.room.generation() {
+                Some(gen) => vec![KeyAction::SendGen { peer: peer.to_string(), gen }],
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// A room key arrived from `from`. Adopted only when `from` really is the
+    /// elected authority and the generation is plausible — otherwise any member
+    /// could hijack the group key or pin it so no rotation can ever exceed it.
+    /// Returns whether it was taken.
+    fn on_room_key(
+        &mut self,
+        from: &str,
+        gen: u32,
+        key: [u8; 32],
+        members: &HashMap<String, Member>,
+    ) -> bool {
+        is_authority_peer(from, &self.me_id, members)
+            && gen <= self.room_gen.saturating_add(ROOM_GEN_BOUND)
+            && self.adopt(crypto::RoomKey::from_bytes(gen, from.to_string(), key))
+    }
+
+    /// A member reported the room's generation. Only the authority mints, so only
+    /// the authority acts on it. Rotating rather than adopting `gen` is what keeps
+    /// this safe: we take the counter, never key material, and the key we mint at
+    /// `gen + 1` then supersedes every staged key by the ordinary generation rule.
+    fn on_room_gen(
+        &mut self,
+        from: &str,
+        gen: u32,
+        members: &HashMap<String, Member>,
+        secure_peers: &[String],
+    ) -> Vec<KeyAction> {
+        if am_authority(&self.me_id, members)
+            && members.contains_key(from)
+            && gen > self.room_gen
+            && gen <= self.room_gen.saturating_add(ROOM_GEN_BOUND)
+        {
+            self.room_gen = gen;
+            self.rotate(secure_peers)
+        } else {
+            Vec::new()
         }
     }
 }
@@ -486,6 +616,7 @@ pub(crate) fn setup_audio(
     Ok((transmit, opus_rx, decode_tx, gains, dsp_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon))
 }
 
+#[derive(Clone)]
 struct Member {
     name: String,
     badge: Option<String>,
@@ -575,7 +706,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
 
     let sig = signaling::connect(&cfg.server, cfg.cert_sha256.as_deref()).await?;
     let out = sig.out.clone();
-    let mut incoming = sig.incoming;
+    let incoming = sig.incoming;
     out.send(ClientMsg::Join {
         room: cfg.room.clone(),
         user_id: cfg.user_id.clone(),
@@ -626,9 +757,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         // directory broadcast can't resurrect a tombstoned channel; switching to
         // a channel clears its tombstone (recreation).
         let mut removed_channels: HashSet<String> = HashSet::new();
-        // Highest group-audio key generation this node has minted (as authority)
-        // or adopted (from the authority).
-        let mut room_gen: u32 = 0;
+        // Who mints the group-audio key, at which generation, and who is told
+        // what. The rules live in the coordinator so they are testable; the loop
+        // only performs the actions it hands back.
+        let mut keys = RoomKeyCoordinator::new(me_id.clone(), room.clone(), promote_tx.clone());
         sink(UiEvent::RoomAudio { gen: None, authority: false }); // negotiating until a key lands
         let mut key_gen: u32 = 1; // generation #1 = the initial DTLS-SRTP keys
         let mut cur_in = Some(incoming);
@@ -673,7 +805,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         if !keyless_warned && since.elapsed() >= KEYLESS_WARN_AFTER {
                             keyless_warned = true;
                             sink(UiEvent::Log { text:
-                                "Sprach-Schluessel nicht erhalten - der Schluessel-Verwalter (kleinste ID) ist nicht direkt erreichbar. Du hoerst die anderen nicht, wirst aber gehoert. Relay (TURN) aktivieren oder neu verbinden.".into() });
+                                "Sprach-Schluessel nicht erhalten - keine direkte Verbindung zum Schluessel-Verwalter. Du wirst gehoert, hoerst die anderen aber nicht. Abhilfe: \"Session neu verschluesseln\" druecken - das baut jede Verbindung neu auf und verteilt den Schluessel erneut. Hilft das nicht, sollte der Teilnehmer mit dem Stern in seiner Verschluesselungs-Zeile die Session neu betreten.".into() });
                         }
                     } else {
                         keyless_since = None;
@@ -760,9 +892,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // a fresh epoch — never the key that protected pre-join
                             // audio. (Skipped before the first key exists, so room
                             // formation mints exactly one key via the Secure path.)
-                            if am_authority(&me_id, &members) && room.generation().is_some() {
-                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
-                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            if am_authority(&me_id, &members) && keys.generation().is_some() {
+                                let acts = keys.rotate(&secure_peer_ids(&members, &crypto));
+                                perform_key_actions(&mesh, acts).await;
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: true });
                             }
                         }
                         ServerMsg::PeerLeft { user_id } => {
@@ -776,8 +909,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // member can't decrypt further audio, and hand it to
                             // every remaining secure peer.
                             if am_authority(&me_id, &members) {
-                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
-                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                                let acts = keys.rotate(&secure_peer_ids(&members, &crypto));
+                                perform_key_actions(&mesh, acts).await;
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: true });
                             }
                         }
                         ServerMsg::Offer { from, sdp } => { let _ = mesh.on_offer(&from, sdp).await; }
@@ -799,8 +933,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // too (not just DTLS-SRTP) — the authority mints + hands
                             // out a fresh key so voice gets new key material as well.
                             if am_authority(&me_id, &members) {
-                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
-                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                                let acts = keys.rotate(&secure_peer_ids(&members, &crypto));
+                                perform_key_actions(&mesh, acts).await;
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: true });
                             }
                         }
                         ServerMsg::Turn(t) => {
@@ -869,60 +1004,31 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // The PQC session with this peer came up → show the lock.
                             if let Some(m) = members.get_mut(&peer) { m.secure = true; }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
-                            // Room-key authority hands the group-audio key to each
-                            // peer as its pairwise PQC session comes up (the key
-                            // rides sealed inside that session).
-                            if am_authority(&me_id, &members) {
-                                if room.generation().is_none() {
-                                    room_gen = room_gen.max(1);
-                                    adopt_room_key(&room, crypto::RoomKey::generate(room_gen, me_id.clone()), &mut room_gen, &promote_tx);
-                                }
-                                if let Some(k) = room.current() {
-                                    mesh.send_room_key(&peer, k.generation(), &k.key_bytes()).await;
-                                }
-                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
-                            } else if is_authority_peer(&peer, &me_id, &members) {
-                                // This peer is the authority and we already hold a
-                                // key: tell it which generation the room is on. It
-                                // may have joined after us (ids are random, so a
-                                // late joiner can be the new authority) and would
-                                // otherwise mint generation 1 — a key every
-                                // existing member rejects as older than its own.
-                                if let Some(g) = room.generation() {
-                                    mesh.send_room_gen(&peer, g).await;
-                                }
+                            // The authority hands over the key; everyone else reports
+                            // the live generation to the authority. Both directions
+                            // are decided in the coordinator.
+                            let acts = keys.on_secure(&peer, &members);
+                            let authority = am_authority(&me_id, &members);
+                            perform_key_actions(&mesh, acts).await;
+                            if authority {
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: true });
                             }
                         }
                         Some(MeshEvent::RoomKey { from, gen, key }) => {
-                            // Only adopt a key from the authenticated peer that is
-                            // the elected authority (smallest id), and only for a
-                            // plausible generation — otherwise any member could
-                            // hijack the group key or pin it to break rotation.
-                            // The authority identity is bound to the authenticated
-                            // sender (`from`), never a value from the message body.
-                            if is_authority_peer(&from, &me_id, &members)
-                                && gen <= room_gen.saturating_add(ROOM_GEN_BOUND)
-                            {
-                                adopt_room_key(&room, crypto::RoomKey::from_bytes(gen, from, key), &mut room_gen, &promote_tx);
-                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: am_authority(&me_id, &members) });
+                            // `from` is the DTLS+PQC-authenticated sender, never a
+                            // value out of the message body — the coordinator checks
+                            // it really is the elected authority before adopting.
+                            if keys.on_room_key(&from, gen, key, &members) {
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: am_authority(&me_id, &members) });
                             }
                         }
                         Some(MeshEvent::RoomGen { from, gen }) => {
-                            // Only the authority mints, so only the authority acts on
-                            // this. Rotating (rather than adopting `gen`) is what
-                            // makes it safe: we never take key MATERIAL from a
-                            // member, only the counter, and the fresh key we mint at
-                            // `gen + 1` supersedes everyone's staged key by the
-                            // normal generation rule. Bounded like an inbound key so
-                            // a member can't pin the room at u32::MAX.
-                            if am_authority(&me_id, &members)
-                                && members.contains_key(&from)
-                                && gen > room_gen
-                                && gen <= room_gen.saturating_add(ROOM_GEN_BOUND)
-                            {
-                                room_gen = gen;
-                                rotate_room_key(&mut room_gen, &room, &mesh, &members, &crypto, &me_id, &promote_tx).await;
-                                sink(UiEvent::RoomAudio { gen: room.generation(), authority: true });
+                            // A member told us how far the room already is. Only the
+                            // authority acts on it — see `on_room_gen`.
+                            let acts = keys.on_room_gen(&from, gen, &members, &secure_peer_ids(&members, &crypto));
+                            if !acts.is_empty() {
+                                perform_key_actions(&mesh, acts).await;
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: true });
                             }
                         }
                         None => {}
@@ -1128,5 +1234,276 @@ mod authority_tests {
         assert!(channel_in_use("bravo", "Funk 1", &members)); // a member is on it
         assert!(channel_in_use("funk 1", "Funk 1", &members)); // I'm on it
         assert!(!channel_in_use("charlie", "Funk 1", &members)); // nobody
+    }
+}
+
+/// Three-node room-key simulation — the automated stand-in for "have three people
+/// join a session and compare the generation in the encryption footer".
+///
+/// Only the key rules take part: no PeerConnections, no audio devices, no
+/// signaling. That is deliberate. The bug these guard against was never in the
+/// transport — the sealed `RoomGen`/`RoomKey` wire path has its own end-to-end
+/// test in `mesh::rekey_tests` — it was in who mints at which generation, which
+/// is exactly what `RoomKeyCoordinator` owns.
+#[cfg(test)]
+mod room_key_tests {
+    use super::*;
+
+    /// One simulated client: its roster view plus the coordinator under test.
+    struct Node {
+        id: String,
+        members: HashMap<String, Member>,
+        keys: RoomKeyCoordinator,
+        room: Arc<crypto::RoomAudio>,
+        promote_rx: mpsc::UnboundedReceiver<u32>,
+    }
+
+    impl Node {
+        fn new(id: &str) -> Node {
+            let room = Arc::new(crypto::RoomAudio::new());
+            let (tx, rx) = mpsc::unbounded_channel();
+            Node {
+                id: id.to_string(),
+                members: HashMap::new(),
+                keys: RoomKeyCoordinator::new(id.to_string(), room.clone(), tx),
+                room,
+                promote_rx: rx,
+            }
+        }
+
+        /// Set this node's roster (everyone but itself), all pairwise sessions up.
+        fn sees(&mut self, ids: &[&str]) {
+            self.members = ids
+                .iter()
+                .filter(|i| **i != self.id)
+                .map(|i| {
+                    (i.to_string(), Member {
+                        name: i.to_string(),
+                        badge: None,
+                        speaking: false,
+                        channel: DEFAULT_CHANNEL.to_string(),
+                        secure: true,
+                    })
+                })
+                .collect();
+        }
+
+        fn secure_peers(&self) -> Vec<String> {
+            self.members.keys().cloned().collect()
+        }
+
+        /// Service the rekey grace the engine loop would service, so the sealing
+        /// key catches up with the staged one.
+        fn settle(&mut self) {
+            while let Ok(g) = self.promote_rx.try_recv() {
+                self.room.promote(g);
+            }
+        }
+
+        fn generation(&self) -> Option<u32> {
+            self.room.generation()
+        }
+    }
+
+    fn node<'a>(nodes: &'a mut [Node], id: &str) -> &'a mut Node {
+        nodes.iter_mut().find(|n| n.id == id).expect("unknown node")
+    }
+
+    /// Deliver actions to their targets and keep going until the room is quiet —
+    /// a receiver may itself emit actions (a reported generation makes the
+    /// authority rotate, which sends the new key back out).
+    fn route(nodes: &mut [Node], work: Vec<(String, KeyAction)>) {
+        let mut queue = work;
+        // Bounded so a rule that ping-pongs forever fails the test instead of
+        // hanging it.
+        for _ in 0..64 {
+            if queue.is_empty() {
+                return;
+            }
+            let mut next = Vec::new();
+            for (from, act) in std::mem::take(&mut queue) {
+                match act {
+                    KeyAction::SendKey { peer, gen, key } => {
+                        let t = node(nodes, &peer);
+                        let members = t.members.clone();
+                        t.keys.on_room_key(&from, gen, key, &members);
+                        t.settle();
+                    }
+                    KeyAction::SendGen { peer, gen } => {
+                        let t = node(nodes, &peer);
+                        let members = t.members.clone();
+                        let secure = t.secure_peers();
+                        let acts = t.keys.on_room_gen(&from, gen, &members, &secure);
+                        t.settle();
+                        next.extend(acts.into_iter().map(|a| (peer.clone(), a)));
+                    }
+                }
+            }
+            queue = next;
+        }
+        panic!("room-key actions never settled — rules are ping-ponging");
+    }
+
+    /// Run `on_secure` on `who` for `peer` and route whatever falls out.
+    fn secure(nodes: &mut [Node], who: &str, peer: &str) {
+        let n = node(nodes, who);
+        let members = n.members.clone();
+        let acts = n.keys.on_secure(peer, &members);
+        n.settle();
+        let work = acts.into_iter().map(|a| (who.to_string(), a)).collect();
+        route(nodes, work);
+    }
+
+    /// Everyone holds the same generation AND the same key bytes, and that key
+    /// actually opens audio from every sender. Same check as comparing the
+    /// "#Generation" in each client's encryption footer, but stricter.
+    ///
+    /// Async because a rotation defers the send-key switch by `ROOM_KEY_GRACE`
+    /// via a spawned timer. The clock is paused (`start_paused`), so awaiting
+    /// past the grace costs no real time — but it has to be awaited, or those
+    /// tasks never run and every node would still be sealing with the previous
+    /// generation.
+    async fn assert_converged(nodes: &mut [Node]) {
+        tokio::time::sleep(ROOM_KEY_GRACE + Duration::from_millis(50)).await;
+        for n in nodes.iter_mut() {
+            n.settle();
+        }
+        let gens: Vec<Option<u32>> = nodes.iter().map(|n| n.generation()).collect();
+        assert!(gens[0].is_some(), "no node ever got a key: {gens:?}");
+        assert!(gens.iter().all(|g| *g == gens[0]), "generations diverged: {gens:?}");
+
+        let keys: Vec<[u8; 32]> =
+            nodes.iter().map(|n| n.room.current().unwrap().key_bytes()).collect();
+        assert!(keys.iter().all(|k| *k == keys[0]), "same generation but different keys");
+
+        // The property users actually feel: every node can open every other
+        // node's audio.
+        let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
+        for sender in &ids {
+            let wire = node(nodes, sender).room.seal_outbound(sender, b"opus-frame");
+            for listener in &ids {
+                if listener == sender {
+                    continue;
+                }
+                let got = node(nodes, listener).room.open_inbound(sender, &wire);
+                assert_eq!(
+                    got.as_deref(),
+                    Some(&b"opus-frame"[..]),
+                    "{listener} cannot hear {sender}"
+                );
+            }
+        }
+    }
+
+    /// Bring "m" and "t" up as a running room and rotate once, so the room sits
+    /// above generation 1 when the third client arrives.
+    fn established_pair() -> Vec<Node> {
+        let mut nodes = vec![Node::new("m"), Node::new("t")];
+        node(&mut nodes, "m").sees(&["t"]);
+        node(&mut nodes, "t").sees(&["m"]);
+
+        // "m" is the smaller id → authority. Its session with "t" comes up.
+        secure(&mut nodes, "m", "t");
+        secure(&mut nodes, "t", "m");
+
+        // One rotation, as a join or a manual re-encrypt would trigger.
+        let secure_peers = node(&mut nodes, "m").secure_peers();
+        let acts = node(&mut nodes, "m").keys.rotate(&secure_peers);
+        node(&mut nodes, "m").settle();
+        route(&mut nodes, acts.into_iter().map(|a| ("m".to_string(), a)).collect());
+
+        assert_eq!(node(&mut nodes, "m").generation(), Some(2));
+        nodes
+    }
+
+    /// The reported field failure: a client joins last, happens to draw the
+    /// smallest user id, and therefore becomes the key authority from an empty
+    /// state. Before the fix it minted generation 1, which the established
+    /// members rejected as stale — leaving it sealing under a key nobody held and
+    /// unable to open theirs, silent in both directions.
+    #[tokio::test(start_paused = true)]
+    async fn late_authority_converges_across_three_nodes() {
+        let mut nodes = established_pair();
+        nodes.push(Node::new("a")); // "a" < "m" < "t" → the newcomer is authority
+
+        node(&mut nodes, "m").sees(&["t", "a"]);
+        node(&mut nodes, "t").sees(&["m", "a"]);
+        node(&mut nodes, "a").sees(&["m", "t"]);
+
+        // Worst ordering: the newcomer's sessions come up first, so it mints from
+        // an empty state before anyone has told it where the room stands.
+        secure(&mut nodes, "a", "m");
+        secure(&mut nodes, "a", "t");
+        assert_eq!(node(&mut nodes, "a").generation(), Some(1), "newcomer mints from scratch");
+
+        // Now the established members see the same sessions and report the live
+        // generation to the peer they accept as authority.
+        secure(&mut nodes, "m", "a");
+        secure(&mut nodes, "t", "a");
+
+        assert_converged(&mut nodes).await;
+        let gen = node(&mut nodes, "a").generation().unwrap();
+        assert!(gen > 2, "authority must mint above the room's generation, got {gen}");
+    }
+
+    /// Same room, but the generation report never arrives — what every build
+    /// before 0.2.1 did. Pins the failure so the test above cannot silently pass
+    /// for the wrong reason.
+    #[tokio::test(start_paused = true)]
+    async fn without_the_generation_report_the_newcomer_is_cut_off() {
+        let mut nodes = established_pair();
+        nodes.push(Node::new("a"));
+        node(&mut nodes, "m").sees(&["t", "a"]);
+        node(&mut nodes, "t").sees(&["m", "a"]);
+        node(&mut nodes, "a").sees(&["m", "t"]);
+
+        // The newcomer mints generation 1 and hands it out; the others drop it as
+        // older than what they hold. Nothing reports the room's generation back.
+        let members = node(&mut nodes, "a").members.clone();
+        let acts = node(&mut nodes, "a").keys.on_secure("m", &members);
+        node(&mut nodes, "a").settle();
+        for (peer, gen, key) in acts.iter().filter_map(|a| match a {
+            KeyAction::SendKey { peer, gen, key } => Some((peer.clone(), *gen, *key)),
+            _ => None,
+        }) {
+            let t = node(&mut nodes, &peer);
+            let m = t.members.clone();
+            assert!(!t.keys.on_room_key("a", gen, key, &m), "stale key must be rejected");
+        }
+
+        assert_eq!(node(&mut nodes, "a").generation(), Some(1));
+        assert_eq!(node(&mut nodes, "m").generation(), Some(2));
+
+        // And that is exactly what silence looks like on the wire.
+        let wire = node(&mut nodes, "a").room.seal_outbound("a", b"opus-frame");
+        assert!(node(&mut nodes, "m").room.open_inbound("a", &wire).is_none(), "m should not hear a");
+        let wire = node(&mut nodes, "m").room.seal_outbound("m", b"opus-frame");
+        assert!(node(&mut nodes, "a").room.open_inbound("m", &wire).is_none(), "a should not hear m");
+    }
+
+    /// The authority leaving is the other way the role moves. The survivor with
+    /// the smallest id takes over and must mint ABOVE the departed authority's
+    /// generation, or the remaining members would reject its key just the same.
+    #[tokio::test(start_paused = true)]
+    async fn authority_leaving_hands_over_without_a_gap() {
+        let mut nodes = established_pair();
+        nodes.push(Node::new("z"));
+        node(&mut nodes, "m").sees(&["t", "z"]);
+        node(&mut nodes, "t").sees(&["m", "z"]);
+        node(&mut nodes, "z").sees(&["m", "t"]);
+        secure(&mut nodes, "m", "z"); // authority "m" hands the key to the joiner
+        secure(&mut nodes, "z", "m");
+        assert_converged(&mut nodes).await;
+
+        // "m" leaves → "t" is now the smallest id and rotates.
+        nodes.retain(|n| n.id != "m");
+        node(&mut nodes, "t").sees(&["z"]);
+        node(&mut nodes, "z").sees(&["t"]);
+        let secure_peers = node(&mut nodes, "t").secure_peers();
+        let acts = node(&mut nodes, "t").keys.rotate(&secure_peers);
+        node(&mut nodes, "t").settle();
+        route(&mut nodes, acts.into_iter().map(|a| ("t".to_string(), a)).collect());
+
+        assert_converged(&mut nodes).await;
     }
 }
