@@ -6,6 +6,14 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 ## Unreleased
 
 ### Added
+- **Stream-Deck-Integration**: eigenes Elgato-Plugin (`subraum.streamDeckPlugin`,
+  Stream Deck ≥ 6.4) mit Live-Status auf den Tasten — Push-to-Talk halten
+  (leuchtet beim Senden), Mikro stumm, Deafen, Funkkanal-Direktwahl und
+  vor/zurück, Lautstärke ±5 %, Session neu verschlüsseln, Session verlassen.
+  Null Konfiguration: Plugin findet die laufende App selbst. Unterbau ist eine
+  **lokale Steuer-Schnittstelle** (WebSocket, nur 127.0.0.1, Token rotiert bei
+  jedem Start), die auch Bitfocus Companion oder eigene Skripte nutzen können —
+  Protokoll in `docs/STREAMDECK.md`. Mikro-stumm gilt auch für Deck-PTT.
 - **Funk-Effekt** (Experte, standardmäßig aus): färbt alle **eingehenden**
   Stimmen wie ein Funkgerät — Bandpass plus leichte Sättigung. Vier Regler:
   **FX Tiefen abschneiden** (50–1000 Hz), **FX Höhen abschneiden**

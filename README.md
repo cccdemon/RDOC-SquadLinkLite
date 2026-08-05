@@ -44,6 +44,9 @@ Die App hat einen **eingebauten Update-Checker** (meldet neue Releases + Changel
 - **Netzwerk-Selbsttest:** Senden / Empfangen / STUN / Signaling — je yes/no.
 - **Bandbreitenanzeige** (gemessen) oder kleines **Sende-/Empfangs-Funklicht** (rot/grün).
 - Verbindungstyp-Badge pro Peer (DIREKT / RELAY).
+- **Stream-Deck-Plugin** mit Live-Status auf den Tasten (PTT, Mikro, Deafen,
+  Kanäle, Lautstärke, Session) + offene lokale Steuer-Schnittstelle für
+  Companion & Co. — siehe [docs/STREAMDECK.md](docs/STREAMDECK.md).
 - Einstellungen in **Einfach / Experte** geteilt; Version in Footer + Startscreen.
 
 ## Bauen
