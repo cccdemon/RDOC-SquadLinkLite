@@ -451,8 +451,10 @@ impl Dsp {
 /// Receive-side on purpose: it is each listener's own immersion choice, it
 /// never touches what the mesh carries (no protocol change, encode-once
 /// untouched), and a destruction stage in the send path would fight RNNoise and
-/// the Opus encoder while being baked into what everyone else hears. The mic
-/// self-test and the sender's own voice are unaffected.
+/// the Opus encoder while being baked into what everyone else hears. What you
+/// SEND stays clean. Everything on the local mix bus is colored, though — that
+/// includes the earcon click and the mic self-test loopback ("self"), which
+/// doubles as an effect preview without needing a second person.
 ///
 /// Cutoffs are Hz at the 48 kHz mixer rate; `saturation`/`destruction` are
 /// 0..1. Defaults approximate a narrow-band FM voice channel (300–3400 Hz).
