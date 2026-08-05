@@ -1,0 +1,12 @@
+# Keep the e2e build context small: sources only.
+.git
+target
+**/target
+**/node_modules
+**/dist
+test-build
+screenshots
+store-art
+msi
+nsis
+*.streamDeckPlugin

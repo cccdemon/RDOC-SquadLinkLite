@@ -49,9 +49,25 @@ guards) plus a 3-node room-key simulation; drop this sentence when it merges.
 
 ## Build hosts
 
+### Rust verification — Docker first, LXC 103 as fallback
+Local Windows `cargo` does not work at all (see below). Since 2026-08 the local
+path is **Docker Desktop**: `e2e/Dockerfile` builds the whole workspace on Linux.
+
+```sh
+docker build -q --target build -t subraum-build -f e2e/Dockerfile .
+docker run --rm subraum-build cargo test --workspace   # full test suite
+bash e2e/run.sh   # REAL 3-client mesh + server in containers: reproduces the
+                  # late-joining-authority room-key handover end to end
+```
+
+The e2e rig runs real signaling, real WebRTC and the real PQC key hand-out; an
+ALSA `null` device stands in for audio hardware (capture must stay bounded —
+that rig found the unbounded-capture OOM). Docker CLI may be missing from PATH
+in Git Bash: `export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"`.
+
 ### Linux / Android builds — Proxmox LXC 103
-Local Windows `cargo` does not work at all — verify **every** Rust change on LXC
-103. Two separate breakages: aws-lc-sys fails its C compile, and the MSVC linker
+Verify Tauri sysdep-heavy builds (webkit2gtk etc.) and anything needing the
+deploy box on LXC 103. Two separate breakages: aws-lc-sys fails its C compile, and the MSVC linker
 can't find `msvcrt.lib`, which kills even a pure-Rust crate's build scripts
 (`cargo test -p protocol` → `LINK : fatal error LNK1104`). Don't burn a cycle
 trying locally first. Ubuntu 24.04.4 LTS, x86_64 (container hostname `streamer`).

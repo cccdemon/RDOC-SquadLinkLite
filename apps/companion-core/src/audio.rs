@@ -194,6 +194,20 @@ fn choose(host: &cpal::Host, input: bool, want: Option<&str>) -> Result<Picked> 
 fn build_input(p: &Picked, cap: Buf) -> Result<cpal::Stream> {
     let ch = p.channels as usize;
     let err = |e| eprintln!("input stream error: {e}");
+    // Hard bound on un-encoded capture audio (~2 s @48 kHz). Normally the
+    // encode loop drains this in real time and the deque stays tiny; the bound
+    // is the safety net for a wedged encoder thread — and for audio devices
+    // that deliver faster than wall-clock (the ALSA `null` device used by the
+    // Docker e2e rig produces silence at unbounded speed; without this cap it
+    // OOM-killed the whole process in under a minute). Dropping the OLDEST
+    // samples keeps capture live rather than replaying a stale backlog.
+    const CAP_MAX: usize = 96_000;
+    fn cap_push(b: &mut VecDeque<i16>, s: i16) {
+        if b.len() >= CAP_MAX {
+            b.pop_front();
+        }
+        b.push_back(s);
+    }
     Ok(match p.fmt {
         SampleFormat::F32 => p.device.build_input_stream(
             &p.config,
@@ -201,7 +215,7 @@ fn build_input(p: &Picked, cap: Buf) -> Result<cpal::Stream> {
                 let mut b = cap.lock().unwrap();
                 for fr in data.chunks(ch) {
                     let s: f32 = fr.iter().copied().sum::<f32>() / ch as f32;
-                    b.push_back((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+                    cap_push(&mut b, (s.clamp(-1.0, 1.0) * 32767.0) as i16);
                 }
             },
             err,
@@ -213,7 +227,7 @@ fn build_input(p: &Picked, cap: Buf) -> Result<cpal::Stream> {
                 let mut b = cap.lock().unwrap();
                 for fr in data.chunks(ch) {
                     let s: i32 = fr.iter().map(|&x| x as i32).sum::<i32>() / ch as i32;
-                    b.push_back(s as i16);
+                    cap_push(&mut b, s as i16);
                 }
             },
             err,
