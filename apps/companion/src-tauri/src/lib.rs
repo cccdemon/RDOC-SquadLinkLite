@@ -925,6 +925,26 @@ fn set_dsp(state: State<AppState>, mut cfg: companion_core::audio::DspConfig) {
     }
 }
 
+/// Receive-bus radio effect ("Funk-Effekt"): band-limit + saturation +
+/// degradation on incoming voice. Normalized at the IPC boundary like set_dsp.
+#[tauri::command]
+fn set_radio_fx(state: State<AppState>, mut cfg: companion_core::audio::RadioCfg) {
+    let norm = |v: f32, lo: f32, hi: f32, dflt: f32| if v.is_finite() { v.clamp(lo, hi) } else { dflt };
+    cfg.low_cut = norm(cfg.low_cut, 50.0, 1000.0, 300.0);
+    cfg.high_cut = norm(cfg.high_cut, 1200.0, 12000.0, 3400.0);
+    // Keep a real passband: the low cut must stay under the high cut, or the
+    // cascade turns into a near-mute band.
+    if cfg.low_cut >= cfg.high_cut {
+        cfg.low_cut = 300.0;
+        cfg.high_cut = 3400.0;
+    }
+    cfg.saturation = norm(cfg.saturation, 0.0, 1.0, 0.35);
+    cfg.destruction = norm(cfg.destruction, 0.0, 1.0, 0.15);
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_radio(cfg);
+    }
+}
+
 #[tauri::command]
 fn set_monitor(state: State<AppState>, on: bool) {
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -1145,6 +1165,7 @@ pub fn run() {
             set_channel,
             remove_channel,
             set_dsp,
+            set_radio_fx,
             set_monitor,
             set_low_bandwidth,
             set_input_device,

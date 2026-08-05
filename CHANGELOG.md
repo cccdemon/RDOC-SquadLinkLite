@@ -3,6 +3,17 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## Unreleased
+
+### Added
+- **Funk-Effekt** (Experte, standardmäßig aus): färbt alle **eingehenden**
+  Stimmen wie ein Funkgerät — Bandpass plus leichte Sättigung. Vier Regler:
+  **FX Tiefen abschneiden** (50–1000 Hz), **FX Höhen abschneiden**
+  (1,2–12 kHz), **Saturation** und **FX Destruction** (Dezimierung +
+  Quantisierung, das „kaputtes Handfunkgerät"-Kratzen). Wirkt nur lokal beim
+  Hörer: Gesendetes bleibt unverändert, Mikrofon-Selbsttest und eigene Stimme
+  sind nicht betroffen. Einstellungen bleiben gespeichert.
+
 ## v0.2.1 — 2026-07-30
 
 ### Fixed
