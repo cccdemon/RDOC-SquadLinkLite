@@ -818,8 +818,12 @@ export default function App() {
 
   // Report control-relevant state to the Rust side, which fans it out to every
   // connected controller (button feedback: TX light, mute state, channel name).
+  // Also kept in a ref and re-sent on "ctl-refresh": a controller that
+  // authenticates right after app start would otherwise see only the server's
+  // default snapshot — the mount-time report can race the server's startup.
+  const snapshotRef = useRef<Record<string, unknown>>({});
   useEffect(() => {
-    invoke("control_state", { snapshot: {
+    snapshotRef.current = {
       connected,
       transmitting,
       mic_muted: micMuted,
@@ -828,9 +832,16 @@ export default function App() {
       channels: orderedChannels().slice(0, 32),
       volume: masterVol,
       rekeying: rotating,
-    } }).catch(() => {});
+    };
+    invoke("control_state", { snapshot: snapshotRef.current }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, transmitting, micMuted, deaf, myChannel, sessionChannels, participants, masterVol, rotating]);
+  useEffect(() => {
+    const off = listen("ctl-refresh", () => {
+      invoke("control_state", { snapshot: snapshotRef.current }).catch(() => {});
+    });
+    return () => { off.then((u) => u()); };
+  }, []);
   const rebindChan = (slot: number) => {
     setCapturingChan(slot);
     invoke("start_chan_capture", { slot }).catch(() => {});

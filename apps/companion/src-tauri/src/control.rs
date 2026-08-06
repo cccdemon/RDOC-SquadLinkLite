@@ -38,6 +38,11 @@ pub enum CtlOut {
     /// mic-toggle, deafen-toggle, channel {name}, rekey, disconnect,
     /// volume {value}, volume-delta {d}.
     Ctl(serde_json::Value),
+    /// A controller just authenticated: ask the webview to re-report its state.
+    /// Closes the startup race — the webview's mount-time report can land
+    /// before this server is up, leaving the cache on its default until the
+    /// next organic state change.
+    Refresh,
 }
 
 /// Max inbound frame we bother parsing. Commands are tiny; anything bigger is
@@ -155,6 +160,7 @@ impl ControlServer {
         tx.send(Message::text(hello.to_string())).await?;
         let (ctx, mut crx) = unbounded_channel::<Message>();
         self.clients.lock().unwrap().push(ctx);
+        let _ = out.send(CtlOut::Refresh); // pull a fresh snapshot for this client
 
         // ── Authenticated session ────────────────────────────────────────────
         loop {
@@ -240,6 +246,8 @@ mod tests {
         let hello = recv_json(&mut ws).await;
         assert_eq!(hello["t"], "hello");
         assert_eq!(hello["app"], "subraum");
+        // Auth triggers a state-refresh request toward the app.
+        assert_eq!(out_rx.recv().await, Some(CtlOut::Refresh));
 
         ws.send(Message::text(r#"{"t":"ptt","on":true}"#.to_string())).await.unwrap();
         assert_eq!(out_rx.recv().await, Some(CtlOut::Ptt(true)));
@@ -311,6 +319,7 @@ mod tests {
             .await
             .unwrap();
         let _ = recv_json(&mut ws).await; // hello
+        assert_eq!(out_rx.recv().await, Some(CtlOut::Refresh));
 
         for bad in [
             r#"{"t":"shutdown-the-machine"}"#,

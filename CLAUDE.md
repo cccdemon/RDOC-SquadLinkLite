@@ -58,7 +58,14 @@ docker build -q --target build -t subraum-build -f e2e/Dockerfile .
 docker run --rm subraum-build cargo test --workspace   # full test suite
 bash e2e/run.sh   # REAL 3-client mesh + server in containers: reproduces the
                   # late-joining-authority room-key handover end to end
+bash e2e/desktop.sh   # REAL Linux desktop app (webkit2gtk) under Xvfb; probes
+                      # the control API from inside — proves boot + webview
 ```
+
+The desktop stage builds src-tauri with `--features tauri/custom-protocol` —
+without it a plain cargo build serves the DEV URL (localhost:1420) instead of
+the embedded dist and the window is an error page. `tauri build` sets it for
+you; any hand-rolled build must too.
 
 The e2e rig runs real signaling, real WebRTC and the real PQC key hand-out; an
 ALSA `null` device stands in for audio hardware (capture must stay bounded —

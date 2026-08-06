@@ -1176,6 +1176,7 @@ pub fn run() {
                                     control::CtlOut::Ptt(on) => { let _ = handle.emit("ptt", on); }
                                     control::CtlOut::ChanCycle(d) => { let _ = handle.emit("chan-cycle", d); }
                                     control::CtlOut::Ctl(v) => { let _ = handle.emit("ctl", v); }
+                                    control::CtlOut::Refresh => { let _ = handle.emit("ctl-refresh", ()); }
                                 }
                             }
                         }
