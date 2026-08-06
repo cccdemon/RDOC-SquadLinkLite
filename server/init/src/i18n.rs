@@ -610,7 +610,7 @@ fn credits(l: Lang) -> String {
 
 /// One downloadable artifact, parsed from the mirror's manifest.json.
 pub struct Artifact {
-    pub platform: String, // "windows" | "linux" | "android"
+    pub platform: String, // "windows" | "linux" | "macos" | "android" | "streamdeck"
     pub arch: String,     // "x64" | "amd64" | "arm64" | "armv7" | "x86_64" | "universal"
     pub file: String,
     pub size: u64,
@@ -644,6 +644,10 @@ struct DlText {
     linux_note: &'static str,
     android: &'static str,
     android_note: &'static str,
+    macos: &'static str,
+    macos_note: &'static str,
+    deck: &'static str,
+    deck_note: &'static str,
     verify: &'static str,
     none: &'static str,
 }
@@ -658,9 +662,13 @@ fn dl_text(l: Lang) -> DlText {
             win: "Windows",
             win_note: "Unsigned — Windows SmartScreen warns: \"More info\" then \"Run anyway\".",
             linux: "Linux",
-            linux_note: "Unsigned .deb / .rpm / .AppImage. Make AppImages executable: chmod +x.",
+            linux_note: "Unsigned .deb / .rpm / .AppImage, plus Flatpak for SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Make AppImages executable: chmod +x.",
             android: "Android",
             android_note: "Debug-signed APK for sideloading (testing). Enable \"install unknown apps\".",
+            macos: "macOS",
+            macos_note: "Unsigned .dmg (Apple Silicon + Intel). First launch: right-click the app, then Open.",
+            deck: "Stream Deck",
+            deck_note: "Plugin for the Elgato Stream Deck (6.4 or newer): hold-to-talk, mute, channels, volume — live status on the keys. Double-click to install; needs a running subraum 0.3+.",
             verify: "SHA-256:",
             none: "No builds available yet — check back after the next release.",
         },
@@ -672,9 +680,13 @@ fn dl_text(l: Lang) -> DlText {
             win: "Windows",
             win_note: "Unsigniert — Windows SmartScreen warnt: „Weitere Informationen\" → „Trotzdem ausführen\".",
             linux: "Linux",
-            linux_note: "Unsigniertes .deb / .rpm / .AppImage. AppImage ausführbar machen: chmod +x.",
+            linux_note: "Unsigniertes .deb / .rpm / .AppImage, dazu Flatpak für SteamOS / Steam Deck (flatpak install ./subraum.flatpak). AppImage ausführbar machen: chmod +x.",
             android: "Android",
             android_note: "Debug-signierte APK zum Sideloaden (Test). „Unbekannte Apps installieren\" erlauben.",
+            macos: "macOS",
+            macos_note: "Unsigniertes .dmg (Apple Silicon + Intel). Erster Start: Rechtsklick auf die App → Öffnen.",
+            deck: "Stream Deck",
+            deck_note: "Plugin für das Elgato Stream Deck (ab 6.4): Push-to-Talk halten, Mikro, Kanäle, Lautstärke — Live-Status auf den Tasten. Doppelklick installiert; braucht ein laufendes subraum ab 0.3.",
             verify: "SHA-256:",
             none: "Noch keine Builds verfügbar — schau nach dem nächsten Release wieder vorbei.",
         },
@@ -686,9 +698,13 @@ fn dl_text(l: Lang) -> DlText {
             win: "Windows",
             win_note: "Non firmato — Windows SmartScreen avvisa: \"Ulteriori informazioni\" → \"Esegui comunque\".",
             linux: "Linux",
-            linux_note: ".deb / .rpm / .AppImage non firmati. Rendi eseguibile l'AppImage: chmod +x.",
+            linux_note: ".deb / .rpm / .AppImage non firmati, più Flatpak per SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Rendi eseguibile l'AppImage: chmod +x.",
             android: "Android",
             android_note: "APK con firma di debug per il sideload (test). Abilita \"installa app sconosciute\".",
+            macos: "macOS",
+            macos_note: ".dmg non firmato (Apple Silicon + Intel). Primo avvio: clic destro sull'app → Apri.",
+            deck: "Stream Deck",
+            deck_note: "Plugin per Elgato Stream Deck (da 6.4): push-to-talk, microfono, canali, volume — stato live sui tasti. Doppio clic per installare; richiede subraum 0.3+ in esecuzione.",
             verify: "SHA-256:",
             none: "Nessuna build disponibile — torna dopo la prossima release.",
         },
@@ -700,9 +716,13 @@ fn dl_text(l: Lang) -> DlText {
             win: "Windows",
             win_note: "Sin firmar — Windows SmartScreen avisa: \"Más información\" → \"Ejecutar de todas formas\".",
             linux: "Linux",
-            linux_note: ".deb / .rpm / .AppImage sin firmar. Haz ejecutable el AppImage: chmod +x.",
+            linux_note: ".deb / .rpm / .AppImage sin firmar, más Flatpak para SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Haz ejecutable el AppImage: chmod +x.",
             android: "Android",
             android_note: "APK firmada en depuración para instalación manual (pruebas). Activa \"instalar apps desconocidas\".",
+            macos: "macOS",
+            macos_note: ".dmg sin firmar (Apple Silicon + Intel). Primer inicio: clic derecho en la app → Abrir.",
+            deck: "Stream Deck",
+            deck_note: "Plugin para Elgato Stream Deck (desde 6.4): pulsar para hablar, micrófono, canales, volumen — estado en vivo en las teclas. Doble clic para instalar; requiere subraum 0.3+ en ejecución.",
             verify: "SHA-256:",
             none: "Aún no hay compilaciones — vuelve tras la próxima versión.",
         },
@@ -714,9 +734,13 @@ fn dl_text(l: Lang) -> DlText {
             win: "Windows",
             win_note: "Non signé — Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».",
             linux: "Linux",
-            linux_note: ".deb / .rpm / .AppImage non signés. Rendez l'AppImage exécutable : chmod +x.",
+            linux_note: ".deb / .rpm / .AppImage non signés, plus Flatpak pour SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Rendez l'AppImage exécutable : chmod +x.",
             android: "Android",
             android_note: "APK signé en debug pour le sideload (test). Activez « installer des applis inconnues ».",
+            macos: "macOS",
+            macos_note: ".dmg non signé (Apple Silicon + Intel). Premier lancement : clic droit sur l'app → Ouvrir.",
+            deck: "Stream Deck",
+            deck_note: "Plugin pour l'Elgato Stream Deck (à partir de 6.4) : appuyer-pour-parler, micro, canaux, volume — état en direct sur les touches. Double-clic pour installer ; nécessite subraum 0.3+ en cours d'exécution.",
             verify: "SHA-256 :",
             none: "Aucune version disponible pour l'instant — revenez après la prochaine release.",
         },
@@ -762,7 +786,7 @@ pub fn downloads(l: Lang, base: &str, version: Option<&str>, arts: &[Artifact]) 
         // Platform names and "SHA-256" are proper nouns, so the eyebrow needs no
         // translation — only the version varies.
         r#"<section class="sec hero">
-<p class="eyebrow">Windows · Linux · macOS · Android · SHA-256 · <b>{ver}</b></p>
+<p class="eyebrow">Windows · Linux · macOS · Android · Stream Deck · SHA-256 · <b>{ver}</b></p>
 <h1>{title}</h1>
 <p class="lede">{intro}</p>
 <p>{store}</p>
@@ -781,7 +805,9 @@ pub fn downloads(l: Lang, base: &str, version: Option<&str>, arts: &[Artifact]) 
     }
     body.push_str(&dl_section(base, t.win, t.win_note, t.verify, "windows", arts));
     body.push_str(&dl_section(base, t.linux, t.linux_note, t.verify, "linux", arts));
+    body.push_str(&dl_section(base, t.macos, t.macos_note, t.verify, "macos", arts));
     body.push_str(&dl_section(base, t.android, t.android_note, t.verify, "android", arts));
+    body.push_str(&dl_section(base, t.deck, t.deck_note, t.verify, "streamdeck", arts));
     (t.title, body)
 }
 

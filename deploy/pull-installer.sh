@@ -67,6 +67,10 @@ classify() {
     *armv7*.apk|*armeabi*.apk)  echo "android armv7" ;;
     *x86_64*.apk|*x86*.apk)     echo "android x86_64" ;;
     *.apk)                      echo "android universal" ;;
+    *.flatpak)                  echo "linux flatpak" ;;
+    *aarch64*.dmg|*arm64*.dmg)  echo "macos arm64" ;;
+    *.dmg)                      echo "macos intel" ;;
+    *.streamdeckplugin)         echo "streamdeck universal" ;;
     *) echo "other -" ;;
   esac
 }
@@ -105,7 +109,9 @@ process_asset() {
 }
 
 # Mirror every installable artifact (skip the SHA256SUMS txt + signatures).
-for url in $(printf '%s\n' "$urls" | grep -iE '\.(exe|msi|deb|rpm|AppImage|apk)$'); do
+# flatpak/dmg/streamDeckPlugin included: the /get page advertises them, so the
+# mirror has to carry them — GitHub-only assets never reach the site.
+for url in $(printf '%s\n' "$urls" | grep -iE '\.(exe|msi|deb|rpm|AppImage|apk|flatpak|dmg|streamDeckPlugin)$'); do
   process_asset "$url"
 done
 [ -n "$entries" ] || { echo "no installable assets on $TAG"; exit 0; }
