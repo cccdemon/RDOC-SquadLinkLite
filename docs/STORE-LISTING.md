@@ -76,6 +76,22 @@ Previously published as SquadLink Lite.
 ### What's new in this version
 
 ```text
+Version 0.3.0 — Stream Deck, radio effect, and a fix for a silent-participant bug.
+
+• Stream Deck integration: own Elgato plugin with live status on the keys —
+  hold-to-talk, mute, deafen, channel select, volume, re-encrypt. Zero
+  configuration; also usable from Bitfocus Companion via a local API.
+• Radio effect (expert setting, off by default): incoming voices sound like a
+  radio channel — band-pass, saturation, optional "broken handset" grit. Only
+  affects what YOU hear; what you send stays clean.
+• Fixed: closing the main window now really quits the app (the in-game overlay
+  used to keep it alive in the background).
+• Fixed: a misleading hint that recommended a relay which does not exist.
+```
+
+Previous version, for reference:
+
+```text
 Version 0.2.1 — fixes a bug that could leave one participant silent.
 
 In some sessions a single participant could neither hear the others nor be heard
@@ -172,6 +188,23 @@ Früher veröffentlicht als SquadLink Lite.
 ```
 
 ### Neuerungen in dieser Version
+
+```text
+Version 0.3.0 — Stream Deck, Funk-Effekt und ein Fix für stumme Teilnehmer.
+
+• Stream-Deck-Integration: eigenes Elgato-Plugin mit Live-Status auf den
+  Tasten — Push-to-Talk halten, Mikro, Deafen, Kanalwahl, Lautstärke, neu
+  verschlüsseln. Null Konfiguration; über eine lokale Schnittstelle auch mit
+  Bitfocus Companion nutzbar.
+• Funk-Effekt (Experte, standardmäßig aus): eingehende Stimmen klingen wie
+  Sprechfunk — Bandpass, Sättigung, auf Wunsch „kaputtes Handfunkgerät".
+  Wirkt nur bei dir; was du sendest, bleibt unverändert.
+• Behoben: das X des Hauptfensters beendet die App jetzt wirklich (das
+  In-Game-Overlay hielt sie vorher im Hintergrund am Leben).
+• Behoben: ein irreführender Hinweis empfahl ein Relay, das es nicht gibt.
+```
+
+Vorherige Version, zur Referenz:
 
 ```text
 Version 0.2.1 — behebt einen Fehler, der einzelne Teilnehmer stumm ließ.

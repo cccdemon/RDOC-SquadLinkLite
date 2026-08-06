@@ -199,6 +199,42 @@ jobs:
             apps/companion/msix/*.sha256
             apps/companion/msix/SHA256SUMS-msix.txt
 
+  # Pack the Stream Deck plugin (a zip of the .sdPlugin folder). Cheap, pure
+  # Node — built on Linux even though this is the Windows workflow, because the
+  # artifact is platform-independent and this workflow is the one that owns the
+  # release.
+  streamdeck:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # gh release upload on a tag
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install runtime deps + pack
+        working-directory: streamdeck-plugin
+        run: |
+          (cd org.raumdock.subraum.sdPlugin && npm ci --omit=dev)
+          node test-harness.mjs
+          zip -r subraum.streamDeckPlugin org.raumdock.subraum.sdPlugin
+          sha256sum subraum.streamDeckPlugin | tee SHA256SUMS-streamdeck.txt
+      - name: Attach to Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: streamdeck-plugin
+        run: |
+          gh release upload "${{ github.ref_name }}"             subraum.streamDeckPlugin SHA256SUMS-streamdeck.txt             --clobber --repo "${{ github.repository }}"
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: subraum-streamdeck
+          path: |
+            streamdeck-plugin/subraum.streamDeckPlugin
+            streamdeck-plugin/SHA256SUMS-streamdeck.txt
+
   # On a tag release, immediately tell the server to pull the new installer
   # (push trigger, instead of waiting for the hourly systemd timer). The SSH
   # key is locked to a forced command on the host: it can ONLY run

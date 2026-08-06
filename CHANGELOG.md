@@ -3,7 +3,7 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
-## Unreleased
+## v0.3.0 — 2026-08-06
 
 ### Added
 - **Stream-Deck-Integration**: eigenes Elgato-Plugin (`subraum.streamDeckPlugin`,
