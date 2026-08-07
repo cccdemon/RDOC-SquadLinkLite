@@ -197,13 +197,13 @@ async fn main() -> anyhow::Result<()> {
         let room = args.get(2).cloned().unwrap_or_default();
         match auth.token_for(&room) {
             Some(t) => println!("{t}"),
-            None => eprintln!("ALLOW_OPEN_AUTH set — open mode, no token needed"),
+            None => eprintln!("ALLOW_OPEN_AUTH set: open mode, no token needed"),
         }
         return Ok(());
     }
 
     if matches!(auth, AuthConfig::Open) {
-        tracing::warn!("ALLOW_OPEN_AUTH set — OPEN mode, any client may join any room (dev only)");
+        tracing::warn!("ALLOW_OPEN_AUTH set: OPEN mode, any client may join any room (dev only)");
     }
     let turn = TurnConfig::from_env();
     tracing::info!("TURN minting: {}", if turn.is_some() { "enabled" } else { "disabled" });
@@ -268,7 +268,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             "127.0.0.1"
         };
-        tracing::warn!("TLS_DISABLE set — serving PLAIN ws on {bind_ip}:{port} (proxy expected)");
+        tracing::warn!("TLS_DISABLE set: serving PLAIN ws on {bind_ip}:{port} (proxy expected)");
         let listener = tokio::net::TcpListener::bind((bind_ip, port)).await?;
         tracing::info!("InitConnection listening (ws) on {bind_ip}:{port} (warn@{WARN_CAP} hard@{HARD_CAP})");
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
@@ -395,7 +395,7 @@ color-scheme:dark light;
 /* Dark is the default ground. */
 --bg:#121416;--surface:#2B3135;--line:#2B3135;
 --ink:#F2F2F0;--dim:#76828D;--accent:#C48A4A;--focus:#E0A868;
-/* Copper on Space is 6.22:1 — legible as text. On Off White it is not, so the
+/* Copper on Space is 6.22:1, legible as text. On Off White it is not, so the
    light block below swaps in Copper Deep. */
 --accent-ink:#121416;
 --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
@@ -435,7 +435,7 @@ img{max-width:100%;height:auto}
 .top{display:flex;align-items:center;gap:.65rem;padding:.85rem 1.4rem;
 border-bottom:1px solid var(--line)}
 .top svg{width:26px;height:26px;display:block;flex:none}
-/* The wordmark is set in Michroma at label size — the product name is a
+/* The wordmark is set in Michroma at label size, the product name is a
    heading, not UI chrome. Lowercase is deliberate and part of the name. */
 .top .brand{color:var(--ink);font-family:var(--disp);font-weight:400;
 font-size:.9rem;letter-spacing:0;border:0}
@@ -448,7 +448,7 @@ footer{max-width:var(--wrap);margin:0 auto;padding:1.4rem;border-top:1px solid v
 color:var(--dim);font-size:.875rem;display:flex;flex-wrap:wrap;align-items:center;gap:.35rem 1.3rem}
 footer a{color:var(--dim);border:0}
 footer a:hover{color:var(--ink)}
-/* Clear space is half the cap height, applied as padding — nothing enters it. */
+/* Clear space is half the cap height, applied as padding, nothing enters it. */
 footer .rdoc{margin-left:auto;border:0;display:block;padding:.5rem 0}
 /* 150px lockup -> the 220-unit signet lands at 32px, the floor in Kap. 6.
    Below it the 4-degree radial cuts fall under a pixel and the ring reads as a
@@ -545,7 +545,7 @@ margin-top:.3rem;display:block}
 .arts .sha{font-family:var(--mono);font-size:.75rem;color:var(--dim);word-break:break-all;
 display:block;margin-top:.25rem;letter-spacing:.02em}
 
-/* ── Screenshots. Real captures of what runs — the guide rules out symbol
+/* ── Screenshots. Real captures of what runs, the guide rules out symbol
       imagery, so these carry the "what it looks like" job alone. ────────── */
 .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));gap:1.2rem;
 margin:1.2rem 0;align-items:start}
@@ -706,13 +706,13 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
     let base = public_base();
     let lc = lang.code();
     let desc = i18n::meta_desc(lang);
-    let og_title = format!("{title} — subraum");
+    let og_title = format!("{title} | subraum");
     let og_image = format!("{base}/assets/og-image.png");
     let og_url = format!("{base}{path}");
     Html(format!(
         "<!doctype html><html lang=\"{lc}\"><head><meta charset=\"utf-8\">{HTML_CSP}\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{title} — subraum</title>\
+<title>{title} | subraum</title>\
 <meta name=\"description\" content=\"{desc}\">\
 <meta property=\"og:type\" content=\"website\">\
 <meta property=\"og:site_name\" content=\"subraum\">\

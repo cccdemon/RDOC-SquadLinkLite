@@ -72,39 +72,39 @@ pub fn screenshots(l: Lang, _base: &str, count: usize) -> String {
     }
     let caps: [&str; 5] = match l {
         Lang::De => [
-            "In der Session — Kanäle, Teilnehmer, Push-to-Talk, Chat",
-            "Start — Session hosten oder mit Link und PIN beitreten",
+            "In der Session: Kanäle, Teilnehmer, Push-to-Talk, Chat",
+            "Start: Session hosten oder mit Link und PIN beitreten",
             "Mehrere Funkkanäle, Wechsel per Hotkey",
-            "Audio — Mikrofon, Push-to-Talk, App-Ducking, Funk-Klick",
-            "Experte — Overlay, Kanal-Hotkeys, neu verschlüsseln, Selbsttest",
+            "Audio: Mikrofon, Push-to-Talk, App-Ducking, Funk-Klick",
+            "Experte: Overlay, Kanal-Hotkeys, neu verschlüsseln, Selbsttest",
         ],
         Lang::It => [
-            "In sessione — canali, partecipanti, push-to-talk, chat",
-            "Avvio — ospita una sessione o entra con link e PIN",
+            "In sessione: canali, partecipanti, push-to-talk, chat",
+            "Avvio: ospita una sessione o entra con link e PIN",
             "Più canali radio, cambio con tasto rapido",
-            "Audio — microfono, push-to-talk, abbassamento app, clic radio",
-            "Esperto — overlay, tasti canale, nuova cifratura, autotest",
+            "Audio: microfono, push-to-talk, abbassamento app, clic radio",
+            "Esperto: overlay, tasti canale, nuova cifratura, autotest",
         ],
         Lang::Es => [
-            "En sesión — canales, participantes, pulsar para hablar, chat",
-            "Inicio — alojar una sesión o entrar con enlace y PIN",
+            "En sesión: canales, participantes, pulsar para hablar, chat",
+            "Inicio: alojar una sesión o entrar con enlace y PIN",
             "Varios canales de radio, cambio por atajo",
-            "Audio — micrófono, pulsar para hablar, atenuar apps, clic de radio",
-            "Experto — superposición, atajos de canal, recifrar, autodiagnóstico",
+            "Audio: micrófono, pulsar para hablar, atenuar apps, clic de radio",
+            "Experto: superposición, atajos de canal, recifrar, autodiagnóstico",
         ],
         Lang::Fr => [
-            "En session — canaux, participants, push-to-talk, chat",
-            "Démarrage — héberger une session ou rejoindre avec lien et PIN",
+            "En session: canaux, participants, push-to-talk, chat",
+            "Démarrage: héberger une session ou rejoindre avec lien et PIN",
             "Plusieurs canaux radio, changement par raccourci",
-            "Audio — micro, push-to-talk, atténuation des apps, clic radio",
-            "Expert — overlay, raccourcis de canal, rechiffrer, autotest",
+            "Audio: micro, push-to-talk, atténuation des apps, clic radio",
+            "Expert: overlay, raccourcis de canal, rechiffrer, autotest",
         ],
         Lang::En => [
-            "In a session — channels, roster, push-to-talk, chat",
-            "Start — host a session or join with link and PIN",
+            "In a session: channels, roster, push-to-talk, chat",
+            "Start: host a session or join with link and PIN",
             "Several radio channels, switched by hotkey",
-            "Audio — mic, push-to-talk, app ducking, radio click",
-            "Expert — overlay, channel hotkeys, re-encrypt, self-check",
+            "Audio: mic, push-to-talk, app ducking, radio click",
+            "Expert: overlay, channel hotkeys, re-encrypt, self-check",
         ],
     };
     let mut grid = String::new();
@@ -124,11 +124,11 @@ pub fn screenshots(l: Lang, _base: &str, count: usize) -> String {
 /// or markup — it is injected verbatim into an `og:description` attribute.
 pub fn meta_desc(l: Lang) -> &'static str {
     match l {
-        Lang::En => "Serverless P2P voice for small squads. Push-to-talk, no account, no recording — end-to-end and post-quantum encrypted.",
-        Lang::De => "Serverloser P2P-Voicechat für kleine Crews. Push-to-Talk, ohne Account, ohne Aufnahme — Ende-zu-Ende und post-quanten-verschlüsselt.",
-        Lang::It => "Voice chat P2P senza server per piccoli gruppi. Push-to-talk, senza account, senza registrazioni — cifrato end-to-end e post-quantistico.",
-        Lang::Es => "Chat de voz P2P sin servidor para grupos pequeños. Pulsar para hablar, sin cuenta, sin grabación — cifrado de extremo a extremo y poscuántico.",
-        Lang::Fr => "Chat vocal P2P sans serveur pour petites équipes. Push-to-talk, sans compte, sans enregistrement — chiffré de bout en bout et post-quantique.",
+        Lang::En => "Serverless P2P voice for small squads. Push-to-talk, no account, no recording. End-to-end and post-quantum encrypted.",
+        Lang::De => "Serverloser P2P-Voicechat für kleine Crews. Push-to-Talk, ohne Account, ohne Aufnahme. Ende-zu-Ende und post-quanten-verschlüsselt.",
+        Lang::It => "Voice chat P2P senza server per piccoli gruppi. Push-to-talk, senza account, senza registrazioni. Cifrato end-to-end e post-quantistico.",
+        Lang::Es => "Chat de voz P2P sin servidor para grupos pequeños. Pulsar para hablar, sin cuenta, sin grabación. Cifrado de extremo a extremo y poscuántico.",
+        Lang::Fr => "Chat vocal P2P sans serveur pour petites équipes. Push-to-talk, sans compte, sans enregistrement. Chiffré de bout en bout et post-quantique.",
     }
 }
 
@@ -371,7 +371,7 @@ fn home_text(l: Lang) -> HomeText {
         Lang::En => HomeText {
             title: "What is this?",
             eyebrow: "Serverless voice mesh · <b>warn-cap 12 · hard-cap 16</b>",
-            lede: "Push-to-talk voice and chat for a small squad. Audio goes straight from player to player — no account, no recording, no media server in the middle.",
+            lede: "Push-to-talk voice and chat for a small squad. Audio goes straight from player to player. No account, no recording, no media server in the middle.",
             renamed: "Previously released as SquadLink Lite. Renamed to subraum because an unrelated app already goes by \"SquadLink\". The rename rules out the confusion. Same app, same team.",
             dia_alt: "Four peers connected directly to each other for voice, each with a separate dashed control link to the signaling service.",
             dia_server: "InitConnection",
@@ -402,7 +402,7 @@ fn home_text(l: Lang) -> HomeText {
             store_btn: "Get it from Microsoft Store",
             store_note: "Microsoft signs the Store version, so it shows no warning. The direct installer is unsigned → Windows SmartScreen warns: \"More info\" then \"Run anyway\".",
             all_dl: "All downloads &amp; checksums →",
-            announce: "Now on <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS and Android</strong>. <strong>iOS</strong> is finished and runs on-device — but App&nbsp;Store release is blocked on the Apple developer licence. <a href=\"https://twitch.tv/JustCallMeDeimos\">Support the stream</a> to make it happen.",
+            announce: "Now on <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS and Android</strong>. <strong>iOS</strong> is finished and runs on-device. Only the App&nbsp;Store release is blocked on the Apple developer licence. <a href=\"https://twitch.tv/JustCallMeDeimos\">Support the stream</a> to make it happen.",
             shots_eyebrow: "The app",
             links_eyebrow: "Elsewhere",
             l_fleet: "RDOC Fleet Manager",
@@ -414,7 +414,7 @@ fn home_text(l: Lang) -> HomeText {
         Lang::De => HomeText {
             title: "Was ist das?",
             eyebrow: "Serverloses Voice-Mesh · <b>Warn-Cap 12 · Hard-Cap 16</b>",
-            lede: "Push-to-Talk-Sprache und Chat für eine kleine Crew. Der Ton läuft direkt von Spieler zu Spieler — ohne Account, ohne Aufnahme, ohne Medienserver dazwischen.",
+            lede: "Push-to-Talk-Sprache und Chat für eine kleine Crew. Der Ton läuft direkt von Spieler zu Spieler. Ohne Account, ohne Aufnahme, ohne Medienserver dazwischen.",
             renamed: "Früher veröffentlicht als SquadLink Lite. Umbenannt in subraum, weil bereits eine andere App den Namen „SquadLink\" trägt. Die Umbenennung schließt Verwechslungen aus. Gleiche App, gleiches Team.",
             dia_alt: "Vier Teilnehmer sind für Sprache direkt miteinander verbunden, jeder zusätzlich über eine gestrichelte Steuerverbindung mit dem Signaling-Dienst.",
             dia_server: "InitConnection",
@@ -445,7 +445,7 @@ fn home_text(l: Lang) -> HomeText {
             store_btn: "Im Microsoft Store holen",
             store_note: "Microsoft signiert die Store-Version, deshalb warnt sie nicht. Der direkte Installer ist unsigniert → Windows SmartScreen warnt: „Weitere Informationen\" → „Trotzdem ausführen\".",
             all_dl: "Alle Downloads &amp; Prüfsummen →",
-            announce: "Jetzt für <strong>Windows, Linux (inkl. SteamOS / Steam&nbsp;Deck), macOS und Android</strong>. <strong>iOS</strong> ist fertig und läuft auf dem Gerät — die Veröffentlichung im App&nbsp;Store scheitert aber noch an der Apple-Entwickler-Lizenz. <a href=\"https://twitch.tv/JustCallMeDeimos\">Unterstütze den Stream</a>, um das möglich zu machen.",
+            announce: "Jetzt für <strong>Windows, Linux (inkl. SteamOS / Steam&nbsp;Deck), macOS und Android</strong>. <strong>iOS</strong> ist fertig und läuft auf dem Gerät. Nur die Veröffentlichung im App&nbsp;Store scheitert aber noch an der Apple-Entwickler-Lizenz. <a href=\"https://twitch.tv/JustCallMeDeimos\">Unterstütze den Stream</a>, um das möglich zu machen.",
             shots_eyebrow: "Die App",
             links_eyebrow: "Weiterführend",
             l_fleet: "RDOC Fleetmanager",
@@ -457,7 +457,7 @@ fn home_text(l: Lang) -> HomeText {
         Lang::It => HomeText {
             title: "Che cos'è?",
             eyebrow: "Voice mesh senza server · <b>soglia 12 · limite 16</b>",
-            lede: "Voce push-to-talk e chat per un piccolo gruppo. L'audio passa direttamente da giocatore a giocatore — senza account, senza registrazioni, senza media server nel mezzo.",
+            lede: "Voce push-to-talk e chat per un piccolo gruppo. L'audio passa direttamente da giocatore a giocatore. Senza account, senza registrazioni, senza media server nel mezzo.",
             renamed: "Pubblicata in precedenza come SquadLink Lite. Rinominata in subraum perché esiste già un'altra app chiamata \"SquadLink\". Il cambio di nome evita ogni confusione. Stessa app, stesso team.",
             dia_alt: "Quattro partecipanti collegati direttamente tra loro per la voce, ciascuno con un collegamento di controllo tratteggiato verso il servizio di signaling.",
             dia_server: "InitConnection",
@@ -488,7 +488,7 @@ fn home_text(l: Lang) -> HomeText {
             store_btn: "Scarica dal Microsoft Store",
             store_note: "Microsoft firma la versione dello Store, quindi non mostra avvisi. L'installer diretto non è firmato → Windows SmartScreen avvisa: \"Ulteriori informazioni\" → \"Esegui comunque\".",
             all_dl: "Tutti i download e i checksum →",
-            announce: "Ora su <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS e Android</strong>. <strong>iOS</strong> è pronto e gira sul dispositivo — ma la pubblicazione sull'App&nbsp;Store è bloccata dalla licenza sviluppatore Apple. <a href=\"https://twitch.tv/JustCallMeDeimos\">Sostieni lo stream</a> per renderlo possibile.",
+            announce: "Ora su <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS e Android</strong>. <strong>iOS</strong> è pronto e gira sul dispositivo. Solo la pubblicazione sull'App&nbsp;Store è bloccata dalla licenza sviluppatore Apple. <a href=\"https://twitch.tv/JustCallMeDeimos\">Sostieni lo stream</a> per renderlo possibile.",
             shots_eyebrow: "L'app",
             links_eyebrow: "Altrove",
             l_fleet: "RDOC Fleet Manager",
@@ -500,7 +500,7 @@ fn home_text(l: Lang) -> HomeText {
         Lang::Es => HomeText {
             title: "¿Qué es esto?",
             eyebrow: "Malla de voz sin servidor · <b>aviso 12 · límite 16</b>",
-            lede: "Voz por pulsar para hablar y chat para un grupo pequeño. El audio va directo de jugador a jugador — sin cuenta, sin grabación, sin servidor de medios en medio.",
+            lede: "Voz por pulsar para hablar y chat para un grupo pequeño. El audio va directo de jugador a jugador. Sin cuenta, sin grabación, sin servidor de medios en medio.",
             renamed: "Publicada anteriormente como SquadLink Lite. Renombrada a subraum porque ya existe otra aplicación llamada \"SquadLink\". El cambio de nombre evita la confusión. La misma app, el mismo equipo.",
             dia_alt: "Cuatro participantes conectados directamente entre sí para la voz, cada uno con un enlace de control discontinuo hacia el servicio de señalización.",
             dia_server: "InitConnection",
@@ -531,7 +531,7 @@ fn home_text(l: Lang) -> HomeText {
             store_btn: "Descargar de Microsoft Store",
             store_note: "Microsoft firma la versión de la Store, por eso no muestra avisos. El instalador directo no está firmado → Windows SmartScreen avisa: \"Más información\" → \"Ejecutar de todas formas\".",
             all_dl: "Todas las descargas y sumas de verificación →",
-            announce: "Ya en <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS y Android</strong>. <strong>iOS</strong> está terminado y funciona en el dispositivo — pero la publicación en la App&nbsp;Store depende de la licencia de desarrollador de Apple. <a href=\"https://twitch.tv/JustCallMeDeimos\">Apoya el stream</a> para hacerlo posible.",
+            announce: "Ya en <strong>Windows, Linux (incl. SteamOS / Steam&nbsp;Deck), macOS y Android</strong>. <strong>iOS</strong> está terminado y funciona en el dispositivo. Solo la publicación en la App&nbsp;Store depende de la licencia de desarrollador de Apple. <a href=\"https://twitch.tv/JustCallMeDeimos\">Apoya el stream</a> para hacerlo posible.",
             shots_eyebrow: "La app",
             links_eyebrow: "En otros sitios",
             l_fleet: "RDOC Fleet Manager",
@@ -543,7 +543,7 @@ fn home_text(l: Lang) -> HomeText {
         Lang::Fr => HomeText {
             title: "Qu'est-ce que c'est ?",
             eyebrow: "Maillage vocal sans serveur · <b>alerte 12 · limite 16</b>",
-            lede: "Voix en push-to-talk et chat pour une petite équipe. L'audio va directement d'un joueur à l'autre — sans compte, sans enregistrement, sans serveur média au milieu.",
+            lede: "Voix en push-to-talk et chat pour une petite équipe. L'audio va directement d'un joueur à l'autre. Sans compte, sans enregistrement, sans serveur média au milieu.",
             renamed: "Publiée auparavant sous le nom SquadLink Lite. Renommée subraum car une autre application porte déjà le nom « SquadLink ». Ce changement évite toute confusion. Même app, même équipe.",
             dia_alt: "Quatre participants reliés directement entre eux pour la voix, chacun avec une liaison de contrôle en pointillés vers le service de signalisation.",
             dia_server: "InitConnection",
@@ -574,7 +574,7 @@ fn home_text(l: Lang) -> HomeText {
             store_btn: "Obtenir sur le Microsoft Store",
             store_note: "Microsoft signe la version du Store, elle n'affiche donc aucun avertissement. L'installeur direct n'est pas signé → Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».",
             all_dl: "Tous les téléchargements et sommes de contrôle →",
-            announce: "Désormais sur <strong>Windows, Linux (dont SteamOS / Steam&nbsp;Deck), macOS et Android</strong>. <strong>iOS</strong> est prêt et tourne sur l'appareil — mais la publication sur l'App&nbsp;Store est bloquée par la licence développeur Apple. <a href=\"https://twitch.tv/JustCallMeDeimos\">Soutiens le stream</a> pour rendre ça possible.",
+            announce: "Désormais sur <strong>Windows, Linux (dont SteamOS / Steam&nbsp;Deck), macOS et Android</strong>. <strong>iOS</strong> est prêt et tourne sur l'appareil. Seule la publication sur l'App&nbsp;Store est bloquée par la licence développeur Apple. <a href=\"https://twitch.tv/JustCallMeDeimos\">Soutiens le stream</a> pour rendre ça possible.",
             shots_eyebrow: "L'application",
             links_eyebrow: "Ailleurs",
             l_fleet: "RDOC Fleet Manager",
@@ -659,11 +659,11 @@ fn dl_text(l: Lang) -> DlText {
     match l {
         Lang::En => DlText {
             title: "Downloads",
-            intro: "Recommended: Microsoft code-signs the Store build, so it installs without a warning. The direct downloads below are unsigned — verify the SHA-256 after downloading.",
+            intro: "Recommended: Microsoft code-signs the Store build, so it installs without a warning. The direct downloads below are unsigned. Verify the SHA-256 after downloading.",
             store_btn: "Get it from Microsoft Store",
             store_note: "The Store version updates automatically and shows no SmartScreen warning.",
             win: "Windows",
-            win_note: "Unsigned — Windows SmartScreen warns: \"More info\" then \"Run anyway\".",
+            win_note: "Unsigned. Windows SmartScreen warns: \"More info\" then \"Run anyway\".",
             linux: "Linux",
             linux_note: "Unsigned .deb / .rpm / .AppImage, plus Flatpak for SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Make AppImages executable: chmod +x.",
             android: "Android",
@@ -671,17 +671,17 @@ fn dl_text(l: Lang) -> DlText {
             macos: "macOS",
             macos_note: "Unsigned .dmg (Apple Silicon + Intel). First launch: right-click the app, then Open.",
             deck: "Stream Deck",
-            deck_note: "Plugin for the Elgato Stream Deck (6.4 or newer): hold-to-talk, mute, channels, volume — live status on the keys. Double-click the file to install it. It needs a running subraum 0.3 or newer.",
+            deck_note: "Plugin for the Elgato Stream Deck (6.4 or newer): hold-to-talk, mute, channels, volume. The keys show live status. Double-click the file to install it. It needs a running subraum 0.3 or newer.",
             verify: "SHA-256:",
-            none: "No builds available yet — check back after the next release.",
+            none: "No builds available yet. Check back after the next release.",
         },
         Lang::De => DlText {
             title: "Downloads",
-            intro: "Empfohlen: Microsoft signiert die Store-Version, sie installiert ohne Warnung. Die direkten Downloads unten sind unsigniert — prüfe nach dem Download die SHA-256.",
+            intro: "Empfohlen: Microsoft signiert die Store-Version, sie installiert ohne Warnung. Die direkten Downloads unten sind unsigniert. Prüfe nach dem Download die SHA-256.",
             store_btn: "Im Microsoft Store holen",
             store_note: "Die Store-Version aktualisiert sich automatisch und zeigt keine SmartScreen-Warnung.",
             win: "Windows",
-            win_note: "Unsigniert — Windows SmartScreen warnt: „Weitere Informationen\" → „Trotzdem ausführen\".",
+            win_note: "Unsigniert. Windows SmartScreen warnt: „Weitere Informationen\" → „Trotzdem ausführen\".",
             linux: "Linux",
             linux_note: "Unsigniertes .deb / .rpm / .AppImage, dazu Flatpak für SteamOS / Steam Deck (flatpak install ./subraum.flatpak). AppImage ausführbar machen: chmod +x.",
             android: "Android",
@@ -689,17 +689,17 @@ fn dl_text(l: Lang) -> DlText {
             macos: "macOS",
             macos_note: "Unsigniertes .dmg (Apple Silicon + Intel). Erster Start: Rechtsklick auf die App → Öffnen.",
             deck: "Stream Deck",
-            deck_note: "Plugin für das Elgato Stream Deck (ab 6.4): Push-to-Talk halten, Mikro, Kanäle, Lautstärke — Live-Status auf den Tasten. Doppelklick auf die Datei installiert das Plugin. Es braucht ein laufendes subraum ab 0.3.",
+            deck_note: "Plugin für das Elgato Stream Deck (ab 6.4): Push-to-Talk halten, Mikro, Kanäle, Lautstärke. Die Tasten zeigen den Live-Status. Doppelklick auf die Datei installiert das Plugin. Es braucht ein laufendes subraum ab 0.3.",
             verify: "SHA-256:",
-            none: "Noch keine Builds verfügbar — schau nach dem nächsten Release wieder vorbei.",
+            none: "Noch keine Builds verfügbar. Schau nach dem nächsten Release wieder vorbei.",
         },
         Lang::It => DlText {
             title: "Download",
-            intro: "Consigliato: Microsoft firma la versione dello Store, quindi si installa senza avvisi. I download diretti qui sotto non sono firmati — verifica lo SHA-256 dopo il download.",
+            intro: "Consigliato: Microsoft firma la versione dello Store, quindi si installa senza avvisi. I download diretti qui sotto non sono firmati. Verifica lo SHA-256 dopo il download.",
             store_btn: "Scarica dal Microsoft Store",
             store_note: "La versione dello Store si aggiorna da sola e non mostra avvisi SmartScreen.",
             win: "Windows",
-            win_note: "Non firmato — Windows SmartScreen avvisa: \"Ulteriori informazioni\" → \"Esegui comunque\".",
+            win_note: "Non firmato. Windows SmartScreen avvisa: \"Ulteriori informazioni\" → \"Esegui comunque\".",
             linux: "Linux",
             linux_note: ".deb / .rpm / .AppImage non firmati, più Flatpak per SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Rendi eseguibile l'AppImage: chmod +x.",
             android: "Android",
@@ -707,17 +707,17 @@ fn dl_text(l: Lang) -> DlText {
             macos: "macOS",
             macos_note: ".dmg non firmato (Apple Silicon + Intel). Primo avvio: clic destro sull'app → Apri.",
             deck: "Stream Deck",
-            deck_note: "Plugin per Elgato Stream Deck (da 6.4): push-to-talk, microfono, canali, volume — stato live sui tasti. Fai doppio clic sul file per installarlo. Richiede subraum 0.3 o successivo in esecuzione.",
+            deck_note: "Plugin per Elgato Stream Deck (da 6.4): push-to-talk, microfono, canali, volume. I tasti mostrano lo stato live. Fai doppio clic sul file per installarlo. Richiede subraum 0.3 o successivo in esecuzione.",
             verify: "SHA-256:",
-            none: "Nessuna build disponibile — torna dopo la prossima release.",
+            none: "Nessuna build disponibile. Torna dopo la prossima release.",
         },
         Lang::Es => DlText {
             title: "Descargas",
-            intro: "Recomendado: Microsoft firma la versión de la Store, así que se instala sin avisos. Las descargas directas de abajo no están firmadas — verifica el SHA-256 tras descargar.",
+            intro: "Recomendado: Microsoft firma la versión de la Store, así que se instala sin avisos. Las descargas directas de abajo no están firmadas. Verifica el SHA-256 tras descargar.",
             store_btn: "Descargar de Microsoft Store",
             store_note: "La versión de la Store se actualiza sola y no muestra avisos de SmartScreen.",
             win: "Windows",
-            win_note: "Sin firmar — Windows SmartScreen avisa: \"Más información\" → \"Ejecutar de todas formas\".",
+            win_note: "Sin firmar. Windows SmartScreen avisa: \"Más información\" → \"Ejecutar de todas formas\".",
             linux: "Linux",
             linux_note: ".deb / .rpm / .AppImage sin firmar, más Flatpak para SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Haz ejecutable el AppImage: chmod +x.",
             android: "Android",
@@ -725,17 +725,17 @@ fn dl_text(l: Lang) -> DlText {
             macos: "macOS",
             macos_note: ".dmg sin firmar (Apple Silicon + Intel). Primer inicio: clic derecho en la app → Abrir.",
             deck: "Stream Deck",
-            deck_note: "Plugin para Elgato Stream Deck (desde 6.4): pulsar para hablar, micrófono, canales, volumen — estado en vivo en las teclas. Haz doble clic en el archivo para instalarlo. Requiere subraum 0.3 o posterior en ejecución.",
+            deck_note: "Plugin para Elgato Stream Deck (desde 6.4): pulsar para hablar, micrófono, canales, volumen. Las teclas muestran el estado en vivo. Haz doble clic en el archivo para instalarlo. Requiere subraum 0.3 o posterior en ejecución.",
             verify: "SHA-256:",
-            none: "Aún no hay compilaciones — vuelve tras la próxima versión.",
+            none: "Aún no hay compilaciones. Vuelve tras la próxima versión.",
         },
         Lang::Fr => DlText {
             title: "Téléchargements",
-            intro: "Recommandé : Microsoft signe la version du Store, elle s'installe donc sans avertissement. Les téléchargements directs ci-dessous ne sont pas signés — vérifiez le SHA-256 après téléchargement.",
+            intro: "Recommandé : Microsoft signe la version du Store, elle s'installe donc sans avertissement. Les téléchargements directs ci-dessous ne sont pas signés. Vérifiez le SHA-256 après téléchargement.",
             store_btn: "Obtenir sur le Microsoft Store",
             store_note: "La version du Store se met à jour automatiquement et n'affiche aucun avertissement SmartScreen.",
             win: "Windows",
-            win_note: "Non signé — Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».",
+            win_note: "Non signé. Windows SmartScreen avertit : « Informations complémentaires » → « Exécuter quand même ».",
             linux: "Linux",
             linux_note: ".deb / .rpm / .AppImage non signés, plus Flatpak pour SteamOS / Steam Deck (flatpak install ./subraum.flatpak). Rendez l'AppImage exécutable : chmod +x.",
             android: "Android",
@@ -743,9 +743,9 @@ fn dl_text(l: Lang) -> DlText {
             macos: "macOS",
             macos_note: ".dmg non signé (Apple Silicon + Intel). Premier lancement : clic droit sur l'app → Ouvrir.",
             deck: "Stream Deck",
-            deck_note: "Plugin pour l'Elgato Stream Deck (à partir de 6.4) : appuyer-pour-parler, micro, canaux, volume — état en direct sur les touches. Double-cliquez sur le fichier pour l'installer. Il faut un subraum 0.3 ou plus récent en cours d'exécution.",
+            deck_note: "Plugin pour l'Elgato Stream Deck (à partir de 6.4) : appuyer-pour-parler, micro, canaux, volume. Les touches affichent l'état en direct. Double-cliquez sur le fichier pour l'installer. Il faut un subraum 0.3 ou plus récent en cours d'exécution.",
             verify: "SHA-256 :",
-            none: "Aucune version disponible pour l'instant — revenez après la prochaine release.",
+            none: "Aucune version disponible pour l'instant. Revenez après la prochaine release.",
         },
     }
 }
@@ -784,7 +784,7 @@ fn dl_section(base: &str, head: &str, note: &str, verify: &str, platform: &str, 
 /// the heading when known.
 pub fn downloads(l: Lang, base: &str, version: Option<&str>, arts: &[Artifact]) -> (&'static str, String) {
     let t = dl_text(l);
-    let ver = version.map(|v| format!("v{}", esc(v))).unwrap_or_else(|| "—".into());
+    let ver = version.map(|v| format!("v{}", esc(v))).unwrap_or_else(|| "n/a".into());
     let mut body = format!(
         // Platform names and "SHA-256" are proper nouns, so the eyebrow needs no
         // translation — only the version varies.
@@ -845,7 +845,7 @@ pub fn license(l: Lang) -> (&'static str, String) {
     let body = |intro: &str, h: &str, b1: &str, b2: &str, b3: &str, b4: &str, ch: &str, ct: &str, mail: &str, sumh: &str, full: &str, foot: &str| {
         format!(
             r#"<h1>{intro}</h1>
-<p>subraum — <b>PolyForm Noncommercial License 1.0.0</b>.</p>
+<p>subraum: <b>PolyForm Noncommercial License 1.0.0</b>.</p>
 <h2>{h}</h2>
 <ul><li>{b1}</li><li>{b2}</li><li>{b3}</li><li>{b4}</li></ul>
 <h2>{ch}</h2>
@@ -859,45 +859,45 @@ pub fn license(l: Lang) -> (&'static str, String) {
     let body = |a, b, c, d, e, f, g, h, i, j, k, m| doc(&body(a, b, c, d, e, f, g, h, i, j, k, m));
     match l {
         Lang::En => ("License", body(
-            "License — non-commercial", "In short",
-            "Use, copy, modify, share — for any non-commercial purpose (private, community, education, research).",
+            "License: non-commercial", "In short",
+            "Use, copy, modify, share: for any non-commercial purpose (private, community, education, research).",
             "No commercial use without a separate license.",
             "Keep the license and copyright notices.",
             "Provided as is, without warranty or liability.",
             "Commercial use", "Commercial use requires a separate commercial license: selling, sublicensing, hosting as a paid service, integrating into commercial products, or use in revenue-generating activities.",
-            "Inquiries", "This is a summary — the full license text is binding:", "View the full license (LICENSE)", "PolyForm Noncommercial License 1.0.0 — see polyformproject.org.")),
+            "Inquiries", "This is a summary. The full license text is binding:", "View the full license (LICENSE)", "PolyForm Noncommercial License 1.0.0, see polyformproject.org.")),
         Lang::De => ("Lizenz", body(
-            "Lizenz — nicht-kommerziell", "Kurz gesagt",
-            "Nutzen, kopieren, ändern, weitergeben — für jeden nicht-kommerziellen Zweck (privat, Community, Bildung, Forschung).",
+            "Lizenz: nicht-kommerziell", "Kurz gesagt",
+            "Nutzen, kopieren, ändern, weitergeben: für jeden nicht-kommerziellen Zweck (privat, Community, Bildung, Forschung).",
             "Keine kommerzielle Nutzung ohne gesonderte Lizenz.",
             "Lizenz- und Urhebervermerke beibehalten.",
             "Ohne Gewähr / ohne Haftung.",
             "Kommerzielle Nutzung", "Kommerzielle Nutzung erfordert eine separate kommerzielle Lizenz: Verkauf, Unterlizenzierung, Betrieb als bezahlter Dienst, Integration in kommerzielle Produkte oder Nutzung in umsatzgenerierenden Aktivitäten.",
-            "Anfragen", "Dies ist eine Zusammenfassung — verbindlich ist der vollständige Lizenztext:", "Vollständige Lizenz (LICENSE) ansehen", "PolyForm Noncommercial License 1.0.0 — siehe polyformproject.org.")),
+            "Anfragen", "Dies ist eine Zusammenfassung. Verbindlich ist der vollständige Lizenztext:", "Vollständige Lizenz (LICENSE) ansehen", "PolyForm Noncommercial License 1.0.0, siehe polyformproject.org.")),
         Lang::It => ("Licenza", body(
-            "Licenza — non commerciale", "In breve",
-            "Usare, copiare, modificare, condividere — per qualsiasi scopo non commerciale (privato, community, istruzione, ricerca).",
+            "Licenza: non commerciale", "In breve",
+            "Usare, copiare, modificare, condividere: per qualsiasi scopo non commerciale (privato, community, istruzione, ricerca).",
             "Nessun uso commerciale senza una licenza separata.",
             "Mantenere gli avvisi di licenza e copyright.",
             "Fornito così com'è, senza garanzie né responsabilità.",
             "Uso commerciale", "L'uso commerciale richiede una licenza commerciale separata: vendita, sublicenza, hosting come servizio a pagamento, integrazione in prodotti commerciali o uso in attività che generano ricavi.",
-            "Richieste", "Questo è un riassunto — fa fede il testo completo della licenza:", "Vedi la licenza completa (LICENSE)", "PolyForm Noncommercial License 1.0.0 — vedi polyformproject.org.")),
+            "Richieste", "Questo è un riassunto. Fa fede il testo completo della licenza:", "Vedi la licenza completa (LICENSE)", "PolyForm Noncommercial License 1.0.0, vedi polyformproject.org.")),
         Lang::Es => ("Licencia", body(
-            "Licencia — no comercial", "En resumen",
-            "Usar, copiar, modificar, compartir — para cualquier fin no comercial (privado, comunidad, educación, investigación).",
+            "Licencia: no comercial", "En resumen",
+            "Usar, copiar, modificar, compartir: para cualquier fin no comercial (privado, comunidad, educación, investigación).",
             "Sin uso comercial sin una licencia aparte.",
             "Conservar los avisos de licencia y copyright.",
             "Se ofrece tal cual, sin garantía ni responsabilidad.",
             "Uso comercial", "El uso comercial requiere una licencia comercial aparte: venta, sublicencia, alojamiento como servicio de pago, integración en productos comerciales o uso en actividades que generan ingresos.",
-            "Consultas", "Esto es un resumen — el texto completo de la licencia es vinculante:", "Ver la licencia completa (LICENSE)", "PolyForm Noncommercial License 1.0.0 — ver polyformproject.org.")),
+            "Consultas", "Esto es un resumen. El texto completo de la licencia es vinculante:", "Ver la licencia completa (LICENSE)", "PolyForm Noncommercial License 1.0.0, ver polyformproject.org.")),
         Lang::Fr => ("Licence", body(
-            "Licence — non commerciale", "En bref",
-            "Utiliser, copier, modifier, partager — pour tout usage non commercial (privé, communauté, éducation, recherche).",
+            "Licence : non commerciale", "En bref",
+            "Utiliser, copier, modifier, partager : pour tout usage non commercial (privé, communauté, éducation, recherche).",
             "Aucun usage commercial sans licence distincte.",
             "Conserver les mentions de licence et de droit d'auteur.",
             "Fourni en l'état, sans garantie ni responsabilité.",
             "Usage commercial", "L'usage commercial nécessite une licence commerciale distincte : vente, sous-licence, hébergement en service payant, intégration dans des produits commerciaux ou usage dans des activités génératrices de revenus.",
-            "Demandes", "Ceci est un résumé — le texte complet de la licence fait foi :", "Voir la licence complète (LICENSE)", "PolyForm Noncommercial License 1.0.0 — voir polyformproject.org.")),
+            "Demandes", "Ceci est un résumé. Le texte complet de la licence fait foi :", "Voir la licence complète (LICENSE)", "PolyForm Noncommercial License 1.0.0, voir polyformproject.org.")),
     }
 }
 
@@ -905,11 +905,11 @@ pub fn license(l: Lang) -> (&'static str, String) {
 pub fn landing(l: Lang, base: &str, code: &str) -> String {
     // (intro, codelbl, step_install, step2, store_btn, unsigned_btn, ss_note, foot)
     let (intro, codelbl, step1, step2, store_btn, unsigned_btn, ss_note, foot) = match l {
-        Lang::En => ("You have been invited to a voice session.", "Session code:", "Install the app — Microsoft Store recommended.", "Open the app → Join → enter the code + the 6-digit PIN (from the host).", "Get it from Microsoft Store", "Direct download (unsigned installer)", "The direct installer is not code-signed, so Windows SmartScreen shows a warning. To install anyway: click \u{201c}More info\u{201d} \u{2192} \u{201c}Run anyway\u{201d}. The Microsoft Store version shows no warning.", "Audio runs directly peer-to-peer (encrypted). The server only brokers."),
-        Lang::De => ("Du wurdest zu einer Voice-Session eingeladen.", "Session-Code:", "App installieren \u{2014} Microsoft Store empfohlen.", "App \u{f6}ffnen \u{2192} Beitreten \u{2192} Code + die 6-stellige PIN (vom Host) eingeben.", "Im Microsoft Store holen", "Direkter Download (unsigniertes Installationsprogramm)", "Der direkte Installer ist nicht signiert, daher warnt Windows SmartScreen. Trotzdem installieren: auf \u{201e}Weitere Informationen\u{201c} \u{2192} \u{201e}Trotzdem ausf\u{fc}hren\u{201c} klicken. Die Microsoft-Store-Version warnt nicht.", "Audio l\u{e4}uft direkt Peer-zu-Peer (verschl\u{fc}sselt). Der Server vermittelt nur."),
-        Lang::It => ("Sei stato invitato a una sessione vocale.", "Codice sessione:", "Installa l'app \u{2014} Microsoft Store consigliato.", "Apri l'app \u{2192} Partecipa \u{2192} inserisci il codice + il PIN di 6 cifre (dall'host).", "Scarica dal Microsoft Store", "Download diretto (installer non firmato)", "L'installer diretto non \u{e8} firmato, quindi Windows SmartScreen mostra un avviso. Per installare comunque: \u{201c}Ulteriori informazioni\u{201d} \u{2192} \u{201c}Esegui comunque\u{201d}. La versione del Microsoft Store non mostra avvisi.", "L'audio \u{e8} diretto peer-to-peer (cifrato). Il server fa solo da tramite."),
-        Lang::Es => ("Te han invitado a una sesi\u{f3}n de voz.", "C\u{f3}digo de sesi\u{f3}n:", "Instala la app \u{2014} Microsoft Store recomendado.", "Abre la app \u{2192} Unirse \u{2192} introduce el c\u{f3}digo + el PIN de 6 d\u{ed}gitos (del anfitri\u{f3}n).", "Descargar de Microsoft Store", "Descarga directa (instalador sin firmar)", "El instalador directo no est\u{e1} firmado, por lo que Windows SmartScreen muestra una advertencia. Para instalar igualmente: \u{201c}M\u{e1}s informaci\u{f3}n\u{201d} \u{2192} \u{201c}Ejecutar de todas formas\u{201d}. La versi\u{f3}n de Microsoft Store no muestra advertencias.", "El audio es directo peer-to-peer (cifrado). El servidor solo intermedia."),
-        Lang::Fr => ("Vous avez \u{e9}t\u{e9} invit\u{e9} \u{e0} une session vocale.", "Code de session :", "Installez l'app \u{2014} Microsoft Store recommand\u{e9}.", "Ouvrez l'app \u{2192} Rejoindre \u{2192} saisissez le code + le PIN \u{e0} 6 chiffres (de l'h\u{f4}te).", "Obtenir sur le Microsoft Store", "T\u{e9}l\u{e9}chargement direct (installeur non sign\u{e9})", "L'installeur direct n'est pas sign\u{e9}, donc Windows SmartScreen affiche un avertissement. Pour installer quand m\u{ea}me : \u{ab} Informations compl\u{e9}mentaires \u{bb} \u{2192} \u{ab} Ex\u{e9}cuter quand m\u{ea}me \u{bb}. La version du Microsoft Store n'affiche aucun avertissement.", "L'audio est direct pair-\u{e0}-pair (chiffr\u{e9}). Le serveur ne fait que l'interm\u{e9}diaire."),
+        Lang::En => ("You have been invited to a voice session.", "Session code:", "Install the app. We recommend the Microsoft Store version.", "Open the app → Join → enter the code + the 6-digit PIN (from the host).", "Get it from Microsoft Store", "Direct download (unsigned installer)", "The direct installer is not code-signed, so Windows SmartScreen shows a warning. To install anyway: click \u{201c}More info\u{201d} \u{2192} \u{201c}Run anyway\u{201d}. The Microsoft Store version shows no warning.", "Audio runs directly peer-to-peer (encrypted). The server only brokers."),
+        Lang::De => ("Du wurdest zu einer Voice-Session eingeladen.", "Session-Code:", "App installieren. Wir empfehlen die Microsoft-Store-Version.", "App \u{f6}ffnen \u{2192} Beitreten \u{2192} Code + die 6-stellige PIN (vom Host) eingeben.", "Im Microsoft Store holen", "Direkter Download (unsigniertes Installationsprogramm)", "Der direkte Installer ist nicht signiert, daher warnt Windows SmartScreen. Trotzdem installieren: auf \u{201e}Weitere Informationen\u{201c} \u{2192} \u{201e}Trotzdem ausf\u{fc}hren\u{201c} klicken. Die Microsoft-Store-Version warnt nicht.", "Audio l\u{e4}uft direkt Peer-zu-Peer (verschl\u{fc}sselt). Der Server vermittelt nur."),
+        Lang::It => ("Sei stato invitato a una sessione vocale.", "Codice sessione:", "Installa l'app. Consigliamo la versione del Microsoft Store.", "Apri l'app \u{2192} Partecipa \u{2192} inserisci il codice + il PIN di 6 cifre (dall'host).", "Scarica dal Microsoft Store", "Download diretto (installer non firmato)", "L'installer diretto non \u{e8} firmato, quindi Windows SmartScreen mostra un avviso. Per installare comunque: \u{201c}Ulteriori informazioni\u{201d} \u{2192} \u{201c}Esegui comunque\u{201d}. La versione del Microsoft Store non mostra avvisi.", "L'audio \u{e8} diretto peer-to-peer (cifrato). Il server fa solo da tramite."),
+        Lang::Es => ("Te han invitado a una sesi\u{f3}n de voz.", "C\u{f3}digo de sesi\u{f3}n:", "Instala la app. Recomendamos la versión de Microsoft Store.", "Abre la app \u{2192} Unirse \u{2192} introduce el c\u{f3}digo + el PIN de 6 d\u{ed}gitos (del anfitri\u{f3}n).", "Descargar de Microsoft Store", "Descarga directa (instalador sin firmar)", "El instalador directo no est\u{e1} firmado, por lo que Windows SmartScreen muestra una advertencia. Para instalar igualmente: \u{201c}M\u{e1}s informaci\u{f3}n\u{201d} \u{2192} \u{201c}Ejecutar de todas formas\u{201d}. La versi\u{f3}n de Microsoft Store no muestra advertencias.", "El audio es directo peer-to-peer (cifrado). El servidor solo intermedia."),
+        Lang::Fr => ("Vous avez \u{e9}t\u{e9} invit\u{e9} \u{e0} une session vocale.", "Code de session :", "Installez l'app. Nous recommandons la version du Microsoft Store.", "Ouvrez l'app \u{2192} Rejoindre \u{2192} saisissez le code + le PIN \u{e0} 6 chiffres (de l'h\u{f4}te).", "Obtenir sur le Microsoft Store", "T\u{e9}l\u{e9}chargement direct (installeur non sign\u{e9})", "L'installeur direct n'est pas sign\u{e9}, donc Windows SmartScreen affiche un avertissement. Pour installer quand m\u{ea}me : \u{ab} Informations compl\u{e9}mentaires \u{bb} \u{2192} \u{ab} Ex\u{e9}cuter quand m\u{ea}me \u{bb}. La version du Microsoft Store n'affiche aucun avertissement.", "L'audio est direct pair-\u{e0}-pair (chiffr\u{e9}). Le serveur ne fait que l'interm\u{e9}diaire."),
     };
     // The code is the reason the visitor is here, so it leads — headline first,
     // then the two steps that turn it into a working session.
@@ -943,7 +943,7 @@ const PRIVACY_EN: &str = r#"<h1>Privacy</h1>
 <ul>
 <li><b>No audio/chat recording.</b> Voice and text are peer-to-peer (DTLS-SRTP / encrypted DataChannel) and are stored nowhere.</li>
 <li><b>No accounts</b>, no login, no tracking, no ads, no cookies.</li>
-<li>The brokering server <b>never sees media</b> — voice/chat never pass through it.</li>
+<li>The brokering server <b>never sees media</b>. Voice and chat never pass through it.</li>
 </ul>
 <h2>What is processed</h2>
 <ul>
@@ -963,7 +963,7 @@ const PRIVACY_DE: &str = r#"<h1>Datenschutzerklärung</h1>
 <ul>
 <li><b>Keine Audio-/Chat-Aufzeichnung.</b> Sprache und Text laufen Peer-to-Peer (DTLS-SRTP bzw. verschlüsselter DataChannel) und werden nirgends gespeichert.</li>
 <li><b>Keine Benutzerkonten</b>, kein Login, kein Tracking, keine Werbung, keine Cookies.</li>
-<li>Der Vermittlungsserver <b>sieht den Medieninhalt nicht</b> — Stimme/Chat fließen nie über ihn.</li>
+<li>Der Vermittlungsserver <b>sieht den Medieninhalt nicht</b>. Stimme und Chat fließen nie über ihn.</li>
 </ul>
 <h2>Was verarbeitet wird</h2>
 <ul>
