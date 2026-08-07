@@ -1,27 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
-  <rect width="1200" height="630" fill="#0B0E14"/>
-
-  <!-- The surface runs edge to edge, so the whole canvas is "below" it — which
-       is what the name says. The mesh hangs from this line instead of drawing
-       its own, and one peer breaks through: that is where you connect. -->
-  <line x1="0" y1="168" x2="1200" y2="168" stroke="#242833" stroke-width="2"/>
-
-  <!-- K4: four peers, all six connections, no node in the middle. -->
+  <rect width="1200" height="630" fill="#121416"/>
+  <line x1="0" y1="168" x2="1200" y2="168" stroke="#2B3135" stroke-width="2"/>
   <g fill="none" stroke-linecap="round">
-    <path d="M600 168 V338 M515 253 H685" stroke="#3D6FD8" stroke-width="5"/>
-    <path d="M600 168 L685 253 L600 338 L515 253 Z" stroke="#7FB0FF" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M600 168 V338 M515 253 H685" stroke="#76828D" stroke-width="5"/>
+    <path d="M600 168 L685 253 L600 338 L515 253 Z" stroke="#F2F2F0" stroke-width="6" stroke-linejoin="round"/>
   </g>
-  <g fill="#7FB0FF">
-    <circle cx="600" cy="168" r="10"/>
+  <g fill="#F2F2F0">
     <circle cx="685" cy="253" r="10"/>
     <circle cx="600" cy="338" r="10"/>
     <circle cx="515" cy="253" r="10"/>
   </g>
-
-  <text x="600" y="460" text-anchor="middle" fill="#DFE3E8"
-        font-family="JetBrains Mono, DejaVu Sans Mono, monospace"
-        font-size="84" font-weight="500" letter-spacing="6">subraum</text>
-  <text x="600" y="514" text-anchor="middle" fill="#7F8A9A"
-        font-family="JetBrains Mono, DejaVu Sans Mono, monospace"
-        font-size="24" font-weight="400" letter-spacing="9">encrypted communication</text>
+  <circle cx="600" cy="168" r="10" fill="#C48A4A"/>
+  <text x="600" y="466" text-anchor="middle" fill="#F2F2F0"
+        font-family="Space Grotesk, DejaVu Sans, sans-serif"
+        font-size="88" font-weight="700" letter-spacing="-1.5">subraum</text>
+  <text x="600" y="518" text-anchor="middle" fill="#76828D"
+        font-family="IBM Plex Mono, DejaVu Sans Mono, monospace"
+        font-size="24" font-weight="400" letter-spacing="1.7">ENCRYPTED COMMUNICATION</text>
 </svg>

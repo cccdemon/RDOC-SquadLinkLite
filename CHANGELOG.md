@@ -6,6 +6,12 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 ## v0.3.0 — 2026-08-06
 
 ### Added
+- **Website im RDOC-Markendesign**: subraum.cc folgt jetzt dem
+  RDOC-Markenhandbuch v2 — Palette (Space/Graphite/Steel/Off-White, Kupfer nur
+  für die primäre Aktion), Schriften Space Grotesk und IBM Plex (im Server
+  eingebettet, kein externer Font-Host), RDOC-Wortmarke im Footer. Das
+  subraum-Zeichen behält seine Form; der Andock-Punkt an der Oberflächenlinie
+  trägt jetzt Kupfer.
 - **Stream-Deck-Integration**: eigenes Elgato-Plugin (`subraum.streamDeckPlugin`,
   Stream Deck ≥ 6.4) mit Live-Status auf den Tasten — Push-to-Talk halten
   (leuchtet beim Senden), Mikro stumm, Deafen, Funkkanal-Direktwahl und

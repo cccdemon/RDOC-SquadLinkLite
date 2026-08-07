@@ -83,7 +83,7 @@ fn esc(s: &str) -> String {
 }
 
 /// CSP meta for the server-rendered pages (no scripts; inline styles + the logo).
-const HTML_CSP: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">";
+const HTML_CSP: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self'; base-uri 'none'; form-action 'none'\">";
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -244,6 +244,8 @@ async fn main() -> anyhow::Result<()> {
         // Brand assets are compiled into the binary, so a fresh deploy serves the
         // right logo with no files to copy onto the host.
         .route("/assets/logo.svg", get(logo_svg))
+        .route("/assets/rdoc.svg", get(rdoc_svg))
+        .route("/assets/fonts/:name", get(font_file))
         .route("/assets/og-image.png", get(og_image))
         .route("/assets/shot/:n", get(shot_png))
         // PIN-protected session brokering (REST, called by the app webview → CORS).
@@ -375,139 +377,155 @@ async fn landing(Path(code): Path<String>, RawQuery(q): RawQuery, headers: Heade
 /// marketing furniture. No webfont — the CSP allows no font-src, and the system
 /// mono stack is what a spec sheet would use anyway.
 const PAGE_CSS: &str = r#"<style>
+/* RDOC brand system (BrandGuide v2.0): Space/Graphite/Steel/OffWhite + Copper.
+   Rules enforced here: exactly one copper element per view (the primary
+   action; the signet may carry its docking node), no gradients, no shadows,
+   no glow; labels are mono, 0.07em tracking, uppercase only when short;
+   focus is a 2px outline in the Focus color with 2px offset. */
 :root{
 color-scheme:dark;
---void:#0A0D13;--panel:#0F131B;--panel2:#141A24;
---line:#1C232F;--line-hi:#2B3646;
---ink:#E4E8EE;--dim:#8C96A6;--faint:#5D6878;
---signal:#7FB0FF;--deep:#3D6FD8;--ok:#3FCF8E;--warn:#E0A244;
---mono:ui-monospace,"JetBrains Mono","SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
---sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--space:#121416;--graphite:#2B3135;--steel:#76828D;--offwhite:#F2F2F0;
+--copper:#C48A4A;--focus:#E0A868;
+--mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--disp:"Space Grotesk",var(--sans);
 --wrap:64rem;--prose:41rem;
 }
+@font-face{font-family:"Space Grotesk";font-weight:500;font-style:normal;font-display:swap;src:url(/assets/fonts/sg-500.woff2) format("woff2")}
+@font-face{font-family:"Space Grotesk";font-weight:700;font-style:normal;font-display:swap;src:url(/assets/fonts/sg-700.woff2) format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:400;font-style:normal;font-display:swap;src:url(/assets/fonts/ps-400.woff2) format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:600;font-style:normal;font-display:swap;src:url(/assets/fonts/ps-600.woff2) format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-weight:400;font-style:normal;font-display:swap;src:url(/assets/fonts/pm-400.woff2) format("woff2")}
 *{box-sizing:border-box}
-body{font-family:var(--sans);background:var(--void);color:var(--ink);margin:0;line-height:1.65;
-font-size:16px;-webkit-text-size-adjust:100%}
-a{color:var(--signal);text-decoration:none;border-bottom:1px solid rgba(127,176,255,.32)}
-a:hover{border-bottom-color:var(--signal)}
-a:focus-visible,button:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+body{font-family:var(--sans);font-weight:400;background:var(--space);color:var(--offwhite);
+margin:0;line-height:1.6;font-size:16px;-webkit-text-size-adjust:100%}
+a{color:var(--offwhite);text-decoration:none;border-bottom:1px solid var(--steel)}
+a:hover{color:var(--copper);border-bottom-color:var(--copper)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 img{max-width:100%;height:auto}
 
-/* ── Frame ─────────────────────────────────────────────────────────────── */
+/* Frame */
 .top{display:flex;align-items:center;gap:.6rem;padding:.85rem 1.4rem;
-border-bottom:1px solid var(--line);background:var(--void)}
+border-bottom:1px solid var(--graphite);background:var(--space)}
 .top img{width:26px;height:26px;display:block;flex:none}
-.top .brand{color:var(--ink);font-weight:600;letter-spacing:.01em;border:0}
+.top .brand{color:var(--offwhite);font-family:var(--disp);font-weight:500;
+letter-spacing:.01em;border:0}
+.top .brand:hover{color:var(--offwhite)}
 .lang{margin-left:auto;display:flex;gap:.1rem;font-family:var(--mono);font-size:.72rem}
-.lang a{color:var(--faint);padding:.15rem .4rem;border:0;letter-spacing:.06em}
-.lang a:hover{color:var(--dim)}
-.lang a.on{color:var(--signal);background:rgba(127,176,255,.1)}
+.lang a{color:var(--steel);padding:.15rem .4rem;border:0;letter-spacing:.07em}
+.lang a:hover{color:var(--offwhite)}
+.lang a.on{color:var(--offwhite);border-bottom:1px solid var(--steel)}
 main{max-width:var(--wrap);margin:0 auto;padding:0 1.4rem 4rem}
-footer{max-width:var(--wrap);margin:0 auto;padding:1.4rem;border-top:1px solid var(--line);
-color:var(--faint);font-size:.8rem;display:flex;flex-wrap:wrap;gap:.2rem 1.3rem}
-footer a{color:var(--dim);border:0}
-footer a:hover{color:var(--signal)}
+footer{max-width:var(--wrap);margin:0 auto;padding:1.4rem;border-top:1px solid var(--graphite);
+color:var(--steel);font-size:.8rem;display:flex;flex-wrap:wrap;align-items:center;gap:.2rem 1.3rem}
+footer a{color:var(--steel);border:0}
+footer a:hover{color:var(--copper)}
+footer .rdoc{margin-left:auto;border:0;display:block;padding:.35rem 0}
+footer .rdoc img{display:block;width:104px;height:auto;opacity:.85}
+footer .rdoc:hover img{opacity:1}
 
-/* ── Sections: a full-bleed hairline plus a mono eyebrow. The eyebrow names
-      the layer being described, so the page reads as a spec, not a pitch. ── */
-.sec{border-top:1px solid var(--line);padding:2.4rem 0 .4rem;margin-top:2.4rem}
+/* Sections: hairline + mono eyebrow — the page reads as a spec, not a pitch */
+.sec{border-top:1px solid var(--graphite);padding:2.4rem 0 .4rem;margin-top:2.4rem}
 .sec:first-of-type{border-top:0;margin-top:0}
-.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;
-color:var(--faint);margin:0 0 .9rem}
-.eyebrow b{color:var(--signal);font-weight:500}
+.eyebrow{font-family:var(--mono);font-size:.8125rem;letter-spacing:.07em;text-transform:uppercase;
+color:var(--steel);margin:0 0 .9rem;line-height:1.3}
+.eyebrow b{color:var(--offwhite);font-weight:400}
 .prose{max-width:var(--prose)}
-h1{font-size:clamp(1.9rem,4.6vw,2.7rem);font-weight:600;letter-spacing:-.02em;line-height:1.12;margin:0 0 .5rem}
-h2{font-size:1.28rem;font-weight:600;letter-spacing:-.01em;margin:0 0 .5rem}
-h3{font-size:.98rem;font-weight:600;margin:1.4rem 0 .3rem}
+h1{font-family:var(--disp);font-size:clamp(1.9rem,4.6vw,2.5rem);font-weight:500;
+letter-spacing:-.015em;line-height:1.1;margin:0 0 .5rem}
+h2{font-family:var(--disp);font-size:1.5rem;font-weight:500;letter-spacing:-.01em;
+line-height:1.15;margin:0 0 .5rem}
+h3{font-family:var(--disp);font-size:1.1rem;font-weight:500;letter-spacing:-.005em;
+line-height:1.25;margin:1.4rem 0 .3rem}
 p{margin:.65rem 0}
 ul{padding-left:1.1rem;margin:.6rem 0}
 li{margin:.3rem 0}
-.muted{color:var(--dim);font-size:.9rem}
-.tagline{font-family:var(--mono);font-size:.82rem;letter-spacing:.2em;color:var(--dim);margin:0 0 1.6rem}
-code{font-family:var(--mono);font-size:.86em;background:var(--panel2);border:1px solid var(--line);
+strong,b{font-weight:600}
+.muted{color:var(--steel);font-size:.9rem}
+.tagline{font-family:var(--mono);font-size:.8125rem;letter-spacing:.07em;text-transform:uppercase;
+color:var(--steel);margin:0 0 1.6rem}
+code{font-family:var(--mono);font-size:.86em;background:var(--graphite);
 padding:.05rem .32rem;border-radius:2px}
 
-/* ── Hero ──────────────────────────────────────────────────────────────── */
+/* Hero */
 .hero{padding:3rem 0 0}
-.lede{font-size:1.12rem;color:var(--ink);max-width:var(--prose)}
+.hero h1{font-family:var(--disp);font-weight:700;font-size:clamp(2.1rem,5vw,3.4rem);
+letter-spacing:-.02em;line-height:1.05}
+.lede{font-size:1.125rem;line-height:1.6;color:var(--offwhite);max-width:var(--prose)}
 
-/* ── Schematic: the load-bearing element. Scales by viewBox, so it stays
-      readable on a phone without a second layout. ─────────────────────── */
-.diagram{margin:1.8rem 0 .6rem;border:1px solid var(--line);background:var(--panel);
-padding:1.2rem;overflow-x:auto}
+/* Schematic: the signature element. Scales by viewBox. */
+.diagram{margin:1.8rem 0 .6rem;background:var(--graphite);padding:1.2rem;overflow-x:auto}
 .diagram svg{display:block;width:100%;height:auto;min-width:24rem}
-.diagram figcaption{font-family:var(--mono);font-size:.72rem;color:var(--faint);
-margin-top:.9rem;letter-spacing:.04em}
+.diagram figcaption{font-family:var(--mono);font-size:.8125rem;color:var(--steel);
+margin-top:.9rem;letter-spacing:.07em}
 
-/* ── Plane cards: data plane vs control plane, the page's spine. ───────── */
+/* Plane cards: data plane vs control plane, the page's spine */
 .planes{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:1px;
-background:var(--line);border:1px solid var(--line);margin:1.4rem 0}
-.plane{background:var(--panel);padding:1.1rem 1.2rem}
-.plane h3{margin:.15rem 0 .5rem;font-size:1rem}
-.plane .tag{font-family:var(--mono);font-size:.68rem;letter-spacing:.16em;text-transform:uppercase}
-.plane.p2p .tag{color:var(--ok)}
-.plane.srv .tag{color:var(--warn)}
-.plane p{margin:.4rem 0;font-size:.92rem;color:var(--dim)}
+background:var(--space);border:1px solid var(--graphite);margin:1.4rem 0}
+.plane{background:var(--graphite);padding:1.1rem 1.2rem}
+.plane h3{margin:.15rem 0 .5rem}
+.plane .tag{font-family:var(--mono);font-size:.8125rem;letter-spacing:.07em;
+text-transform:uppercase;color:var(--steel)}
+.plane.p2p .tag{color:var(--offwhite)}
+.plane p{margin:.4rem 0;font-size:.92rem;color:var(--steel)}
+.plane p strong{color:var(--offwhite)}
 
-/* ── Spec rows: label · dotted leader · value. The datasheet texture. ──── */
-.spec{border-top:1px solid var(--line);margin:1.2rem 0 0;max-width:52rem}
+/* Spec rows: label + value. States carry words, never colour alone */
+.spec{border-top:1px solid var(--graphite);margin:1.2rem 0 0;max-width:52rem}
 .spec div{display:flex;align-items:baseline;gap:.6rem;padding:.55rem 0;
-border-bottom:1px solid var(--line);font-size:.9rem}
-.spec dt,.spec .k{font-family:var(--mono);font-size:.78rem;letter-spacing:.04em;color:var(--dim);
-flex:none;min-width:14rem}
-.spec dd,.spec .v{margin:0;color:var(--ink)}
-.spec .no{color:var(--ok)}
-.spec .yes{color:var(--warn)}
+border-bottom:1px solid var(--graphite);font-size:.9rem}
+.spec dt,.spec .k{font-family:var(--mono);font-size:.8125rem;letter-spacing:.07em;
+color:var(--steel);flex:none;min-width:14rem}
+.spec dd,.spec .v{margin:0;color:var(--offwhite)}
+.spec .no,.spec .yes{color:var(--offwhite)}
 
-/* ── Steps: a real sequence, so it is numbered. ────────────────────────── */
+/* Steps: a real sequence, so it is numbered */
 .steps{counter-reset:s;list-style:none;padding:0;margin:1.1rem 0;max-width:var(--prose)}
 .steps li{counter-increment:s;position:relative;padding-left:2.6rem;margin:.9rem 0}
 .steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.05rem;
-font-family:var(--mono);font-size:.75rem;color:var(--signal);letter-spacing:.06em}
+font-family:var(--mono);font-size:.8125rem;color:var(--steel);letter-spacing:.07em}
 
-/* ── Actions ───────────────────────────────────────────────────────────── */
-.dl{display:inline-block;margin:.4rem .5rem .4rem 0;padding:.6rem 1rem;border:1px solid var(--line-hi);
-color:var(--ink);font-size:.92rem;background:var(--panel)}
-.dl:hover{border-color:var(--signal);background:var(--panel2)}
-.dl.store{display:inline-flex;align-items:center;gap:.6rem;border-color:var(--signal);
-background:rgba(127,176,255,.09);color:#CFE0FF;font-weight:600;padding:.7rem 1.15rem;font-size:1rem}
+/* Actions. Copper belongs to the primary action — one per view */
+.dl{display:inline-block;margin:.4rem .5rem .4rem 0;padding:.6rem 1rem;
+border:1px solid var(--steel);color:var(--offwhite);font-size:.92rem;background:var(--space)}
+.dl:hover{border-color:var(--offwhite);color:var(--offwhite)}
+.dl.store{display:inline-flex;align-items:center;gap:.6rem;border:0;
+background:var(--copper);color:var(--space);font-weight:600;padding:.7rem 1.15rem;font-size:1rem}
+.dl.store:hover{background:var(--copper);color:var(--space);outline:1px solid var(--offwhite);outline-offset:0}
 .dl.store svg{display:block;flex:none}
-.announce{border:1px solid var(--line-hi);border-left:2px solid var(--warn);background:var(--panel);
-padding:.85rem 1rem;color:var(--dim);font-size:.92rem}
-.announce strong{color:var(--ink)}
+.announce{border:1px solid var(--graphite);border-left:2px solid var(--steel);
+background:var(--graphite);padding:.85rem 1rem;color:var(--steel);font-size:.92rem}
+.announce strong{color:var(--offwhite)}
 
-/* ── Downloads ─────────────────────────────────────────────────────────── */
-.arts{list-style:none;padding:0;margin:.8rem 0;border-top:1px solid var(--line)}
-.arts li{border-bottom:1px solid var(--line);padding:.8rem 0}
-.arts .file{font-family:var(--mono);font-size:.88rem;color:var(--ink);border:0;word-break:break-all}
-.arts .file:hover{color:var(--signal)}
-.arts .meta{font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.05em;
+/* Downloads */
+.arts{list-style:none;padding:0;margin:.8rem 0;border-top:1px solid var(--graphite)}
+.arts li{border-bottom:1px solid var(--graphite);padding:.8rem 0}
+.arts .file{font-family:var(--mono);font-size:.88rem;color:var(--offwhite);border:0;word-break:break-all}
+.arts .file:hover{color:var(--copper)}
+.arts .meta{font-family:var(--mono);font-size:.8125rem;color:var(--steel);letter-spacing:.07em;
 margin-top:.25rem;display:block}
-.arts .sha{font-family:var(--mono);font-size:.7rem;color:var(--faint);word-break:break-all;
+.arts .sha{font-family:var(--mono);font-size:.72rem;color:var(--steel);word-break:break-all;
 display:block;margin-top:.2rem}
 
-/* ── Screenshots ───────────────────────────────────────────────────────── */
-/* Screenshots differ wildly in aspect (a settings panel is tall, a channel strip
-   is wide), so cap the height and let each sit at the top of its row instead of
-   stretching the grid to the tallest one. */
+/* Screenshots */
 .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));gap:1.1rem;
 margin:1.1rem 0;align-items:start}
 .shot{margin:0}
 .shot a{display:block;border:0}
 .shot img{display:block;width:100%;height:auto;max-height:24rem;object-fit:contain;
-object-position:top;border:1px solid var(--line);background:var(--panel)}
-.shot img:hover{border-color:var(--line-hi)}
-.shot figcaption{color:var(--faint);font-size:.78rem;margin-top:.4rem;line-height:1.45}
+object-position:top;border:1px solid var(--graphite);background:var(--graphite)}
+.shot img:hover{border-color:var(--steel)}
+.shot figcaption{color:var(--steel);font-size:.78rem;margin-top:.4rem;line-height:1.45}
 
-/* ── Invite landing ────────────────────────────────────────────────────── */
-.code{font-family:var(--mono);font-size:clamp(1.6rem,6vw,2.2rem);font-weight:600;letter-spacing:.22em;
-background:var(--panel);border:1px solid var(--line-hi);padding:.7rem 1.1rem;display:inline-block;
-color:var(--signal)}
+/* Invite landing */
+.code{font-family:var(--mono);font-size:clamp(1.6rem,6vw,2.2rem);font-weight:400;
+letter-spacing:.22em;background:var(--graphite);padding:.7rem 1.1rem;display:inline-block;
+color:var(--offwhite)}
 .links a{display:block;margin:.35rem 0;width:fit-content}
 
-/* ── Changelog ─────────────────────────────────────────────────────────── */
-h2.ver{font-family:var(--mono);font-size:.95rem;letter-spacing:.04em;color:var(--signal);
-border-top:1px solid var(--line);padding-top:1.1rem;margin-top:2rem}
+/* Changelog */
+h2.ver{font-family:var(--mono);font-size:.95rem;letter-spacing:.07em;color:var(--offwhite);
+font-weight:400;border-top:1px solid var(--graphite);padding-top:1.1rem;margin-top:2rem}
 
 @media (max-width:34rem){
 .top{padding:.75rem 1rem}
@@ -515,6 +533,7 @@ main{padding:0 1rem 3rem}
 .diagram{padding:.8rem}
 .spec div{flex-direction:column;gap:.15rem}
 .spec dt,.spec .k{min-width:0}
+footer .rdoc{margin-left:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>"#;
@@ -523,6 +542,43 @@ main{padding:0 1rem 3rem}
 /// breaking through. Four peers, all six links, nothing in the middle — the
 /// topology the product actually uses.
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
+/// RDOC lockup for the footer (mono off-white, per the brand kit's dark-ground
+/// rule; >=96 px wide, clear space via padding).
+const RDOC_SVG: &str = include_str!("../assets/rdoc.svg");
+/// Brand fonts, subset to latin(+ext) and woff2-packed (~64 KB total) so the
+/// site needs no external font host — the CSP allows font-src 'self' only.
+const FONTS: [(&str, &[u8]); 5] = [
+    ("sg-500.woff2", include_bytes!("../assets/fonts/sg-500.woff2")),
+    ("sg-700.woff2", include_bytes!("../assets/fonts/sg-700.woff2")),
+    ("ps-400.woff2", include_bytes!("../assets/fonts/ps-400.woff2")),
+    ("ps-600.woff2", include_bytes!("../assets/fonts/ps-600.woff2")),
+    ("pm-400.woff2", include_bytes!("../assets/fonts/pm-400.woff2")),
+];
+
+async fn rdoc_svg() -> Response {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
+            (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+        ],
+        RDOC_SVG,
+    )
+        .into_response()
+}
+
+async fn font_file(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    match FONTS.iter().find(|(n, _)| *n == name) {
+        Some((_, bytes)) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "font/woff2"),
+                (axum::http::header::CACHE_CONTROL, ASSET_CACHE),
+            ],
+            *bytes,
+        )
+            .into_response(),
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
 /// Social preview card, pre-rendered from `assets/og-image.svg` (scrapers do not
 /// render SVG, so this one ships as a PNG).
 const OG_IMAGE_PNG: &[u8] = include_bytes!("../assets/og-image.png");
@@ -583,7 +639,7 @@ fn footer(base: &str, lang: Lang) -> String {
     let n = i18n::nav(lang);
     let lc = lang.code();
     format!(
-        r#"<a href="{base}/get?lang={lc}">{}</a><a href="/privacy?lang={lc}">{}</a><a href="/legal?lang={lc}">{}</a><a href="/license?lang={lc}">{}</a><a href="/changelog?lang={lc}">Changelog</a><a href="{gh}">GitHub</a><a href="{rd}">raumdock.org</a>"#,
+        r#"<a href="{base}/get?lang={lc}">{}</a><a href="/privacy?lang={lc}">{}</a><a href="/legal?lang={lc}">{}</a><a href="/license?lang={lc}">{}</a><a href="/changelog?lang={lc}">Changelog</a><a href="{gh}">GitHub</a><a class="rdoc" href="{rd}" aria-label="RDOC"><img src="/assets/rdoc.svg" alt="RDOC" width="104" height="26"></a>"#,
         n[0], n[1], n[2], n[3], gh = i18n::GITHUB_URL, rd = i18n::RAUMDOCK_URL
     )
 }
@@ -612,7 +668,7 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
 <meta name=\"twitter:title\" content=\"{og_title}\">\
 <meta name=\"twitter:description\" content=\"{desc}\">\
 <meta name=\"twitter:image\" content=\"{og_image}\">\
-<meta name=\"theme-color\" content=\"#7fb0ff\">\
+<meta name=\"theme-color\" content=\"#121416\">\
 <link rel=\"icon\" href=\"/assets/logo.svg\">{css}</head><body>\
 <header class=\"top\"><img src=\"/assets/logo.svg\" alt=\"\" width=\"26\" height=\"26\">\
 <a class=\"brand\" href=\"/?lang={lc}\">subraum</a>{sw}</header>\

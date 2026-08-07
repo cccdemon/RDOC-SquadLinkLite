@@ -66,7 +66,7 @@ impl Lang {
 /// are served from `/assets/shot/<n>`; `count` says how many exist. Captions
 /// describe the actual screenshots, so adding one means adding its caption here
 /// in the same position.
-pub fn screenshots(l: Lang, base: &str, count: usize) -> String {
+pub fn screenshots(l: Lang, _base: &str, count: usize) -> String {
     if count == 0 {
         return String::new();
     }
@@ -111,7 +111,10 @@ pub fn screenshots(l: Lang, base: &str, count: usize) -> String {
     for n in 1..=count.min(caps.len()) {
         let cap = caps[n - 1];
         grid.push_str(&format!(
-            r#"<figure class="shot"><a href="{base}/assets/shot/{n}" target="_blank" rel="noopener"><img src="{base}/assets/shot/{n}" alt="{cap}" loading="lazy"></a><figcaption>{cap}</figcaption></figure>"#
+            // Relative on purpose: with an absolute {base} URL the CSP (img-src 'self')
+            // breaks the gallery whenever PUBLIC_BASE and the page origin differ —
+            // e.g. a proxy host or a local test rig.
+            r#"<figure class="shot"><a href="/assets/shot/{n}" target="_blank" rel="noopener"><img src="/assets/shot/{n}" alt="{cap}" loading="lazy"></a><figcaption>{cap}</figcaption></figure>"#
         ));
     }
     format!(r#"<div class="shots">{grid}</div>"#)
@@ -192,12 +195,12 @@ fn topology_svg(t: &HomeText) -> String {
         r##"<figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="{alt}">
 <title>{alt}</title>
-<g stroke="#3D6FD8" stroke-width="2.5" stroke-linecap="round">{mesh}</g>
-<g stroke="#E0A244" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round" opacity=".85">{ctrl}</g>
-<rect x="252" y="14" width="216" height="60" fill="#141A24" stroke="#E0A244" stroke-width="1.5"/>
-<text x="360" y="40" text-anchor="middle" fill="#E4E8EE" font-size="16" font-family="ui-monospace,monospace">{srv}</text>
-<text x="360" y="60" text-anchor="middle" fill="#8C96A6" font-size="12" font-family="ui-monospace,monospace">{srv_sub}</text>
-<g fill="#7FB0FF">{dots}</g>
+<g stroke="#76828D" stroke-width="2.5" stroke-linecap="round">{mesh}</g>
+<g stroke="#76828D" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round" opacity=".7">{ctrl}</g>
+<rect x="252" y="14" width="216" height="60" fill="#121416" stroke="#76828D" stroke-width="1.5"/>
+<text x="360" y="40" text-anchor="middle" fill="#F2F2F0" font-size="16" font-family="IBM Plex Mono,ui-monospace,monospace">{srv}</text>
+<text x="360" y="60" text-anchor="middle" fill="#76828D" font-size="12" font-family="IBM Plex Mono,ui-monospace,monospace">{srv_sub}</text>
+<g fill="#F2F2F0">{dots}</g>
 </svg>
 <figcaption>── {data} &nbsp;&nbsp; ┄┄ {ctrl_l}</figcaption>
 </figure>"##,
