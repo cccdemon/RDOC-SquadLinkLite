@@ -3,7 +3,7 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
-## v0.3.0 — 2026-08-06
+## v0.3.0 — 2026-08-08
 
 ### Added
 - **Website im RDOC-Markendesign**: subraum.cc folgt jetzt dem
