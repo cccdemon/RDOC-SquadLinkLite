@@ -7,11 +7,14 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
 ### Added
 - **Website im RDOC-Markendesign**: subraum.cc folgt jetzt dem
-  RDOC-Markenhandbuch v2 — Palette (Space/Graphite/Steel/Off-White, Kupfer nur
-  für die primäre Aktion), Schriften Space Grotesk und IBM Plex (im Server
-  eingebettet, kein externer Font-Host), RDOC-Wortmarke im Footer. Das
-  subraum-Zeichen behält seine Form; der Andock-Punkt an der Oberflächenlinie
-  trägt jetzt Kupfer.
+  RDOC-Markenhandbuch v2.1 — Palette (Space/Graphite/Steel/Off-White, Kupfer
+  ausschließlich für die primäre Aktion), Überschriften in Michroma, Fließtext
+  in IBM Plex Sans, technische Labels in IBM Plex Mono (alle im Server
+  eingebettet, kein externer Font-Host), RDOC-Wortmarke im Footer.
+- **Heller Modus für die Website.** Die Seite folgt der Systemeinstellung und
+  nutzt im Hellen die eigens gemessene Palette des Handbuchs — nicht die
+  invertierte dunkle. Kupfer wechselt dabei auf Copper Deep, weil das normale
+  Kupfer auf hellem Grund nur 2,65 : 1 erreicht.
 - **Stream-Deck-Integration**: eigenes Elgato-Plugin (`subraum.streamDeckPlugin`,
   Stream Deck ≥ 6.4) mit Live-Status auf den Tasten — Push-to-Talk halten
   (leuchtet beim Senden), Mikro stumm, Deafen, Funkkanal-Direktwahl und

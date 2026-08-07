@@ -195,12 +195,12 @@ fn topology_svg(t: &HomeText) -> String {
         r##"<figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="{alt}">
 <title>{alt}</title>
-<g stroke="#76828D" stroke-width="2.5" stroke-linecap="round">{mesh}</g>
-<g stroke="#76828D" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round" opacity=".7">{ctrl}</g>
-<rect x="252" y="14" width="216" height="60" fill="#121416" stroke="#76828D" stroke-width="1.5"/>
-<text x="360" y="40" text-anchor="middle" fill="#F2F2F0" font-size="16" font-family="IBM Plex Mono,ui-monospace,monospace">{srv}</text>
-<text x="360" y="60" text-anchor="middle" fill="#76828D" font-size="12" font-family="IBM Plex Mono,ui-monospace,monospace">{srv_sub}</text>
-<g fill="#F2F2F0">{dots}</g>
+<g stroke="var(--dim)" stroke-width="2.5" stroke-linecap="round">{mesh}</g>
+<g stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round" opacity=".7">{ctrl}</g>
+<rect x="252" y="14" width="216" height="60" fill="var(--bg)" stroke="var(--dim)" stroke-width="1.5"/>
+<text x="360" y="40" text-anchor="middle" fill="var(--ink)" font-size="16" font-family="IBM Plex Mono,ui-monospace,monospace">{srv}</text>
+<text x="360" y="60" text-anchor="middle" fill="var(--dim)" font-size="12" font-family="IBM Plex Mono,ui-monospace,monospace">{srv_sub}</text>
+<g fill="var(--ink)">{dots}</g>
 </svg>
 <figcaption>── {data} &nbsp;&nbsp; ┄┄ {ctrl_l}</figcaption>
 </figure>"##,
