@@ -4,6 +4,16 @@ import { listen, emitTo } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { currentMonitor, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  IconKey,
+  IconMicrophone,
+  IconMicrophoneOff,
+  IconSettings,
+  IconShare2,
+  IconVolume,
+  IconVolumeOff,
+  IconCheck,
+} from "@tabler/icons-react";
 import logo from "./rdoc-signet.svg";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
@@ -352,16 +362,8 @@ export default function App() {
       return true;
     }
   });
-  const [showRekeyBtn, setShowRekeyBtn] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("sa.showrekey") !== "0"; // default: show
-    } catch {
-      return true;
-    }
-  });
-  // Net bar (P2P count, bandwidth, rekey) — expert toggle, default OFF: the
-  // numbers mean nothing to most users and the rekey button lives in the
-  // expert tab anyway.
+  // Net bar (P2P count, bandwidth) — expert toggle, default OFF: the numbers
+  // mean nothing to most users, and rekeying now sits in the header.
   const [showNetbar, setShowNetbar] = useState<boolean>(() => {
     try {
       return localStorage.getItem("sa.shownetbar") === "1";
@@ -554,17 +556,6 @@ export default function App() {
       const nv = !v;
       try {
         localStorage.setItem("sa.showkbps", nv ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return nv;
-    });
-  };
-  const toggleRekeyBtn = () => {
-    setShowRekeyBtn((v) => {
-      const nv = !v;
-      try {
-        localStorage.setItem("sa.showrekey", nv ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -1392,9 +1383,6 @@ PIN: ${sessionInfo.pin}`);
           <div className="sub2" style={{ opacity: 0.7 }}>
             Erzeugt für alle Teilnehmer neue Schlüssel (DTLS-SRTP re-handshake). Nur während einer Session.
           </div>
-          <button className={`btn sm ${showRekeyBtn ? "primary" : ""}`} onClick={toggleRekeyBtn}>
-            {showRekeyBtn ? "Button in der Leiste: sichtbar" : "Button in der Leiste: ausgeblendet"}
-          </button>
 
           <label>🛰 TURN-Relay-Fallback</label>
           <button className={`btn sm ${relayFb ? "primary" : ""}`} onClick={toggleRelayFb}>
@@ -1409,7 +1397,7 @@ PIN: ${sessionInfo.pin}`);
             {showNetbar ? "Netz-Leiste: sichtbar" : "Netz-Leiste: ausgeblendet"}
           </button>
           <div className="sub2" style={{ opacity: 0.7 }}>
-            Die Zeile mit P2P-Anzahl, Bandbreite/Funk-Licht und dem Neu-verschlüsseln-Button.
+            Die Zeile mit P2P-Anzahl und Bandbreite bzw. Funk-Licht.
           </div>
           <button className={`btn sm ${showEncFoot ? "primary" : ""}`} onClick={toggleEncFoot}>
             {showEncFoot ? "Verschlüsselungs-Zeile: sichtbar" : "Verschlüsselungs-Zeile: ausgeblendet"}
@@ -1579,7 +1567,14 @@ PIN: ${sessionInfo.pin}`);
               <img src={logo} className="applogo" alt="RDOC" />
               <div className="brand">sub<span>raum</span></div>
             </div>
-            <button className="gear" title="Audio-Einstellungen" onClick={() => setShowSettings((s) => !s)}>⚙</button>
+            <button
+              className="hbtn"
+              title="Audio-Einstellungen"
+              aria-label="Einstellungen"
+              onClick={() => setShowSettings((s) => !s)}
+            >
+              <IconSettings size={17} />
+            </button>
           </div>
           <div className="sub">encrypted communication{appVersion ? ` · v${appVersion}` : ""}</div>
           {showSettings && deviceSettings}
@@ -1694,34 +1689,62 @@ PIN: ${sessionInfo.pin}`);
   return (
     <div className="screen app">
       <header>
-        <div className="brand sm">sub<span>raum</span></div>
-        <div className={`dot ${transmitting ? "tx" : "ok"}`} />
-        <div className="hstatus">{transmitting ? "SENDEN" : "VERBUNDEN"}</div>
-        {sessionInfo && (
+        <div className="brand">sub<span>raum</span></div>
+        <div className="hactions">
+          {sessionInfo && (
+            <button
+              className={`hbtn ${copied ? "done" : ""}`}
+              title="Einladung kopieren (Link + PIN in die Zwischenablage)"
+              aria-label="Session teilen"
+              onClick={copyInvite}
+            >
+              {copied ? <IconCheck size={17} /> : <IconShare2 size={17} />}
+            </button>
+          )}
           <button
-            className={`hbtn invite ${copied ? "done" : ""}`}
-            title="Einladung kopieren (Link + PIN in die Zwischenablage)"
-            onClick={copyInvite}
+            className="hbtn key"
+            title="Session neu verschlüsseln — erzeugt für alle Teilnehmer neue Schlüssel"
+            aria-label="Session neu verschlüsseln"
+            onClick={rotateKey}
+            disabled={rotating || !connected}
           >
-            {copied ? "✅" : "📋"}
+            <IconKey size={17} />
           </button>
-        )}
-        <button
-          className={`hbtn ${micMuted ? "warn" : ""}`}
-          title={micMuted ? "Mikrofon stumm — klicken zum Aktivieren" : "Mikrofon an — klicken zum Stummschalten"}
-          onClick={toggleMic}
-        >
-          {micMuted ? "🔇" : "🎙️"}
-        </button>
-        <button
-          className={`hbtn ${deaf ? "warn" : ""}`}
-          title={deaf ? "Ton aus — klicken zum Aktivieren" : "Ton an — klicken zum Stummschalten"}
-          onClick={toggleDeaf}
-        >
-          {deaf ? "🔕" : "🔊"}
-        </button>
-        <button className="gear" title="Audio-Einstellungen" onClick={() => setShowSettings((s) => !s)}>⚙</button>
-        <button className="leave" title="Session verlassen" onClick={onDisconnect}>Verlassen</button>
+          <button
+            className={`hbtn ${micMuted ? "warn" : "on"}`}
+            title={micMuted ? "Mikrofon stumm — klicken zum Aktivieren" : "Mikrofon an — klicken zum Stummschalten"}
+            aria-label="Mikrofon an/aus"
+            onClick={toggleMic}
+          >
+            {micMuted ? <IconMicrophoneOff size={17} /> : <IconMicrophone size={17} />}
+          </button>
+          <button
+            className={`hbtn ${deaf ? "warn" : "on"}`}
+            title={deaf ? "Ton aus — klicken zum Aktivieren" : "Ton an — klicken zum Stummschalten"}
+            aria-label="Ton an/aus"
+            onClick={toggleDeaf}
+          >
+            {deaf ? <IconVolumeOff size={17} /> : <IconVolume size={17} />}
+          </button>
+          <button
+            className="hbtn"
+            title="Audio-Einstellungen"
+            aria-label="Einstellungen"
+            onClick={() => setShowSettings((s) => !s)}
+          >
+            <IconSettings size={17} />
+          </button>
+          <button className="leave" title="Session verlassen" onClick={onDisconnect}>Verlassen</button>
+          <span className="hsep" />
+          {/* Status carries no label here: the dot is the last thing in the row,
+              so nothing else can claim its colour. Title keeps it readable. */}
+          <span
+            className={`dot ${transmitting ? "tx" : "ok"}`}
+            title={transmitting ? "Senden" : "Verbunden"}
+            aria-label={transmitting ? "Senden" : "Verbunden"}
+            role="img"
+          />
+        </div>
       </header>
       {updateBanner}
       {showSettings && deviceSettings}
@@ -1755,16 +1778,6 @@ PIN: ${sessionInfo.pin}`);
           </span>
         )}
         {lowBw && <span className="lowbw" title="Low-Bandwidth-Modus aktiv">🐢 Low-BW</span>}
-        {showRekeyBtn && (
-          <button
-            className="rekey"
-            title="Erzeugt für alle Teilnehmer neue Verschlüsselungs-Keys (DTLS-SRTP re-handshake)"
-            onClick={rotateKey}
-            disabled={rotating}
-          >
-            {rotating ? "⏳ Verschlüssele neu…" : `🔑 Session neu verschlüsseln · #${keyInfo.gen}`}
-          </button>
-        )}
       </div>
       )}
 

@@ -93,7 +93,9 @@ body {
    Copper is spent on the action. */
 .brand { font-family: var(--disp); font-weight: 400; letter-spacing: 0; font-size: 19px; }
 .brand span { color: var(--patina); }
+/* In the app header the wordmark is the title bar, so it runs at full size. */
 .brand.sm { font-size: 14px; }
+header .brand { font-size: 22px; }
 .sub { color: var(--dim); margin: 2px 0 18px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; font-family: var(--mono); }
 
 .card {
@@ -159,16 +161,20 @@ textarea.code:focus { border-color: var(--patina); }
 .footlog { padding: 6px 14px; border-top: 1px solid var(--line); }
 
 header {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--fill);
 }
-/* Status dots always sit next to their own word (.hstatus), so the colour is
-   the second signal, not the only one. No glow — the guide rules it out. */
-.dot { width: 9px; height: 9px; border-radius: 50%; margin-left: auto; }
+/* Control cluster, hard right. The status dot is its last child so nothing
+   else in the row can be mistaken for the connection state. */
+.hactions { display: flex; align-items: center; gap: 8px; }
+.hsep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+/* The dot is now the only carrier of connection state, so it runs a size up
+   and gets a title for anyone who cannot read the colour. No glow — the guide
+   rules it out. */
+.dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 .dot.ok { background: var(--ok); }
 /* Transmit mirrors the primary action, so it carries the action's colour. */
 .dot.tx { background: var(--copper); }
-.hstatus { font-size: 12px; letter-spacing: 0.07em; font-family: var(--mono); color: var(--dim); }
 
 main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); overflow: hidden; }
 section { background: var(--bg); padding: 14px 16px; display: flex; flex-direction: column; min-height: 0; }
@@ -300,7 +306,7 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
    element here that carries Copper. Idle is the outline, transmitting fills —
    the label changes with it, so the state never rests on colour alone. */
 .ptt {
-  margin-top: auto;
+  margin-top: auto; margin-bottom: 4px;
   background: var(--panel); border: 2px solid var(--copper); color: var(--copper);
   border-radius: 8px; padding: 18px; font-weight: 600; letter-spacing: 0;
   cursor: pointer; font-size: 14px; font-family: var(--sans);
@@ -309,7 +315,7 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .ptt:hover { background: var(--fill); }
 .ptt.live { background: var(--copper); border-color: var(--copper); color: var(--space); }
 /* Compact: roughly half the height, so the roster keeps the room. */
-.ptt.compact { padding: 9px 12px; font-size: 12px; border-width: 1px; border-radius: 6px; }
+.ptt.compact { padding: 10px 24px; font-size: 13px; border-width: 1px; border-radius: 8px; align-self: center; }
 .ptt.compact .ptthint { margin-top: 3px; font-size: 9px; }
 /* Latched: transmitting like .live, but Patina marks it as the held state. */
 .ptt.latched { background: var(--copper); border-color: var(--patina); color: var(--space); }
@@ -338,21 +344,26 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .fpbox { margin-top: .8rem; padding: .7rem; border: 1px solid var(--patina); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: .4rem; }
 
 /* Share panel inside the connected session (host) */
-.sessbox-live { margin-bottom: .8rem; }
-.sessbox-live input { width: 100%; }
-.pinrow { display: flex; align-items: center; gap: .6rem; margin-top: .35rem; }
-.pinrow .pin { font-size: 1.1rem; flex: 1; }
 
 /* Gear settings + volumes + net/enc */
 .brandrow { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.gear { background: none; border: 1px solid var(--line); color: var(--txt); border-radius: 8px; width: 34px; height: 34px; font-size: 1.05rem; cursor: pointer; }
-.gear:hover { border-color: var(--patina); }
-/* Icon-only header controls (invite copy, mic, deafen). Same box as .gear;
-   with no label to read, state has to come across in the colour alone. */
-.hbtn { background: none; border: 1px solid var(--line); color: var(--txt); border-radius: 8px; width: 34px; height: 34px; font-size: 1rem; line-height: 1; cursor: pointer; }
-.hbtn:hover { border-color: var(--patina); }
+/* Icon-only header controls (share, rekey, mic, deafen, settings). With no
+   label to read, state has to come across in colour and fill alone. */
+.hbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 6px; width: 34px; height: 34px; padding: 0; cursor: pointer;
+}
+.hbtn:hover:not(:disabled) { border-color: var(--patina); color: var(--txt); }
+.hbtn:disabled { opacity: .4; cursor: default; }
+/* Live and doing its job: Patina, the structural accent. */
+.hbtn.on { border-color: var(--patina); color: var(--patina); }
+/* Muted or deafened — a state, so it takes the function colour. */
 .hbtn.warn { border-color: var(--err); color: var(--err); }
-.hbtn.invite.done { border-color: var(--ok); color: var(--ok); }
+/* Rekeying is a key action but not the primary one, so it stays Patina-neutral
+   until hovered; the copper is reserved for push-to-talk. */
+.hbtn.key { color: var(--dim); }
+.hbtn.done { border-color: var(--ok); color: var(--ok); }
 .settings { margin: .6rem 0; padding: .7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: .35rem; }
 .settings select { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: .4rem; font-family: var(--sans); }
 .netbar { display: flex; gap: 1rem; align-items: center; padding: .35rem .8rem; font-size: .82rem; color: var(--dim); border-bottom: 1px solid var(--line); font-family: var(--mono); }
@@ -379,9 +390,6 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .applogo { width: 34px; height: 34px; }
 
 /* Key rotation */
-.netbar .rekey { margin-left: auto; background: var(--fill); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: .25rem .55rem; font-size: .8rem; cursor: pointer; font-family: var(--sans); }
-.netbar .rekey:hover:not(:disabled) { border-color: var(--patina); }
-.netbar .rekey:disabled { opacity: .6; cursor: default; }
 .encfoot .keygen { color: var(--patina); }
 .encfoot .pqcvoice.on { color: var(--ok); }
 .encfoot .pqcvoice.on b { color: var(--ok); }

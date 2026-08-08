@@ -22,8 +22,21 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 - **Mikrofon und Ton sind als Symbole nach oben gewandert.** Die drei breiten
   Knöpfe unter Push-to-Talk sind weg; Mikro und Ton stehen jetzt neben dem
   Zahnrad, stumm wird rot. Das schafft Platz für die Teilnehmerliste.
-- **Der Push-to-Talk-Knopf ist kleiner.** Wer die alte Größe lieber mag, stellt
-  sie unter Experte › Oberfläche zurück.
+- **Der Push-to-Talk-Knopf ist kleiner** und steht mittig auf seiner eigenen
+  Breite statt über die ganze Spalte. Wer die alte Größe lieber mag, stellt sie
+  unter Experte › Oberfläche zurück.
+- **Die Kopfzeile ist die Kommandozeile der App geworden.** Wortmarke links,
+  rechts eine Reihe gleich großer Symbolknöpfe — teilen, neu verschlüsseln,
+  Mikrofon, Ton, Einstellungen — dann „Verlassen" und, hinter einem Trenner
+  ganz außen, der Verbindungspunkt. Der Punkt steht damit allein für den
+  Zustand: grün verbunden, kupfern beim Senden. Das Wort „VERBUNDEN" daneben
+  ist entfallen, den Zustand liest man am Punkt oder im Tooltip.
+- **Neu verschlüsseln sitzt jetzt als Schlüsselsymbol in der Kopfzeile** statt
+  in der ausgeblendeten Netz-Leiste. Der zugehörige Schalter im Expertenmenü
+  ist damit hinfällig und entfernt.
+- **Symbole statt Emoji.** Die Kopfzeile nutzt Tabler-Linien-Symbole, die auf
+  jedem System gleich aussehen; Emoji werden von Windows, Linux und macOS
+  unterschiedlich gezeichnet.
 
 ### Hinzugefügt
 - **Dauersenden per Langdruck oder Doppeltipp.** Den Push-to-Talk-Knopf halten
