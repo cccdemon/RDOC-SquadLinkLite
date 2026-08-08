@@ -3,6 +3,38 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## v0.3.1 — 2026-08-08
+
+### Geändert
+- **Das Hauptfenster zeigt jetzt nur noch, was du im Gefecht brauchst.** Die
+  Netz-Leiste (P2P-Anzahl, Bandbreite, Neu-verschlüsseln-Button) und die
+  Verschlüsselungs-Fußzeile sind standardmäßig ausgeblendet. Beide Zeilen waren
+  für die meisten reine Zahlenkolonnen, und die Fußzeile stand fest im Bild,
+  ohne dass man je etwas damit machen konnte. Wer die Werte sehen will, schaltet
+  sie unter **Einstellungen › Experte › Oberfläche** wieder ein — nichts ist
+  verschwunden, es steht nur nicht mehr ungefragt da. Neu verschlüsseln geht
+  weiterhin über das Expertenmenü.
+- **Link und PIN stehen nicht mehr offen auf dem Schirm.** Statt der Box mit
+  Adresse und sechsstelligem Code sitzt oben in der Titelleiste ein
+  📋-Knopf, der beides in die Zwischenablage legt und kurz auf ✅ wechselt.
+  Wer streamt, muss nichts mehr verbergen, weil nichts mehr zu verbergen ist —
+  der Streamer-Modus im Verbindungsfenster bleibt für die Ansicht davor.
+- **Mikrofon und Ton sind als Symbole nach oben gewandert.** Die drei breiten
+  Knöpfe unter Push-to-Talk sind weg; Mikro und Ton stehen jetzt neben dem
+  Zahnrad, stumm wird rot. Das schafft Platz für die Teilnehmerliste.
+- **Der Push-to-Talk-Knopf ist kleiner.** Wer die alte Größe lieber mag, stellt
+  sie unter Experte › Oberfläche zurück.
+
+### Hinzugefügt
+- **Dauersenden per Langdruck oder Doppeltipp.** Den Push-to-Talk-Knopf halten
+  überträgt, solange du hältst — hältst du länger als 0,7 Sekunden, rastet er
+  ein und sendet weiter, bis du erneut drückst. Dasselbe macht ein doppeltes
+  schnelles Antippen deiner PTT-Taste. Beide Richtungen quittiert ein kurzer
+  Zweiklang, der nur auf deinen eigenen Kopfhörern läuft und bewusst anders
+  klingt als der Funk-Klick: aufsteigend beim Einrasten, absteigend beim Lösen.
+  Der Knopf zeigt derweil **🔒 DAUERSENDEN**. Ersetzt den bisherigen Knopf
+  „Toggle senden".
+
 ## v0.3.0 — 2026-08-08
 
 ### Added

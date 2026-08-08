@@ -61,10 +61,19 @@ pub struct Earcon {
     /// Playback gain for the click, as f32 bits (0.0 mute … 1.0 default … 2.0 +6 dB).
     volume: Arc<AtomicU32>,
     samples: Vec<i16>,
+    latch_on: Vec<i16>,
+    latch_off: Vec<i16>,
 }
 impl Earcon {
     pub fn new(mix: MixMap, enabled: Arc<AtomicBool>) -> Self {
-        Earcon { mix, enabled, volume: Arc::new(AtomicU32::new(1.0f32.to_bits())), samples: render_click() }
+        Earcon {
+            mix,
+            enabled,
+            volume: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            samples: render_click(),
+            latch_on: render_latch(true),
+            latch_off: render_latch(false),
+        }
     }
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::SeqCst);
@@ -93,6 +102,26 @@ impl Earcon {
             b.extend(self.samples.iter().map(|&s| (s as f32 * vol).clamp(-32768.0, 32767.0) as i16));
         }
     }
+
+    /// Local confirmation tone for latched ("hands-free") push-to-talk: a rising
+    /// two-tone when the latch engages, falling when it releases. This is direct
+    /// UI feedback rather than an incoming-transmission cue, so it ignores the
+    /// earcon on/off toggle and only honours the click volume.
+    pub fn latch_cue(&self, on: bool) {
+        let vol = f32::from_bits(self.volume.load(Ordering::SeqCst));
+        if vol <= 0.0 {
+            return; // muted
+        }
+        let src = if on { &self.latch_on } else { &self.latch_off };
+        let mut m = self.mix.lock().unwrap();
+        let b = m.entry(EARCON_KEY.to_string()).or_default();
+        b.clear();
+        if (vol - 1.0).abs() < f32::EPSILON {
+            b.extend(src.iter().copied());
+        } else {
+            b.extend(src.iter().map(|&s| (s as f32 * vol).clamp(-32768.0, 32767.0) as i16));
+        }
+    }
 }
 
 /// Render the click once: two short decaying ticks ("k-chk", ~28 ms total) at
@@ -111,6 +140,30 @@ fn render_click() -> Vec<i16> {
             let t = i as f32 / sr;
             let env = (-t / (tau_ms / 1000.0)).exp();
             let s = (2.0 * std::f32::consts::PI * freq * t).sin() * env * amp;
+            out.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+        }
+    }
+    out
+}
+
+/// Render the latch cue once: two 45 ms tones, rising for "latch on" and falling
+/// for "latch off", at 48 kHz mono i16. Deliberately unlike `render_click()` so a
+/// latch is never mistaken for someone keying up.
+fn render_latch(on: bool) -> Vec<i16> {
+    let sr = OPUS_SR as f32;
+    let tones = if on { [740.0f32, 1175.0f32] } else { [1175.0f32, 740.0f32] };
+    let mut out: Vec<i16> = Vec::new();
+    for (i, freq) in tones.into_iter().enumerate() {
+        let start = (i as f32 * 0.055 * sr) as usize;
+        while out.len() < start {
+            out.push(0);
+        }
+        let n = (0.045 * sr) as usize;
+        for k in 0..n {
+            let t = k as f32 / sr;
+            // 4 ms attack, 20 ms decay — no edge click at either end.
+            let env = (1.0 - (-t / 0.004).exp()) * (-t / 0.020).exp();
+            let s = (2.0 * std::f32::consts::PI * freq * t).sin() * env * 0.30;
             out.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
         }
     }

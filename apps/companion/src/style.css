@@ -305,8 +305,15 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
   border-radius: 8px; padding: 18px; font-weight: 600; letter-spacing: 0;
   cursor: pointer; font-size: 14px; font-family: var(--sans);
 }
+.ptt { user-select: none; touch-action: none; }
 .ptt:hover { background: var(--fill); }
 .ptt.live { background: var(--copper); border-color: var(--copper); color: var(--space); }
+/* Compact: roughly half the height, so the roster keeps the room. */
+.ptt.compact { padding: 9px 12px; font-size: 12px; border-width: 1px; border-radius: 6px; }
+.ptt.compact .ptthint { margin-top: 3px; font-size: 9px; }
+/* Latched: transmitting like .live, but Patina marks it as the held state. */
+.ptt.latched { background: var(--copper); border-color: var(--patina); color: var(--space); }
+.ptt.latched .ptthint { color: var(--space); opacity: 0.75; }
 .ptthint { display: block; margin-top: 6px; font-size: 10px; font-weight: 400; letter-spacing: 0.02em; color: var(--dim); }
 .ptt.live .ptthint { color: var(--space); opacity: 0.75; }
 
@@ -340,6 +347,12 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .brandrow { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .gear { background: none; border: 1px solid var(--line); color: var(--txt); border-radius: 8px; width: 34px; height: 34px; font-size: 1.05rem; cursor: pointer; }
 .gear:hover { border-color: var(--patina); }
+/* Icon-only header controls (invite copy, mic, deafen). Same box as .gear;
+   with no label to read, state has to come across in the colour alone. */
+.hbtn { background: none; border: 1px solid var(--line); color: var(--txt); border-radius: 8px; width: 34px; height: 34px; font-size: 1rem; line-height: 1; cursor: pointer; }
+.hbtn:hover { border-color: var(--patina); }
+.hbtn.warn { border-color: var(--err); color: var(--err); }
+.hbtn.invite.done { border-color: var(--ok); color: var(--ok); }
 .settings { margin: .6rem 0; padding: .7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: .35rem; }
 .settings select { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: .4rem; font-family: var(--sans); }
 .netbar { display: flex; gap: 1rem; align-items: center; padding: .35rem .8rem; font-size: .82rem; color: var(--dim); border-bottom: 1px solid var(--line); font-family: var(--mono); }
@@ -379,11 +392,6 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .sigbanner { display: flex; align-items: center; gap: .7rem; justify-content: space-between; background: var(--panel); border: 1px solid var(--warn); color: var(--txt); border-radius: 7px; padding: .5rem .8rem; margin: .4rem 0; font-size: .85rem; }
 
 /* Self controls: toggle transmit, mic mute, deafen */
-.selfctl { display: flex; gap: .5rem; margin-top: .5rem; flex-wrap: wrap; }
-.selfctl .ctl { flex: 1 1 8rem; background: var(--fill); color: var(--txt); border: 1px solid var(--line); border-radius: 7px; padding: .5rem .6rem; font-size: .85rem; cursor: pointer; font-family: var(--sans); }
-.selfctl .ctl:hover:not(:disabled) { border-color: var(--patina); }
-.selfctl .ctl:disabled { opacity: .5; cursor: default; }
-.selfctl .ctl.on { background: var(--fill); border-color: var(--patina); color: var(--patina); }
 .ptt.muted { opacity: .55; }
 
 /* DSP section in the gear menu */

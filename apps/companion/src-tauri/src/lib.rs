@@ -986,6 +986,14 @@ fn set_earcon_volume(state: State<AppState>, volume: f32) {
     }
 }
 
+/// Local confirmation tone for latched ("hands-free") push-to-talk.
+#[tauri::command]
+fn ptt_latch_cue(state: State<AppState>, on: bool) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.ptt_latch_cue(on);
+    }
+}
+
 #[tauri::command]
 fn set_low_bandwidth(state: State<AppState>, on: bool) {
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -1244,7 +1252,8 @@ pub fn run() {
             set_ducking,
             set_duck_amount,
             set_earcon,
-            set_earcon_volume
+            set_earcon_volume,
+            ptt_latch_cue
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

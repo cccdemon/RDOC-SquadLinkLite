@@ -539,6 +539,11 @@ impl Engine {
     pub fn set_earcon_volume(&self, v: f32) {
         self.earcon.set_volume(v);
     }
+    /// Local confirmation tone when latched ("hands-free") push-to-talk engages
+    /// (`on = true`) or releases. Independent of `set_earcon`.
+    pub fn ptt_latch_cue(&self, on: bool) {
+        self.earcon.latch_cue(on);
+    }
 }
 
 pub(crate) fn build_api() -> Result<API> {

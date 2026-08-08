@@ -59,6 +59,12 @@ function baseLabel(code: string): string {
 }
 
 // Label a binding, including modifier chords ("Shift+KeyT" → "Shift + T").
+/// Max gap between two PTT key presses that still counts as a double-tap (ms).
+const PTT_LATCH_MS = 350;
+
+/// Hold time on the on-screen PTT button that latches transmit on (ms).
+const PTT_LONGPRESS_MS = 700;
+
 function pttLabel(code: string): string {
   if (!code) return "—";
   const mods = new Set(["Ctrl", "Alt", "Shift", "Meta"]);
@@ -353,6 +359,48 @@ export default function App() {
       return true;
     }
   });
+  // Net bar (P2P count, bandwidth, rekey) — expert toggle, default OFF: the
+  // numbers mean nothing to most users and the rekey button lives in the
+  // expert tab anyway.
+  const [showNetbar, setShowNetbar] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.shownetbar") === "1";
+    } catch {
+      return false;
+    }
+  });
+  // Encryption footer — expert toggle, default OFF (pure tech detail).
+  const [showEncFoot, setShowEncFoot] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.showencfoot") === "1";
+    } catch {
+      return false;
+    }
+  });
+  // Compact push-to-talk button — default on; the big one crowds the roster.
+  const [pttCompact, setPttCompact] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("sa.pttcompact") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  // Latched (hands-free) transmit: double-tap the PTT key or long-press the
+  // on-screen button. Replaces the old "Toggle senden" button.
+  const [pttLatched, setPttLatched] = useState(false);
+  const pttLatchedRef = useRef(false);
+  const pttHeldRef = useRef(false);
+  const pttHoldTimer = useRef<number | null>(null);
+  // Short "copied" confirmation on the header invite button.
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+  // Ref + state in one, plus the local latch cue (rising tone on, falling off).
+  const setLatched = (on: boolean) => {
+    if (pttLatchedRef.current === on) return;
+    pttLatchedRef.current = on;
+    setPttLatched(on);
+    invoke("ptt_latch_cue", { on }).catch(() => {});
+  };
   const [lowBw, setLowBw] = useState<boolean>(() => {
     try {
       return localStorage.getItem("sa.lowbw") === "1";
@@ -464,7 +512,10 @@ export default function App() {
     setMicMuted((m) => {
       const nv = !m;
       micMutedRef.current = nv;
-      if (nv) invoke("set_transmit", { on: false }).catch(() => {});
+      if (nv) {
+        setLatched(false);
+        invoke("set_transmit", { on: false }).catch(() => {});
+      }
       return nv;
     });
   };
@@ -514,6 +565,39 @@ export default function App() {
       const nv = !v;
       try {
         localStorage.setItem("sa.showrekey", nv ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return nv;
+    });
+  };
+  const toggleNetbar = () => {
+    setShowNetbar((v) => {
+      const nv = !v;
+      try {
+        localStorage.setItem("sa.shownetbar", nv ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return nv;
+    });
+  };
+  const toggleEncFoot = () => {
+    setShowEncFoot((v) => {
+      const nv = !v;
+      try {
+        localStorage.setItem("sa.showencfoot", nv ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return nv;
+    });
+  };
+  const togglePttCompact = () => {
+    setPttCompact((v) => {
+      const nv = !v;
+      try {
+        localStorage.setItem("sa.pttcompact", nv ? "1" : "0");
       } catch {
         /* ignore */
       }
@@ -608,9 +692,33 @@ export default function App() {
   useEffect(() => {
     invoke("set_ptt_binding", { slot: 0, code: pttBinding }).catch(() => {});
     invoke("set_ptt_binding", { slot: 1, code: pttBinding2 || null }).catch(() => {});
+    let lastDown = 0;
     const offPtt = listen<boolean>("ptt", (e) => {
       if (micMutedRef.current) return; // self-muted: ignore push-to-talk
-      invoke("set_transmit", { on: e.payload }).catch(() => {});
+      const down = e.payload;
+      if (!down) {
+        // Key released: a latched session keeps transmitting.
+        if (pttLatchedRef.current) return;
+        invoke("set_transmit", { on: false }).catch(() => {});
+        return;
+      }
+      if (pttLatchedRef.current) {
+        // Any further press leaves the latch again.
+        setLatched(false);
+        invoke("set_transmit", { on: false }).catch(() => {});
+        lastDown = 0;
+        return;
+      }
+      const now = performance.now();
+      if (now - lastDown < PTT_LATCH_MS) {
+        // Second tap of a double-tap: latch transmit until the next press.
+        setLatched(true);
+        invoke("set_transmit", { on: true }).catch(() => {});
+        lastDown = 0;
+        return;
+      }
+      lastDown = now;
+      invoke("set_transmit", { on: true }).catch(() => {});
     });
     const offBound = listen<{ slot: number; code: string }>("ptt-bound", (e) => {
       const { slot, code } = e.payload;
@@ -889,6 +997,15 @@ export default function App() {
   };
 
   const copy = (t: string) => navigator.clipboard?.writeText(t);
+  // Header invite button: link + PIN straight to the clipboard, never on screen.
+  const copyInvite = () => {
+    if (!sessionInfo) return;
+    copy(`${sessionInfo.link}
+PIN: ${sessionInfo.pin}`);
+    setCopied(true);
+    if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+  };
 
   // ── Session brokering (PIN-protected link via InitConnection REST) ──────────
   // The session service is the hosted public endpoint.
@@ -1056,7 +1173,33 @@ export default function App() {
     };
   }, []);
 
-  const ptt = () => invoke("toggle_transmit");
+  // On-screen PTT: hold to talk, long-press to latch (replaces the old
+  // "Toggle senden" button). A press while latched releases the latch.
+  const pttDown = () => {
+    if (micMutedRef.current) return;
+    if (pttLatchedRef.current) {
+      setLatched(false);
+      invoke("set_transmit", { on: false }).catch(() => {});
+      pttHeldRef.current = false;
+      return;
+    }
+    pttHeldRef.current = true;
+    invoke("set_transmit", { on: true }).catch(() => {});
+    if (pttHoldTimer.current) window.clearTimeout(pttHoldTimer.current);
+    pttHoldTimer.current = window.setTimeout(() => {
+      if (pttHeldRef.current) setLatched(true); // held long enough → stays on
+    }, PTT_LONGPRESS_MS);
+  };
+  const pttUp = () => {
+    if (pttHoldTimer.current) {
+      window.clearTimeout(pttHoldTimer.current);
+      pttHoldTimer.current = null;
+    }
+    if (!pttHeldRef.current) return; // release without a matching press
+    pttHeldRef.current = false;
+    if (pttLatchedRef.current) return; // latched: keep transmitting
+    invoke("set_transmit", { on: false }).catch(() => {});
+  };
   const send = () => {
     const t = msg.trim();
     if (t) {
@@ -1259,6 +1402,27 @@ export default function App() {
           </button>
           <div className="sub2" style={{ opacity: 0.7 }}>
             Aus = nie über einen Relay; bei striktem NAT ggf. keine Verbindung. Greift beim nächsten Verbinden.
+          </div>
+
+          <label>🖥 Oberfläche</label>
+          <button className={`btn sm ${showNetbar ? "primary" : ""}`} onClick={toggleNetbar}>
+            {showNetbar ? "Netz-Leiste: sichtbar" : "Netz-Leiste: ausgeblendet"}
+          </button>
+          <div className="sub2" style={{ opacity: 0.7 }}>
+            Die Zeile mit P2P-Anzahl, Bandbreite/Funk-Licht und dem Neu-verschlüsseln-Button.
+          </div>
+          <button className={`btn sm ${showEncFoot ? "primary" : ""}`} onClick={toggleEncFoot}>
+            {showEncFoot ? "Verschlüsselungs-Zeile: sichtbar" : "Verschlüsselungs-Zeile: ausgeblendet"}
+          </button>
+          <div className="sub2" style={{ opacity: 0.7 }}>
+            Die Fußzeile mit DTLS-SRTP/SCTP, Schlüssel-Generation und Voice-Verschlüsselung.
+          </div>
+          <button className={`btn sm ${pttCompact ? "primary" : ""}`} onClick={togglePttCompact}>
+            {pttCompact ? "Push-to-Talk-Button: klein" : "Push-to-Talk-Button: groß"}
+          </button>
+          <div className="sub2" style={{ opacity: 0.7 }}>
+            Klein spart Platz für die Teilnehmerliste. Dauersenden schaltest du per Langdruck auf den
+            Button oder 2× schnellem Tippen der PTT-Taste — beides mit lokalem Ton als Bestätigung.
           </div>
 
           <label>📊 Bandbreiten-Anzeige (kbps)</label>
@@ -1533,6 +1697,29 @@ export default function App() {
         <div className="brand sm">sub<span>raum</span></div>
         <div className={`dot ${transmitting ? "tx" : "ok"}`} />
         <div className="hstatus">{transmitting ? "SENDEN" : "VERBUNDEN"}</div>
+        {sessionInfo && (
+          <button
+            className={`hbtn invite ${copied ? "done" : ""}`}
+            title="Einladung kopieren (Link + PIN in die Zwischenablage)"
+            onClick={copyInvite}
+          >
+            {copied ? "✅" : "📋"}
+          </button>
+        )}
+        <button
+          className={`hbtn ${micMuted ? "warn" : ""}`}
+          title={micMuted ? "Mikrofon stumm — klicken zum Aktivieren" : "Mikrofon an — klicken zum Stummschalten"}
+          onClick={toggleMic}
+        >
+          {micMuted ? "🔇" : "🎙️"}
+        </button>
+        <button
+          className={`hbtn ${deaf ? "warn" : ""}`}
+          title={deaf ? "Ton aus — klicken zum Aktivieren" : "Ton an — klicken zum Stummschalten"}
+          onClick={toggleDeaf}
+        >
+          {deaf ? "🔕" : "🔊"}
+        </button>
         <button className="gear" title="Audio-Einstellungen" onClick={() => setShowSettings((s) => !s)}>⚙</button>
         <button className="leave" title="Session verlassen" onClick={onDisconnect}>Verlassen</button>
       </header>
@@ -1548,6 +1735,7 @@ export default function App() {
         </div>
       )}
 
+      {showNetbar && (
       <div className="netbar">
         <span>P2P: <b>{p2pCount}</b></span>
         {showKbps ? (
@@ -1578,6 +1766,7 @@ export default function App() {
           </button>
         )}
       </div>
+      )}
 
       <div className="volrow">
         <span className="vlabel">🔊 Gesamt</span>
@@ -1587,28 +1776,8 @@ export default function App() {
 
       <main>
         <section className="roster">
-          {sessionInfo && (
-            <div className="sessbox sessbox-live">
-              <div className="sesshead">
-                <div className="hsec" style={{ margin: 0 }}>Session teilen</div>
-                <button
-                  type="button"
-                  className={`streamtoggle ${streamerMode ? "on" : ""}`}
-                  onClick={toggleStreamer}
-                  title="Streamer-Modus: Link + PIN verbergen"
-                >
-                  {streamerMode ? "🕶 Verborgen" : "👁 Sichtbar"}
-                </button>
-              </div>
-              <input readOnly value={sessionInfo.link} className={`mono ${streamerMode ? "redacted" : ""}`} onFocus={(e) => e.currentTarget.select()} />
-              <div className="pinrow">
-                <span className={`pin mono ${streamerMode ? "redacted" : ""}`}>PIN {sessionInfo.pin}</span>
-                <button className="btn sm" onClick={() => copy(`${sessionInfo.link}\nPIN: ${sessionInfo.pin}`)}>
-                  LINK + PIN
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Link + PIN stay off screen while connected — the header 📋 button
+              copies them. Nothing to redact, nothing to leak on stream. */}
           <div className="hsec">📻 Kanal · {myChannel}</div>
           <div className="chanbar">
             <div className="chanchips">
@@ -1714,21 +1883,28 @@ export default function App() {
             );
           })}
           </div>
-          <button className={`ptt ${transmitting ? "live" : ""} ${micMuted ? "muted" : ""}`} onClick={ptt} disabled={micMuted}>
-            {micMuted ? "🔇 MIKRO STUMM" : transmitting ? "● SENDEN AKTIV" : "PUSH TO TALK"}
-            <span className="ptthint">{pttBinding2 ? `${pttLabel(pttBinding)} / ${pttLabel(pttBinding2)}` : pttLabel(pttBinding)} halten · oder klick zum Umschalten</span>
+          <button
+            className={`ptt ${pttCompact ? "compact" : ""} ${transmitting ? "live" : ""} ${micMuted ? "muted" : ""} ${pttLatched ? "latched" : ""}`}
+            onPointerDown={pttDown}
+            onPointerUp={pttUp}
+            onPointerCancel={pttUp}
+            onPointerLeave={pttUp}
+            onContextMenu={(e) => e.preventDefault()}
+            disabled={micMuted}
+          >
+            {micMuted
+              ? "🔇 MIKRO STUMM"
+              : pttLatched
+                ? "🔒 DAUERSENDEN"
+                : transmitting
+                  ? "● SENDEN AKTIV"
+                  : "PUSH TO TALK"}
+            <span className="ptthint">
+              {pttLatched
+                ? "Klicken oder Taste drücken zum Beenden"
+                : `${pttBinding2 ? `${pttLabel(pttBinding)} / ${pttLabel(pttBinding2)}` : pttLabel(pttBinding)} halten · lang drücken = Dauersenden`}
+            </span>
           </button>
-          <div className="selfctl">
-            <button className={`ctl ${transmitting ? "on" : ""}`} onClick={ptt} disabled={micMuted} title="Dauersenden ein/aus">
-              {transmitting ? "🟢 Sendet (Toggle)" : "🔘 Toggle senden"}
-            </button>
-            <button className={`ctl ${micMuted ? "on" : ""}`} onClick={toggleMic} title="Eigenes Mikrofon stummschalten (du hörst weiter)">
-              {micMuted ? "🔇 Mikro stumm" : "🎙️ Mikro an"}
-            </button>
-            <button className={`ctl ${deaf ? "on" : ""}`} onClick={toggleDeaf} title="Ton aus (nichts hören)">
-              {deaf ? "🔕 Ton aus" : "🔊 Ton an"}
-            </button>
-          </div>
         </section>
 
         <section className="chat">
@@ -1754,7 +1930,7 @@ export default function App() {
         </section>
       </main>
       {log && <div className="footlog">{log}</div>}
-      {encFooter}
+      {showEncFoot && encFooter}
     </div>
   );
 }
