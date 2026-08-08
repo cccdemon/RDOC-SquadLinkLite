@@ -92,6 +92,8 @@ Version 0.3.1 — a calmer window and hands-free transmit.
   headphones only.
 • The push-to-talk button is smaller and centred; the old size is one switch
   away under Settings › Expert › Interface.
+• Display size: pick 90 % to 150 % under Settings › Expert. It scales the whole
+  interface, not just the text.
 ```
 
 Previous version, for reference:
@@ -227,6 +229,8 @@ Version 0.3.1 — ein ruhigeres Fenster und Dauersenden ohne Halten.
   nur auf deinen Kopfhörern.
 • Der Push-to-Talk-Knopf ist kleiner und sitzt mittig; die alte Größe ist einen
   Schalter entfernt unter Einstellungen › Experte › Oberfläche.
+• Darstellungsgröße: 90 % bis 150 % unter Einstellungen › Experte. Skaliert die
+  gesamte Oberfläche, nicht nur die Schrift.
 ```
 
 Vorherige Version, zur Referenz:

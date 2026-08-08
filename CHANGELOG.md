@@ -39,6 +39,10 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
   unterschiedlich gezeichnet.
 
 ### Hinzugefügt
+- **Darstellungsgröße einstellbar** (Einstellungen › Experte): 90 %, 100 %,
+  110 %, 125 % oder 150 %. Skaliert die gesamte Oberfläche, nicht nur die
+  Schrift — Knöpfe, Abstände und Symbole wachsen mit. 100 % bleibt Standard,
+  bestehende Fenster ändern sich beim Update also nicht.
 - **Dauersenden per Langdruck oder Doppeltipp.** Den Push-to-Talk-Knopf halten
   überträgt, solange du hältst — hältst du länger als 0,7 Sekunden, rastet er
   ein und sendet weiter, bis du erneut drückst. Dasselbe macht ein doppeltes
