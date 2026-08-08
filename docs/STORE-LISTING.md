@@ -76,6 +76,27 @@ Previously published as SquadLink Lite.
 ### What's new in this version
 
 ```text
+Version 0.3.1 — a calmer window and hands-free transmit.
+
+• The main window now shows only what you act on. The network bar and the
+  encryption line are off by default; switch them back on under
+  Settings › Expert › Interface if you want the numbers.
+• New header: wordmark on the left, one row of icon buttons on the right —
+  share, re-encrypt, microphone, sound, settings — then Leave and the
+  connection dot. Green means connected, copper means transmitting.
+• Link and PIN no longer sit on screen. The share button copies both to the
+  clipboard, so there is nothing to hide while streaming.
+• Hands-free transmit: hold the push-to-talk button longer than 0.7 seconds
+  and it latches on until you press again. A quick double-tap of your
+  push-to-talk key does the same. A short two-tone confirms it, on your
+  headphones only.
+• The push-to-talk button is smaller and centred; the old size is one switch
+  away under Settings › Expert › Interface.
+```
+
+Previous version, for reference:
+
+```text
 Version 0.3.0 — Stream Deck, radio effect, and a fix for a silent-participant bug.
 
 • Stream Deck integration: own Elgato plugin with live status on the keys —
@@ -188,6 +209,27 @@ Früher veröffentlicht als SquadLink Lite.
 ```
 
 ### Neuerungen in dieser Version
+
+```text
+Version 0.3.1 — ein ruhigeres Fenster und Dauersenden ohne Halten.
+
+• Das Hauptfenster zeigt nur noch, womit du auch etwas machst. Netz-Leiste und
+  Verschlüsselungs-Zeile sind standardmäßig aus; unter
+  Einstellungen › Experte › Oberfläche holst du die Werte zurück.
+• Neue Kopfzeile: Wortmarke links, rechts eine Reihe Symbolknöpfe — teilen,
+  neu verschlüsseln, Mikrofon, Ton, Einstellungen — dann „Verlassen" und der
+  Verbindungspunkt. Grün heißt verbunden, kupfern heißt senden.
+• Link und PIN stehen nicht mehr offen im Bild. Der Teilen-Knopf legt beides in
+  die Zwischenablage, beim Streamen gibt es damit nichts mehr zu verbergen.
+• Dauersenden ohne Halten: den Push-to-Talk-Knopf länger als 0,7 Sekunden
+  halten rastet ihn ein, bis du erneut drückst. Ein schneller Doppeltipp auf
+  deine Push-to-Talk-Taste macht dasselbe. Ein kurzer Zweiklang bestätigt es,
+  nur auf deinen Kopfhörern.
+• Der Push-to-Talk-Knopf ist kleiner und sitzt mittig; die alte Größe ist einen
+  Schalter entfernt unter Einstellungen › Experte › Oberfläche.
+```
+
+Vorherige Version, zur Referenz:
 
 ```text
 Version 0.3.0 — Stream Deck, Funk-Effekt und ein Fix für stumme Teilnehmer.
