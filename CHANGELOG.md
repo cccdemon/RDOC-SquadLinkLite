@@ -6,6 +6,16 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 ## v0.3.0 — 2026-08-08
 
 ### Added
+- **Die App trägt jetzt dasselbe Markenbild wie die Website.** Farben,
+  Schriften und Zustände folgen dem RDOC-Markenhandbuch v2.2: Space als Grund,
+  Kupfer ausschließlich für die eine primäre Aktion je Ansicht (Session
+  erstellen, Push-to-Talk), Patina für Struktur — Kanäle, Sektionen, PIN,
+  Chat-Namen, Netzwerte. Zustände nutzen die Funktionsfarben und stehen immer
+  neben ihrem Wort. Michroma setzt die Wortmarke, IBM Plex Sans und Mono den
+  Rest; alle vier Schnitte liegen in der App, es wird nichts nachgeladen. Die
+  neun Leucht-Schatten und der Farbverlauf sind raus — das Handbuch schließt
+  Glühen, Schatten und Verläufe aus. Im Verbindungsfenster steht jetzt das
+  RDOC-Signet.
 - **Zweite Markenfarbe auf der Website.** Das Markenhandbuch v2.2 hat Patina
   (`#4FB5B5`, im Hellen Patina Deep `#175F63`) als Zweitakzent ergänzt. Vorher
   trug die Seite genau eine Buntfarbe, und alles, was nicht die primäre Aktion

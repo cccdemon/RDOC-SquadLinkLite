@@ -4,7 +4,7 @@ import { listen, emitTo } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { currentMonitor, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import logo from "./subraum.png";
+import logo from "./rdoc-signet.svg";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
 
@@ -1399,7 +1399,7 @@ export default function App() {
         </div>
         <div className="updnotes">{update.notes}</div>
         <div className="updact">
-          <button className="btn primary" onClick={() => invoke("open_download").catch(() => {})}>Herunterladen</button>
+          <button className="btn alt" onClick={() => invoke("open_download").catch(() => {})}>Herunterladen</button>
           <button className="btn" onClick={() => setShowUpdate(false)}>Später</button>
         </div>
       </div>
@@ -1412,7 +1412,7 @@ export default function App() {
         <div className="card connect">
           <div className="brandrow">
             <div className="brandwrap">
-              <img src={logo} className="applogo" alt="" />
+              <img src={logo} className="applogo" alt="RDOC" />
               <div className="brand">sub<span>raum</span></div>
             </div>
             <button className="gear" title="Audio-Einstellungen" onClick={() => setShowSettings((s) => !s)}>⚙</button>
@@ -1483,7 +1483,7 @@ export default function App() {
             <input value={joinInput} onChange={(e) => setJoinInput(e.target.value)} placeholder="https://…/j/abc oder abc" className="mono" spellCheck={false} />
             <label>PIN (6-stellig)</label>
             <input value={joinPin} onChange={(e) => setJoinPin(e.target.value)} inputMode="numeric" maxLength={6} placeholder="123456" />
-            <button className="btn primary" onClick={joinSession} disabled={connecting || !joinInput.trim() || joinPin.trim().length < 6}>
+            <button className="btn alt" onClick={joinSession} disabled={connecting || !joinInput.trim() || joinPin.trim().length < 6}>
               {connecting ? "VERBINDE…" : "BEITRETEN"}
             </button>
           </div>
@@ -1500,7 +1500,7 @@ export default function App() {
                 className="mono"
                 spellCheck={false}
               />
-              <button className="btn primary" onClick={() => connectDirect(directLink)} disabled={connecting || !directLink.trim()}>
+              <button className="btn alt" onClick={() => connectDirect(directLink)} disabled={connecting || !directLink.trim()}>
                 {connecting ? "VERBINDE…" : "DIREKT VERBINDEN"}
               </button>
             </div>
