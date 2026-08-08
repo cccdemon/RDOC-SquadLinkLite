@@ -1,5 +1,52 @@
 //! Translations for the server-rendered pages (EN/DE/IT/ES/FR). Language is
 //! chosen from `?lang=xx`, else the Accept-Language header, else English.
+//!
+//! Display size works the same way: `?ui=` wins, else the `subraum_ui` cookie,
+//! else normal. It is a server-side setting on purpose — the page CSP forbids
+//! scripts, so there is no client-side toggle to be had.
+
+/// Display size. Scales the whole page, not only the type: every length in the
+/// stylesheet is rem-based, so lifting the root font size moves spacing, the
+/// content column and the schematic with it. That is what people asking for
+/// "bigger text" actually want — text alone in a fixed column just reflows into
+/// a narrow ribbon.
+///
+/// Browser zoom does the same job and persists per site; this exists for the
+/// people who never learned Ctrl +, which is most of the ones who complain.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Ui {
+    Normal,
+    Large,
+    Larger,
+}
+
+impl Ui {
+    pub fn code(self) -> &'static str {
+        match self {
+            Ui::Normal => "md",
+            Ui::Large => "lg",
+            Ui::Larger => "xl",
+        }
+    }
+    pub fn all() -> [Ui; 3] {
+        [Ui::Normal, Ui::Large, Ui::Larger]
+    }
+    fn parse(code: &str) -> Option<Ui> {
+        match code.trim() {
+            "md" => Some(Ui::Normal),
+            "lg" => Some(Ui::Large),
+            "xl" => Some(Ui::Larger),
+            _ => None,
+        }
+    }
+    /// `?ui=` wins; else the cookie; else normal.
+    pub fn detect(query: Option<&str>, cookie: Option<&str>) -> Ui {
+        query
+            .and_then(Ui::parse)
+            .or_else(|| cookie.and_then(Ui::parse))
+            .unwrap_or(Ui::Normal)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -144,18 +191,69 @@ pub fn nav(l: Lang) -> [&'static str; 4] {
 }
 
 /// Language switcher: links to the same path with each `?lang=`.
-pub fn switcher(path: &str, cur: Lang) -> String {
+pub fn switcher(path: &str, cur: Lang, ui: Ui) -> String {
     let mut s = String::from("<nav class=\"lang\">");
     for l in Lang::all() {
         let on = if l == cur { " class=\"on\"" } else { "" };
         s.push_str(&format!(
-            "<a href=\"{path}?lang={code}\"{on}>{label}</a>",
+            "<a href=\"{path}?lang={code}&amp;ui={u}\"{on}>{label}</a>",
             code = l.code(),
+            u = ui.code(),
             label = l.code().to_uppercase(),
         ));
     }
     s.push_str("</nav>");
+    // Three A's at rising sizes: the control demonstrates itself, so it needs no
+    // word in five languages. The `title`/`aria-label` carry the meaning for
+    // screen readers, which get nothing from a font size.
+    s.push_str(&format!(
+        "<nav class=\"uisize\" aria-label=\"{}\">",
+        ui_aria(cur)
+    ));
+    for u in Ui::all() {
+        let on = if u == ui { " on" } else { "" };
+        s.push_str(&format!(
+            "<a class=\"{size}{on}\" href=\"{path}?lang={code}&amp;ui={u2}\" title=\"{title}\">A</a>",
+            size = u.code(),
+            code = cur.code(),
+            u2 = u.code(),
+            title = ui_title(cur, u),
+        ));
+    }
+    s.push_str("</nav>");
     s
+}
+
+/// The size control needs a name for screen readers; the three A's alone say
+/// nothing when read out.
+fn ui_aria(l: Lang) -> &'static str {
+    match l {
+        Lang::De => "Schriftgröße",
+        Lang::It => "Dimensione del testo",
+        Lang::Es => "Tamaño del texto",
+        Lang::Fr => "Taille du texte",
+        Lang::En => "Text size",
+    }
+}
+
+fn ui_title(l: Lang, u: Ui) -> &'static str {
+    match (l, u) {
+        (Lang::De, Ui::Normal) => "Normal",
+        (Lang::De, Ui::Large) => "Groß",
+        (Lang::De, Ui::Larger) => "Sehr groß",
+        (Lang::It, Ui::Normal) => "Normale",
+        (Lang::It, Ui::Large) => "Grande",
+        (Lang::It, Ui::Larger) => "Molto grande",
+        (Lang::Es, Ui::Normal) => "Normal",
+        (Lang::Es, Ui::Large) => "Grande",
+        (Lang::Es, Ui::Larger) => "Muy grande",
+        (Lang::Fr, Ui::Normal) => "Normale",
+        (Lang::Fr, Ui::Large) => "Grande",
+        (Lang::Fr, Ui::Larger) => "Très grande",
+        (Lang::En, Ui::Normal) => "Normal",
+        (Lang::En, Ui::Large) => "Large",
+        (Lang::En, Ui::Larger) => "Extra large",
+    }
 }
 
 // ── Pages ────────────────────────────────────────────────────────────────────
@@ -946,7 +1044,7 @@ const PRIVACY_EN: &str = r#"<h1>Privacy</h1>
 <h2>What does NOT happen</h2>
 <ul>
 <li><b>No audio/chat recording.</b> Voice and text are peer-to-peer (DTLS-SRTP / encrypted DataChannel) and are stored nowhere.</li>
-<li><b>No accounts</b>, no login, no tracking, no ads, no cookies.</li>
+<li><b>No accounts</b>, no login, no tracking, no ads, <b>no tracking cookies</b>.</li>
 <li>The brokering server <b>never sees media</b>. Voice and chat never pass through it.</li>
 </ul>
 <h2>What is processed</h2>
@@ -955,6 +1053,7 @@ const PRIVACY_EN: &str = r#"<h1>Privacy</h1>
 <li><b>Session brokering</b>: a random code + 6-digit PIN are held temporarily in memory (max 24&nbsp;h) to let mates join without configuration.</li>
 <li><b>Connection metadata</b>: like any internet service the server technically sees IP addresses on connect; they are not persistently logged.</li>
 <li><b>TURN relay (fallback only)</b>: if no direct path is possible, encrypted audio may pass through a relay. It forwards only <b>encrypted bytes</b> and cannot decrypt them.</li>
+<li><b>Text size</b>: picking a larger size on this site sets exactly one cookie, <code>subraum_ui</code>, holding nothing but <code>md</code>, <code>lg</code> or <code>xl</code>. It expires after a year, goes to nobody else and identifies no one. Without it the size resets on your next visit; browser zoom (Ctrl&nbsp;+) does the same job with no cookie at all.</li>
 </ul>
 <h2>Third parties</h2>
 <p>Installers are served via GitHub Releases (GitHub's privacy terms apply to the download). STUN/TURN may use public STUN servers for NAT discovery.</p>
@@ -966,7 +1065,7 @@ const PRIVACY_DE: &str = r#"<h1>Datenschutzerklärung</h1>
 <h2>Was NICHT passiert</h2>
 <ul>
 <li><b>Keine Audio-/Chat-Aufzeichnung.</b> Sprache und Text laufen Peer-to-Peer (DTLS-SRTP bzw. verschlüsselter DataChannel) und werden nirgends gespeichert.</li>
-<li><b>Keine Benutzerkonten</b>, kein Login, kein Tracking, keine Werbung, keine Cookies.</li>
+<li><b>Keine Benutzerkonten</b>, kein Login, kein Tracking, keine Werbung, <b>keine Tracking-Cookies</b>.</li>
 <li>Der Vermittlungsserver <b>sieht den Medieninhalt nicht</b>. Stimme und Chat fließen nie über ihn.</li>
 </ul>
 <h2>Was verarbeitet wird</h2>
@@ -975,6 +1074,7 @@ const PRIVACY_DE: &str = r#"<h1>Datenschutzerklärung</h1>
 <li><b>Session-Vermittlung</b>: Ein zufälliger Code + 6-stellige PIN werden temporär im Speicher gehalten (max. 24&nbsp;h).</li>
 <li><b>Verbindungs-Metadaten</b>: Wie bei jedem Internetdienst sind dem Server beim Verbinden IP-Adressen technisch bekannt; sie werden nicht dauerhaft protokolliert.</li>
 <li><b>TURN-Relay (nur Fallback)</b>: Falls keine direkte Verbindung möglich ist, kann verschlüsselter Audioverkehr über einen Relay laufen. Der Relay leitet nur <b>verschlüsselte Bytes</b> weiter.</li>
+<li><b>Schriftgröße</b>: Wer auf dieser Seite eine größere Darstellung wählt, bekommt genau einen Cookie, <code>subraum_ui</code>, mit nichts darin außer <code>md</code>, <code>lg</code> oder <code>xl</code>. Er läuft nach einem Jahr ab, geht an niemanden sonst und identifiziert niemanden. Ohne ihn steht die Größe beim nächsten Besuch wieder auf normal; der Browser-Zoom (Strg&nbsp;+) leistet dasselbe ganz ohne Cookie.</li>
 </ul>
 <h2>Drittanbieter</h2>
 <p>Installer werden über GitHub Releases bereitgestellt (beim Download gelten die Bestimmungen von GitHub). STUN/TURN kann öffentliche STUN-Server zur NAT-Erkennung nutzen.</p>
@@ -986,7 +1086,7 @@ const PRIVACY_IT: &str = r#"<h1>Privacy</h1>
 <h2>Cosa NON accade</h2>
 <ul>
 <li><b>Nessuna registrazione audio/chat.</b> Voce e testo sono peer-to-peer (DTLS-SRTP / DataChannel cifrato) e non vengono memorizzati da nessuna parte.</li>
-<li><b>Nessun account</b>, nessun login, nessun tracciamento, nessuna pubblicità, nessun cookie.</li>
+<li><b>Nessun account</b>, nessun login, nessun tracciamento, nessuna pubblicità, <b>nessun cookie di tracciamento</b>.</li>
 <li>Il server di intermediazione <b>non vede i contenuti multimediali</b>.</li>
 </ul>
 <h2>Cosa viene trattato</h2>
@@ -995,6 +1095,7 @@ const PRIVACY_IT: &str = r#"<h1>Privacy</h1>
 <li><b>Intermediazione sessione</b>: un codice casuale + PIN di 6 cifre sono tenuti temporaneamente in memoria (max 24&nbsp;h).</li>
 <li><b>Metadati di connessione</b>: come ogni servizio internet, gli indirizzi IP sono tecnicamente noti alla connessione; non vengono registrati in modo persistente.</li>
 <li><b>Relay TURN (solo fallback)</b>: se non è possibile una via diretta, l'audio cifrato può passare per un relay, che inoltra solo <b>byte cifrati</b>.</li>
+<li><b>Dimensione del testo</b>: scegliendo una dimensione più grande su questo sito viene impostato esattamente un cookie, <code>subraum_ui</code>, che contiene solo <code>md</code>, <code>lg</code> o <code>xl</code>. Scade dopo un anno, non va a nessun altro e non identifica nessuno. Senza di esso la dimensione torna normale alla visita successiva; lo zoom del browser (Ctrl&nbsp;+) fa lo stesso senza alcun cookie.</li>
 </ul>
 <h2>Terze parti</h2>
 <p>Gli installer sono distribuiti via GitHub Releases. STUN/TURN può usare server STUN pubblici per il rilevamento NAT.</p>
@@ -1006,7 +1107,7 @@ const PRIVACY_ES: &str = r#"<h1>Privacidad</h1>
 <h2>Lo que NO ocurre</h2>
 <ul>
 <li><b>Sin grabación de audio/chat.</b> La voz y el texto son peer-to-peer (DTLS-SRTP / DataChannel cifrado) y no se almacenan en ningún sitio.</li>
-<li><b>Sin cuentas</b>, sin inicio de sesión, sin seguimiento, sin anuncios, sin cookies.</li>
+<li><b>Sin cuentas</b>, sin inicio de sesión, sin seguimiento, sin anuncios, <b>sin cookies de seguimiento</b>.</li>
 <li>El servidor de intermediación <b>nunca ve el contenido multimedia</b>.</li>
 </ul>
 <h2>Qué se procesa</h2>
@@ -1015,6 +1116,7 @@ const PRIVACY_ES: &str = r#"<h1>Privacidad</h1>
 <li><b>Intermediación de sesión</b>: un código aleatorio + PIN de 6 dígitos se guardan temporalmente en memoria (máx. 24&nbsp;h).</li>
 <li><b>Metadatos de conexión</b>: como cualquier servicio de internet, las direcciones IP se conocen técnicamente al conectar; no se registran de forma persistente.</li>
 <li><b>Relay TURN (solo respaldo)</b>: si no hay ruta directa, el audio cifrado puede pasar por un relay, que solo reenvía <b>bytes cifrados</b>.</li>
+<li><b>Tamaño del texto</b>: elegir un tamaño mayor en este sitio establece exactamente una cookie, <code>subraum_ui</code>, que contiene solo <code>md</code>, <code>lg</code> o <code>xl</code>. Caduca al cabo de un año, no se envía a nadie más y no identifica a nadie. Sin ella el tamaño vuelve a normal en la próxima visita; el zoom del navegador (Ctrl&nbsp;+) hace lo mismo sin ninguna cookie.</li>
 </ul>
 <h2>Terceros</h2>
 <p>Los instaladores se sirven vía GitHub Releases. STUN/TURN puede usar servidores STUN públicos para la detección de NAT.</p>
@@ -1026,7 +1128,7 @@ const PRIVACY_FR: &str = r#"<h1>Confidentialité</h1>
 <h2>Ce qui n'arrive PAS</h2>
 <ul>
 <li><b>Aucun enregistrement audio/chat.</b> La voix et le texte sont pair-à-pair (DTLS-SRTP / DataChannel chiffré) et ne sont stockés nulle part.</li>
-<li><b>Aucun compte</b>, pas de connexion, pas de suivi, pas de publicité, pas de cookies.</li>
+<li><b>Aucun compte</b>, pas de connexion, pas de suivi, pas de publicité, <b>pas de cookies de suivi</b>.</li>
 <li>Le serveur d'intermédiation <b>ne voit jamais le contenu multimédia</b>.</li>
 </ul>
 <h2>Ce qui est traité</h2>
@@ -1035,6 +1137,7 @@ const PRIVACY_FR: &str = r#"<h1>Confidentialité</h1>
 <li><b>Intermédiation de session</b> : un code aléatoire + PIN à 6 chiffres sont conservés temporairement en mémoire (max 24&nbsp;h).</li>
 <li><b>Métadonnées de connexion</b> : comme tout service internet, les adresses IP sont techniquement connues à la connexion ; elles ne sont pas journalisées durablement.</li>
 <li><b>Relais TURN (repli uniquement)</b> : si aucune voie directe n'est possible, l'audio chiffré peut transiter par un relais, qui ne relaie que des <b>octets chiffrés</b>.</li>
+<li><b>Taille du texte</b> : choisir une taille plus grande sur ce site dépose exactement un cookie, <code>subraum_ui</code>, qui ne contient que <code>md</code>, <code>lg</code> ou <code>xl</code>. Il expire au bout d'un an, n'est transmis à personne et n'identifie personne. Sans lui, la taille revient à la normale à la prochaine visite ; le zoom du navigateur (Ctrl&nbsp;+) fait la même chose sans aucun cookie.</li>
 </ul>
 <h2>Tiers</h2>
 <p>Les installeurs sont distribués via GitHub Releases. STUN/TURN peut utiliser des serveurs STUN publics pour la découverte NAT.</p>

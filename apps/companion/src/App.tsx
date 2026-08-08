@@ -4,9 +4,40 @@ import { listen, emitTo } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { currentMonitor, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import logo from "./rdoc-signet.svg";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
+
+// Display size. Scales the whole webview, not just type: the stylesheet is
+// px-based, so lifting a root font size would move the text and leave every
+// control, gap and icon at its old size. Native webview zoom scales layout and
+// font together, which is what "the text is too small" actually asks for.
+//
+// 100 % stays the default so nobody's window silently reflows on update.
+const UI_SCALES = [0.9, 1.0, 1.1, 1.25, 1.5] as const;
+const UI_SCALE_DEFAULT = 1.0;
+
+function loadUiScale(): number {
+  try {
+    const v = Number(localStorage.getItem("sa.uiscale"));
+    // Guard the stored value: an old or hand-edited entry must not be able to
+    // zoom the window to something unusable.
+    return UI_SCALES.includes(v as (typeof UI_SCALES)[number]) ? v : UI_SCALE_DEFAULT;
+  } catch {
+    return UI_SCALE_DEFAULT;
+  }
+}
+
+// Applies the zoom to this webview. Falls back to the CSS `zoom` property
+// outside Tauri (`pnpm dev` in a browser), where the IPC call rejects.
+async function applyUiScale(scale: number) {
+  try {
+    await getCurrentWebview().setZoom(scale);
+  } catch {
+    document.documentElement.style.zoom = String(scale);
+  }
+}
 
 // Cap retained chat lines so a flood of messages can't grow webview memory.
 const MAX_CHAT_LINES = 500;
@@ -322,6 +353,7 @@ export default function App() {
   const [netCheck, setNetCheck] = useState<{ signaling: boolean; can_send: boolean; can_receive: boolean; stun: boolean } | null>(null);
   const [checking, setChecking] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"simple" | "expert">("simple");
+  const [uiScale, setUiScale] = useState<number>(loadUiScale);
   // Channel overlay + cycle hotkeys.
   const [overlayOn, setOverlayOn] = useState<boolean>(() => {
     try { return localStorage.getItem("sa.ovl") === "1"; } catch { return false; }
@@ -439,6 +471,17 @@ export default function App() {
     setEarconVol(v);
     try { localStorage.setItem("sa.earconvol", String(v)); } catch { /* ignore */ }
     invoke("set_earcon_volume", { volume: v / 100 }).catch(() => {});
+  };
+
+  // Re-apply the stored zoom on every start: the webview does not keep it
+  // across launches, so without this the setting silently reverts.
+  useEffect(() => {
+    void applyUiScale(uiScale);
+  }, [uiScale]);
+
+  const changeUiScale = (v: number) => {
+    setUiScale(v);
+    try { localStorage.setItem("sa.uiscale", String(v)); } catch { /* ignore */ }
   };
 
   // Load device list once (for the gear settings).
@@ -1084,6 +1127,20 @@ export default function App() {
 
       {settingsTab === "simple" && (
         <>
+          <label>🔍 Darstellungsgröße</label>
+          <div className="uiscale">
+            {UI_SCALES.map((v) => (
+              <button
+                key={v}
+                className={v === uiScale ? "on" : ""}
+                onClick={() => changeUiScale(v)}
+                aria-pressed={v === uiScale}
+              >
+                {Math.round(v * 100)} %
+              </button>
+            ))}
+          </div>
+          <div className="sub2">Vergrößert die gesamte Oberfläche, nicht nur die Schrift.</div>
           <label>🎤 Mikrofon</label>
           <select
             value={audioCfg.input}
