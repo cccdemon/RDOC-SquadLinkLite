@@ -126,10 +126,12 @@ no Flatpak GPG key yet.
 
 `ve.raumdock.org` is also the deploy box: CI uses a locked forced-command key
 (`DEPLOY_PULL_KEY`) that can only run the installer-pull service.
-`deploy/pull-installer.sh` mirrors **only** `exe|msi|deb|rpm|AppImage|apk` into
-the `/get` download page — the Flatpak and macOS dmg exist solely as GitHub
-Release assets and never appear on `subraum.cc/get`, even though README and the
-Store copy advertise the Flatpak there.
+`deploy/pull-installer.sh` mirrors `exe|msi|deb|rpm|AppImage|apk|flatpak|dmg|
+streamDeckPlugin` into the `/get` download page; the MSIX is Store-only and stays
+off it. The mirror is a **replace**, not a merge: it publishes exactly what is
+attached to the Release at the moment it runs, so any job that attaches an asset
+must be a dependency of `notify-pull` or its artifact silently misses the site
+(this is what kept the Stream Deck plugin off `/get` in v0.3.0).
 
 The Windows workflow gates the build on `pnpm audit --audit-level moderate` — a
 **blocking** step, so any moderate transitive advisory fails CI before anything is
