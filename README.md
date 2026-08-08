@@ -22,7 +22,7 @@ außerhalb der RDOC-Suite.
 
 - **🪟 Windows** — signiert im Microsoft Store, sonst unsigniert (SmartScreen: „Weitere Informationen → Trotzdem ausführen").
 - **🐧 Linux** — `.deb` / `.rpm` / `.AppImage` (amd64 + arm64) sowie **Flatpak für SteamOS / Steam Deck** und gängige Gaming-Distributionen (Bazzite, ChimeraOS, Nobara, Garuda …). Installation + Voraussetzungen: [docs/LINUX.md](docs/LINUX.md).
-- **🍎 macOS** — Apple Silicon + Intel (unsigniert: per Rechtsklick → Öffnen starten).
+- **🍎 macOS** — Apple Silicon (unsigniert: per Rechtsklick → Öffnen starten).
 - **🤖 Android** — APK zum Sideloaden.
 - **📱 iOS / iPadOS** — technisch fertig, läuft bereits auf dem Gerät; die **App-Store-Veröffentlichung scheitert noch an der Apple-Entwickler-Lizenz** (99 $/Jahr). Unterstütze den Stream, um das möglich zu machen: **[twitch.tv/JustCallMeDeimos](https://twitch.tv/JustCallMeDeimos)**.
 

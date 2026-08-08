@@ -118,7 +118,7 @@ Release on a `subraum-v*` tag.
 | `build-companion.yml` | `windows-latest` | NSIS + MSI, unsigned MSIX for the Store; on a tag also cuts the prerelease and tells the server to pull the installer |
 | `build-companion-linux.yml` | `ubuntu-22.04` amd64 + arm64 matrix | deb/rpm/AppImage per arch |
 | `build-companion-flatpak.yml` | `ubuntu-22.04`, three jobs | `deb` compiles natively, `flatpak` unpacks it into `/app` in the GNOME 47 SDK → `.flatpak` for SteamOS / Steam Deck / immutable distros, `release` (tag-only) attaches the bundle from a plain runner — the SDK container has no `gh`, uploading from inside it fails with "command not found" |
-| `build-companion-macos.yml` | `macos-14` (arm64) + `macos-13` (Intel) | dmg + app per arch, **unsigned and un-notarized** (Gatekeeper blocks first launch). `macos-13` is deprecated and starved — the Intel job can sit queued for hours; don't block a release on it |
+| `build-companion-macos.yml` | `macos-14` (arm64) | dmg + app, **unsigned and un-notarized** (Gatekeeper blocks first launch). Intel was dropped in v0.3.0: `macos-13` is deprecated and starved, and the job routinely sat queued for hours |
 | `build-companion-android.yml` | `ubuntu-22.04` | debug-signed sideload APK; `workflow_dispatch` **only** — `gen/android` is not committed, `tauri android init` runs fresh in CI |
 
 Android/Flatpak/macOS builds are all unsigned — no Apple account, no Play keystore,
