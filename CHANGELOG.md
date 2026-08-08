@@ -6,8 +6,15 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 ## v0.3.0 — 2026-08-08
 
 ### Added
+- **Zweite Markenfarbe auf der Website.** Das Markenhandbuch v2.2 hat Patina
+  (`#4FB5B5`, im Hellen Patina Deep `#175F63`) als Zweitakzent ergänzt. Vorher
+  trug die Seite genau eine Buntfarbe, und alles, was nicht die primäre Aktion
+  war, fiel auf Grau zurück — Struktur, Daten und Sektionen sahen gleich aus.
+  Patina trägt jetzt Sektionsmarken, Tabellenköpfe, die Schrittnummern, Links
+  und die Datenebene im Schema. Kupfer bleibt ausschließlich die eine primäre
+  Aktion, Patina wird nie zum Zustand und nie zum Ring.
 - **Website im RDOC-Markendesign**: subraum.cc folgt jetzt dem
-  RDOC-Markenhandbuch v2.1 — Palette (Space/Graphite/Steel/Off-White, Kupfer
+  RDOC-Markenhandbuch v2.2 — Palette (Space/Graphite/Steel/Off-White, Kupfer
   ausschließlich für die primäre Aktion), Überschriften in Michroma, Fließtext
   in IBM Plex Sans, technische Labels in IBM Plex Mono (alle im Server
   eingebettet, kein externer Font-Host), RDOC-Wortmarke im Footer.
