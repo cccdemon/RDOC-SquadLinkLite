@@ -17,7 +17,7 @@ mod sessions;
 mod tls;
 mod turn;
 
-use i18n::Lang;
+use i18n::{Lang, Ui};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -364,12 +364,61 @@ fn lang_of(q: &Option<String>, headers: &HeaderMap) -> Lang {
     Lang::detect(qlang, accept)
 }
 
+/// Cookie the display size is remembered in. It holds one of `md|lg|xl` and
+/// nothing else: no id, no timestamp, nothing that could identify a visitor.
+/// The privacy page names it — the site promises no tracking, and a cookie it
+/// does set has to be declared for that promise to stay honest.
+const UI_COOKIE: &str = "subraum_ui";
+
+/// Display size: `?ui=` wins, else the cookie, else normal. The bool says the
+/// size came from the query, which is when the answer gets a `Set-Cookie` —
+/// following a size link is the explicit act that stores the preference.
+fn ui_of(q: &Option<String>, headers: &HeaderMap) -> (Ui, bool) {
+    let qui = q
+        .as_deref()
+        .and_then(|s| s.split('&').find_map(|kv| kv.strip_prefix("ui=")));
+    let prefix = format!("{UI_COOKIE}=");
+    let cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix(&prefix)))
+        .map(|s| s.to_string());
+    (Ui::detect(qui, cookie.as_deref()), qui.is_some())
+}
+
+/// A year, path-wide, unreadable by script (there is none) and not sent on
+/// cross-site requests. `Secure` follows `PUBLIC_BASE`, not the request scheme:
+/// production is HTTPS and gets the flag, while a dev server that also sets
+/// `PUBLIC_BASE=http://…` does not — a `Secure` cookie over plain http is
+/// dropped by the browser without a word.
+fn ui_cookie(ui: Ui) -> String {
+    let secure = if public_base().starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!(
+        "{UI_COOKIE}={}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly{secure}",
+        ui.code()
+    )
+}
+
+/// Wraps a rendered page so an explicit size choice is remembered.
+fn page(html: Html<String>, set_cookie: bool, ui: Ui) -> Response {
+    if set_cookie {
+        ([(axum::http::header::SET_COOKIE, ui_cookie(ui))], html).into_response()
+    } else {
+        html.into_response()
+    }
+}
+
 /// Human landing page for a share link (localized; code is HTML-escaped).
-async fn landing(Path(code): Path<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn landing(Path(code): Path<String>, RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let code = esc(&code.chars().take(32).collect::<String>());
     let body = i18n::landing(lang, &public_base(), &code);
-    shell(lang, &format!("/j/{code}"), "subraum", &body)
+    page(shell(lang, ui, &format!("/j/{code}"), "subraum", &body), chose, ui)
 }
 
 /// Page styling. The look is deliberately a datasheet, not a landing page: the
@@ -426,8 +475,15 @@ color-scheme:dark light;
 @font-face{font-family:"IBM Plex Sans";font-weight:600;font-style:normal;font-display:swap;src:url(/assets/fonts/ps-600.woff2) format("woff2")}
 @font-face{font-family:"IBM Plex Mono";font-weight:400;font-style:normal;font-display:swap;src:url(/assets/fonts/pm-400.woff2) format("woff2")}
 *{box-sizing:border-box}
+/* Display size. Every length in this sheet is rem or em, so moving the root
+   font size scales type, spacing, the content column and the schematic
+   together — which is what "make it bigger" means. Media-query breakpoints are
+   unaffected: rem in a media query resolves against the browser default, not
+   against this. */
+:root[data-ui="lg"]{font-size:118.75%}   /* 19px */
+:root[data-ui="xl"]{font-size:137.5%}    /* 22px */
 body{font-family:var(--sans);font-weight:400;background:var(--bg);color:var(--ink);
-margin:0;line-height:1.6;font-size:16px;-webkit-text-size-adjust:100%}
+margin:0;line-height:1.6;font-size:1rem;-webkit-text-size-adjust:100%}
 /* Links are Patina, not Copper: Copper is spent on the one primary action and
    a page of Copper links would drown it. */
 a{color:var(--accent-2);text-decoration:none;border-bottom:1px solid var(--accent-2)}
@@ -445,14 +501,41 @@ img{max-width:100%;height:auto}
 }
 
 /* ── Frame ─────────────────────────────────────────────────────────────── */
-.top{display:flex;align-items:center;gap:.65rem;padding:.85rem 1.4rem;
+/* Wraps on purpose: at the largest display size on a phone the mark, the name
+   and both switchers do not fit one line, and an unwrapped row pushes the size
+   control off-screen — unreachable for exactly the people who set it. */
+.top{display:flex;align-items:center;flex-wrap:wrap;gap:.65rem;padding:.85rem 1.4rem;
 border-bottom:1px solid var(--line)}
-.top svg{width:26px;height:26px;display:block;flex:none}
+/* rem, not px: the mark has to grow with the display-size setting, or the
+   header stays small while everything under it scales. */
+.top svg{width:1.625rem;height:1.625rem;display:block;flex:none}
 /* The wordmark is set in Michroma at label size, the product name is a
    heading, not UI chrome. Lowercase is deliberate and part of the name. */
 .top .brand{color:var(--ink);font-family:var(--disp);font-weight:400;
 font-size:.9rem;letter-spacing:0;border:0}
-.lang{margin-left:auto;display:flex;gap:.15rem;font-family:var(--mono);font-size:.75rem}
+/* Chrome, not content: the language nav and the size control keep fixed px
+   sizes so the header stays compact at the largest setting. Scaling the
+   controls along with the page is what pushed the row past a phone's width and
+   forced the whole layout to overflow sideways. It wraps for the same reason. */
+.lang{margin-left:auto;display:flex;flex-wrap:wrap;gap:.15rem;font-family:var(--mono);font-size:12px}
+/* Text-size control: three A's that show their own effect. It sits after the
+   language nav and keeps a hairline between them so the two groups do not read
+   as one list. The sizes here are fixed in px on purpose — the control must not
+   grow with the setting it changes, or the largest step pushes the header
+   around. */
+.uisize{display:flex;align-items:baseline;gap:.35rem;margin-left:.9rem;padding-left:.9rem;
+border-left:1px solid var(--line)}
+/* Once the row wraps, the size control starts the new line: drop the divider
+   that would then hang at the left edge, and let it keep the auto margin. */
+@media (max-width:34rem){
+.uisize{margin-left:auto;padding-left:0;border-left:0}
+}
+.uisize a{border:0;color:var(--dim);line-height:1;padding:0 .1rem}
+.uisize a:hover{color:var(--ink)}
+.uisize a.on{color:var(--accent-2)}
+.uisize a.md{font-size:12px}
+.uisize a.lg{font-size:15px}
+.uisize a.xl{font-size:18px}
 .lang a{color:var(--dim);padding:.15rem .4rem;border:0;letter-spacing:.07em}
 .lang a:hover{color:var(--ink)}
 .lang a.on{color:var(--accent-2);border-bottom:1px solid var(--accent-2)}
@@ -466,7 +549,9 @@ footer .rdoc{margin-left:auto;border:0;display:block;padding:.5rem 0}
 /* 150px lockup -> the 220-unit signet lands at 32px, the floor in Kap. 6.
    Below it the 4-degree radial cuts fall under a pixel and the ring reads as a
    plain circle. */
-footer .rdoc img{display:block;width:150px;height:auto}
+/* 9.375rem == 150px at the normal size, where the 220-unit signet lands on the
+   32px floor of Kap. 6. It scales up with the setting and never below. */
+footer .rdoc img{display:block;width:9.375rem;height:auto}
 
 /* ── Sections. A hairline plus a mono eyebrow: the page reads as a datasheet,
       which is what the product is. ───────────────────────────────────────── */
@@ -504,7 +589,10 @@ padding:.05rem .32rem;border-radius:2px}
       an argument rather than a claim. Colours come from tokens, so it follows
       the scheme. ─────────────────────────────────────────────────────────── */
 .diagram{margin:1.8rem 0 .6rem;border:1px solid var(--line);padding:1.4rem;overflow-x:auto}
-.diagram svg{display:block;width:100%;height:auto;min-width:24rem}
+/* px, not rem: the floor is about the schematic staying readable, and in rem it
+   would grow with the display size and force its own scrollbar at the largest
+   step. The container scrolls it when it does not fit. */
+.diagram svg{display:block;width:100%;height:auto;min-width:384px}
 .diagram figcaption{font-family:var(--mono);font-size:.8125rem;line-height:1.3;
 color:var(--dim);margin-top:1rem;letter-spacing:.07em}
 
@@ -720,7 +808,7 @@ fn footer(base: &str, lang: Lang) -> String {
     )
 }
 
-fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
+fn shell(lang: Lang, ui: Ui, path: &str, title: &str, body: &str) -> Html<String> {
     let base = public_base();
     let lc = lang.code();
     let desc = i18n::meta_desc(lang);
@@ -728,7 +816,7 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
     let og_image = format!("{base}/assets/og-image.png");
     let og_url = format!("{base}{path}");
     Html(format!(
-        "<!doctype html><html lang=\"{lc}\"><head><meta charset=\"utf-8\">{HTML_CSP}\
+        "<!doctype html><html lang=\"{lc}\" data-ui=\"{uic}\"><head><meta charset=\"utf-8\">{HTML_CSP}\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <title>{title} | subraum</title>\
 <meta name=\"description\" content=\"{desc}\">\
@@ -751,34 +839,39 @@ fn shell(lang: Lang, path: &str, title: &str, body: &str) -> Html<String> {
 <a class=\"brand\" href=\"/?lang={lc}\">subraum</a>{sw}</header>\
 <main>{body}</main><footer>{footer}</footer></body></html>",
         css = PAGE_CSS,
+        uic = ui.code(),
         mark = MARK_INLINE,
-        sw = i18n::switcher(path, lang),
+        sw = i18n::switcher(path, lang, ui),
         footer = footer(&base, lang),
     ))
 }
 
-async fn home(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn home(RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let (title, body) = i18n::home(lang, &public_base(), SHOTS.len());
-    shell(lang, "/", title, &body)
+    page(shell(lang, ui, "/", title, &body), chose, ui)
 }
 
-async fn privacy(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn privacy(RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let (title, body) = i18n::privacy(lang);
-    shell(lang, "/privacy", title, &body)
+    page(shell(lang, ui, "/privacy", title, &body), chose, ui)
 }
 
-async fn legal(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn legal(RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let (title, body) = i18n::legal(lang);
-    shell(lang, "/legal", title, &body)
+    page(shell(lang, ui, "/legal", title, &body), chose, ui)
 }
 
-async fn license_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn license_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let (title, body) = i18n::license(lang);
-    shell(lang, "/license", title, &body)
+    page(shell(lang, ui, "/license", title, &body), chose, ui)
 }
 
 /// The public changelog, rendered from the repo `CHANGELOG.md` (embedded at
@@ -786,10 +879,11 @@ async fn license_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String>
 /// is a single mixed EN/DE document.
 const CHANGELOG_MD: &str = include_str!("../../../CHANGELOG.md");
 
-async fn changelog_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn changelog_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let body = i18n::doc(&render_changelog(CHANGELOG_MD));
-    shell(lang, "/changelog", "Changelog", &body)
+    page(shell(lang, ui, "/changelog", "Changelog", &body), chose, ui)
 }
 
 /// Minimal, trusted-input Markdown → HTML for the changelog. Handles the subset
@@ -852,11 +946,12 @@ fn render_changelog(md: &str) -> String {
 
 /// Localized download page: lists every mirrored installer + its SHA-256, read
 /// from $DOWNLOADS_DIR/manifest.json (written by deploy/pull-installer.sh).
-async fn downloads_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Html<String> {
+async fn downloads_page(RawQuery(q): RawQuery, headers: HeaderMap) -> Response {
     let lang = lang_of(&q, &headers);
+    let (ui, chose) = ui_of(&q, &headers);
     let (version, arts) = load_manifest();
     let (title, body) = i18n::downloads(lang, &public_base(), version.as_deref(), &arts);
-    shell(lang, "/get", title, &body)
+    page(shell(lang, ui, "/get", title, &body), chose, ui)
 }
 
 fn downloads_dir() -> String {
