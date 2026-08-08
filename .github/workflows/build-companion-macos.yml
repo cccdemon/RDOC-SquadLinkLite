@@ -1,13 +1,18 @@
 name: Build subraum (macOS)
 
-# Builds the subraum desktop app for macOS — one native job per
-# arch (Apple Silicon on macos-14, Intel on macos-13), so each .dmg links the
-# real system WebKit.
+# Builds the subraum desktop app for macOS on Apple Silicon (macos-14), so the
+# .dmg links the real system WebKit.
+#
+# Intel (x86_64 on macos-13) was dropped in v0.3.0. The runner image is
+# deprecated and starved — the job routinely sat queued for hours and held up
+# releases — and the audience for an unsigned Intel build had gone. The matrix
+# is kept with a single entry because every path, artifact and checksum name is
+# arch-suffixed; add an entry back if Intel ever returns.
 #
 # - push to main / manual run        → builds + uploads bundles as workflow artifacts
 # - push a tag `subraum-v*`   → also attaches the bundles to the GitHub Release
 #
-# Output: .dmg + .app (arm64 + x86_64).
+# Output: .dmg + .app (arm64).
 # The build is UNSIGNED and NOT notarized — no Apple Developer account yet. On
 # first launch Gatekeeper blocks it: right-click the app → Open → Open, or
 # `xattr -dr com.apple.quarantine "subraum.app"`.
@@ -34,9 +39,6 @@ jobs:
           - arch: aarch64
             runner: macos-14 # Apple Silicon
             rust_target: aarch64-apple-darwin
-          - arch: x86_64
-            runner: macos-13 # Intel
-            rust_target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7

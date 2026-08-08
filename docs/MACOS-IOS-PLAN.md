@@ -81,4 +81,4 @@ Mirror the existing Linux/Android workflows (same triggers, checksum + release s
 ## 5. Open decisions before starting Apple builds
 - Apple Developer Program enrolled? (org "Raumdock" vs personal)
 - Mac App Store + iOS App Store, or direct/TestFlight only for the prototype?
-- Universal macOS binary vs separate Intel/ARM DMGs.
+- ~~Universal macOS binary vs separate Intel/ARM DMGs.~~ Decided in v0.3.0: Apple Silicon only. The Intel runner image is deprecated and starved, and an unsigned Intel build had no audience left.
