@@ -173,6 +173,10 @@ fn store_badge(label: &str) -> String {
 /// talks to the signaling service) laid over a solid mesh for data (every peer
 /// talks to every other peer directly). The two link styles are the argument —
 /// audio never touches the centre.
+///
+/// The mesh and the peer dots carry Patina, the brand's colour for one data
+/// series; the control star stays Steel. Solid versus dashed already says it,
+/// so the schematic still reads with no colour at all.
 fn topology_svg(t: &HomeText) -> String {
     // Peers on a shallow arc; signaling box centred above them.
     let peers = [(80, 176), (268, 222), (452, 222), (640, 176)];
@@ -195,12 +199,12 @@ fn topology_svg(t: &HomeText) -> String {
         r##"<figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="{alt}">
 <title>{alt}</title>
-<g stroke="var(--dim)" stroke-width="2.5" stroke-linecap="round">{mesh}</g>
+<g stroke="var(--accent-2)" stroke-width="2.5" stroke-linecap="round">{mesh}</g>
 <g stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="3 7" stroke-linecap="round" opacity=".7">{ctrl}</g>
 <rect x="252" y="14" width="216" height="60" fill="var(--bg)" stroke="var(--dim)" stroke-width="1.5"/>
 <text x="360" y="40" text-anchor="middle" fill="var(--ink)" font-size="16" font-family="IBM Plex Mono,ui-monospace,monospace">{srv}</text>
 <text x="360" y="60" text-anchor="middle" fill="var(--dim)" font-size="12" font-family="IBM Plex Mono,ui-monospace,monospace">{srv_sub}</text>
-<g fill="var(--ink)">{dots}</g>
+<g fill="var(--accent-2)">{dots}</g>
 </svg>
 <figcaption>── {data} &nbsp;&nbsp; ┄┄ {ctrl_l}</figcaption>
 </figure>"##,

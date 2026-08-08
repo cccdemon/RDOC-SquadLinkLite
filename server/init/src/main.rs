@@ -378,7 +378,7 @@ async fn landing(Path(code): Path<String>, RawQuery(q): RawQuery, headers: Heade
 /// marketing furniture. No webfont — the CSP allows no font-src, and the system
 /// mono stack is what a spec sheet would use anyway.
 const PAGE_CSS: &str = r#"<style>
-/* RDOC brand system, Markenhandbuch v2.1.
+/* RDOC brand system, Markenhandbuch v2.2.
    Rules this file is bound by, quoted where they bite:
    - Michroma is the ONLY display face and has exactly one cut. Emphasis in a
      heading comes from size and colour, never font-weight (Kap. 10).
@@ -389,12 +389,23 @@ const PAGE_CSS: &str = r#"<style>
    - No gradient, shadow, glow, bevel (Kap. 8).
    - Light mode is measured, not inverted (Kap. 8). Copper drops to Copper Deep
      there because #C48A4A reaches only 2.65:1 on Off White.
-   - State is never colour alone (Kap. 16). */
+   - State is never colour alone (Kap. 16).
+   - Patina is the second accent added in v2.2 (Kap. 8). It carries STRUCTURE:
+     section markers, table heads, step numbers, one data series. Three rules
+     bound it and all three are load-bearing here:
+       1. Patina is never the signet ring. The ring stays Copper.
+       2. Patina is not a second primary action. Copper is the button.
+       3. Patina is not a state colour. A state carries the functional colour
+          and a word, never Patina and never grey.
+     Like Copper it fails on a light ground (#4FB5B5 is 2.12:1 on Off White),
+     so light mode swaps in Patina Deep #175F63 at 6.57:1.
+     Before v2.2 everything that was not the one primary action fell back to
+     Steel, which is why the page read as one flat grey. */
 :root{
 color-scheme:dark light;
 /* Dark is the default ground. */
 --bg:#121416;--surface:#2B3135;--line:#2B3135;
---ink:#F2F2F0;--dim:#76828D;--accent:#C48A4A;--focus:#E0A868;
+--ink:#F2F2F0;--dim:#76828D;--accent:#C48A4A;--accent-2:#4FB5B5;--focus:#E0A868;
 /* Copper on Space is 6.22:1, legible as text. On Off White it is not, so the
    light block below swaps in Copper Deep. */
 --accent-ink:#121416;
@@ -406,7 +417,7 @@ color-scheme:dark light;
 @media (prefers-color-scheme:light){
 :root{
 --bg:#F2F2F0;--surface:#E4E4E1;--line:#C7C9C6;
---ink:#121416;--dim:#4E5862;--accent:#8A5A22;--focus:#6E4517;
+--ink:#121416;--dim:#4E5862;--accent:#8A5A22;--accent-2:#175F63;--focus:#6E4517;
 --accent-ink:#F2F2F0;
 }
 }
@@ -417,8 +428,10 @@ color-scheme:dark light;
 *{box-sizing:border-box}
 body{font-family:var(--sans);font-weight:400;background:var(--bg);color:var(--ink);
 margin:0;line-height:1.6;font-size:16px;-webkit-text-size-adjust:100%}
-a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dim)}
-a:hover{border-bottom-color:var(--ink)}
+/* Links are Patina, not Copper: Copper is spent on the one primary action and
+   a page of Copper links would drown it. */
+a{color:var(--accent-2);text-decoration:none;border-bottom:1px solid var(--accent-2)}
+a:hover{color:var(--ink);border-bottom-color:var(--ink)}
 a:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 img{max-width:100%;height:auto}
 
@@ -442,12 +455,12 @@ font-size:.9rem;letter-spacing:0;border:0}
 .lang{margin-left:auto;display:flex;gap:.15rem;font-family:var(--mono);font-size:.75rem}
 .lang a{color:var(--dim);padding:.15rem .4rem;border:0;letter-spacing:.07em}
 .lang a:hover{color:var(--ink)}
-.lang a.on{color:var(--ink);border-bottom:1px solid var(--dim)}
+.lang a.on{color:var(--accent-2);border-bottom:1px solid var(--accent-2)}
 main{max-width:var(--wrap);margin:0 auto;padding:0 1.4rem 4rem}
 footer{max-width:var(--wrap);margin:0 auto;padding:1.4rem;border-top:1px solid var(--line);
 color:var(--dim);font-size:.875rem;display:flex;flex-wrap:wrap;align-items:center;gap:.35rem 1.3rem}
 footer a{color:var(--dim);border:0}
-footer a:hover{color:var(--ink)}
+footer a:hover{color:var(--accent-2)}
 /* Clear space is half the cap height, applied as padding, nothing enters it. */
 footer .rdoc{margin-left:auto;border:0;display:block;padding:.5rem 0}
 /* 150px lockup -> the 220-unit signet lands at 32px, the floor in Kap. 6.
@@ -461,7 +474,9 @@ footer .rdoc img{display:block;width:150px;height:auto}
 .sec:first-of-type{border-top:0;margin-top:0}
 .eyebrow{font-family:var(--mono);font-size:.8125rem;line-height:1.3;letter-spacing:.07em;
 text-transform:uppercase;color:var(--dim);margin:0 0 1rem}
-.eyebrow b{color:var(--ink);font-weight:400}
+/* The eyebrow names the layer being described — a section marker, which is
+   exactly what Patina is for. */
+.eyebrow b{color:var(--accent-2);font-weight:400}
 .prose{max-width:var(--prose)}
 /* Michroma: one cut, tracking 0, no synthetic weight anywhere below. */
 h1,h2,h3{font-family:var(--disp);font-weight:400;letter-spacing:0;
@@ -501,6 +516,9 @@ gap:1px;background:var(--line);border:1px solid var(--line);margin:1.5rem 0}
 .plane h3{margin:.2rem 0 .5rem;font-size:1.3125rem}
 .plane .tag{font-family:var(--mono);font-size:.8125rem;letter-spacing:.07em;
 text-transform:uppercase;color:var(--dim)}
+/* One data series carries Patina — here the plane the product is about. The
+   control plane stays Steel; that contrast is the whole point of the pair. */
+.plane.p2p .tag{color:var(--accent-2)}
 .plane p{margin:.45rem 0;font-size:.9375rem;color:var(--dim)}
 .plane p strong{color:var(--ink)}
 
@@ -510,7 +528,7 @@ text-transform:uppercase;color:var(--dim)}
 .spec div{display:flex;align-items:baseline;gap:.8rem;padding:.6rem 0;
 border-bottom:1px solid var(--line);font-size:.9375rem}
 .spec dt,.spec .k{font-family:var(--mono);font-size:.8125rem;letter-spacing:.07em;
-color:var(--dim);flex:none;min-width:14rem}
+color:var(--accent-2);flex:none;min-width:14rem}
 .spec dd,.spec .v{margin:0;color:var(--ink)}
 /* State carries the word, never colour alone. */
 .spec .no,.spec .yes{color:var(--ink)}
@@ -519,7 +537,7 @@ color:var(--dim);flex:none;min-width:14rem}
 .steps{counter-reset:s;list-style:none;padding:0;margin:1.2rem 0;max-width:var(--prose)}
 .steps li{counter-increment:s;position:relative;padding-left:2.8rem;margin:1rem 0}
 .steps li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.1rem;
-font-family:var(--mono);font-size:.8125rem;color:var(--dim);letter-spacing:.07em}
+font-family:var(--mono);font-size:.8125rem;color:var(--accent-2);letter-spacing:.07em}
 
 /* ── Actions. Copper is the primary action and appears once per view. ───── */
 .dl{display:inline-block;margin:.4rem .5rem .4rem 0;padding:.65rem 1.05rem;
@@ -530,7 +548,7 @@ background:var(--accent);color:var(--accent-ink);font-weight:600;
 padding:.75rem 1.2rem;font-size:1rem}
 .dl.store:hover{background:var(--accent);color:var(--accent-ink);border-color:var(--ink)}
 .dl.store svg{display:block;flex:none}
-.announce{border:1px solid var(--line);border-left:2px solid var(--dim);
+.announce{border:1px solid var(--line);border-left:2px solid var(--accent-2);
 padding:.9rem 1.1rem;color:var(--dim);font-size:.9375rem}
 .announce strong{color:var(--ink)}
 
@@ -564,7 +582,7 @@ display:inline-block;color:var(--ink)}
 .links a{display:block;margin:.4rem 0;width:fit-content}
 
 /* ── Changelog. Versions are machine-made identifiers → mono, not Michroma. */
-h2.ver{font-family:var(--mono);font-size:1rem;letter-spacing:.07em;color:var(--ink);
+h2.ver{font-family:var(--mono);font-size:1rem;letter-spacing:.07em;color:var(--accent-2);
 font-weight:400;border-top:1px solid var(--line);padding-top:1.2rem;margin-top:2.2rem}
 
 @media (max-width:34rem){
