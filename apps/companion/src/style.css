@@ -1,16 +1,75 @@
+/* subraum app UI — RDOC brand system, Markenhandbuch v2.2.
+   The rules that actually bind this file, quoted where they bite:
+
+   - Palette only. Space is the ground, Graphite is surface and hairline, Steel
+     is secondary text, Off White is the foreground. Copper marks exactly ONE
+     element per view: the primary action. Patina carries structure and identity
+     (Kap. 8). Nothing outside those six plus the functional set appears here.
+   - Steel is a text colour on SPACE only. It measures 4.70:1 there and 3.36:1
+     on Graphite, which misses the 4.5:1 floor (Kap. 16). That is why cards and
+     inputs are Space with a Graphite hairline, and Graphite fills only carry
+     Off White text.
+   - Functional colours (Success/Warning/Error/Info) are product-UI colours and
+     belong here — unlike on the marketing site. They are never a second brand
+     accent; that is Patina's job. Their hues moved in v2.2 so a warning next to
+     a Copper button still reads as a warning (Kap. 8).
+   - State is never colour alone (Kap. 16). Every coloured state in this file
+     sits next to its own word or icon.
+   - No gradient, glow, shadow or bevel. Ever (Kap. 8). The previous UI used
+     nine glow shadows and one gradient; none survived.
+   - Michroma has exactly one cut. It sets the wordmark and nothing else here —
+     a dense operator UI is not the place for a display face, and a synthetic
+     bold would be visibly broken. Emphasis is Plex Sans 600, which is a real
+     file (Kap. 10).
+   - Uppercase is for short labels only, tracked 0.07em. Past ~0.08em a cap
+     string stops reading as a word (Kap. 10). The old 1px/1.5px tracking was
+     size-dependent and drifted; em keeps it honest.
+
+   Dark only, deliberately: this runs next to a game, and the in-game overlay
+   has to stay dark and transparent. The guide's measured light palette is used
+   on the website, not here. */
+
+/* Michroma 400, IBM Plex Sans 400/600, IBM Plex Mono 400 — SIL OFL 1.1, the
+   same subset files the website ships (see src/fonts/README.md). Bundled, so
+   the strict Tauri CSP needs no font host. */
+@font-face{font-family:"Michroma";font-weight:400;font-style:normal;font-display:swap;
+  src:url("./fonts/mi-400.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:400;font-style:normal;font-display:swap;
+  src:url("./fonts/ps-400.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:600;font-style:normal;font-display:swap;
+  src:url("./fonts/ps-600.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-weight:400;font-style:normal;font-display:swap;
+  src:url("./fonts/pm-400.woff2") format("woff2")}
+
 :root {
-  --bg: #0a0e12;
-  --panel: #121820;
-  --panel2: #0e141b;
-  --line: #1e2a36;
-  --cyan: #35d0e0;
-  --cyan-dim: #1d7e88;
-  --green: #3ad07a;
-  --yellow: #e0b835;
-  --red: #e0573a;
-  --txt: #c8d6df;
-  --dim: #6c7c88;
-  --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  /* Brand palette */
+  --space: #121416;
+  --graphite: #2b3135;
+  --steel: #76828d;
+  --offwhite: #f2f2f0;
+  --copper: #c48a4a;
+  --patina: #4fb5b5;
+  --focus: #e0a868;
+
+  /* Functional set, v2.2 hues */
+  --ok: #63c271;
+  --warn: #ebcf52;
+  --err: #ee6e76;
+  --info: #79aedc;
+
+  /* Roles. --panel is the ground a card sits on (Space, so Steel stays legible
+     inside it); --fill is the Graphite surface for chrome that carries Off
+     White text: header, chips, hover states, the settings sheet. */
+  --bg: var(--space);
+  --panel: var(--space);
+  --fill: var(--graphite);
+  --line: var(--graphite);
+  --txt: var(--offwhite);
+  --dim: var(--steel);
+
+  --sans: "IBM Plex Sans", system-ui, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --disp: "Michroma", var(--sans);
 }
 
 * { box-sizing: border-box; }
@@ -18,16 +77,24 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--txt);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
   font-size: 14px;
+}
+/* Focus is visible and is never only a colour change (Kap. 16). */
+:where(button, input, textarea, select, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 .screen { height: 100vh; display: flex; flex-direction: column; }
 .center { align-items: center; justify-content: center; }
 
-.brand { font-weight: 700; letter-spacing: 1px; font-size: 20px; }
-.brand span { color: var(--cyan); }
-.brand.sm { font-size: 15px; }
-.sub { color: var(--dim); margin: 2px 0 18px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+/* The product name is set in Michroma. It is not the RDOC wordmark, so the
+   split colouring is allowed; Patina carries the second half, never Copper —
+   Copper is spent on the action. */
+.brand { font-family: var(--disp); font-weight: 400; letter-spacing: 0; font-size: 19px; }
+.brand span { color: var(--patina); }
+.brand.sm { font-size: 14px; }
+.sub { color: var(--dim); margin: 2px 0 18px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; font-family: var(--mono); }
 
 .card {
   background: var(--panel);
@@ -36,61 +103,77 @@ body {
   padding: 22px;
 }
 .connect { width: 380px; display: flex; flex-direction: column; }
-.connect label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 12px 0 4px; }
-.connect .opt { color: var(--cyan-dim); text-transform: none; letter-spacing: 0; }
+.connect label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; font-family: var(--mono); color: var(--dim); margin: 12px 0 4px; }
+.connect .opt { color: var(--patina); text-transform: none; letter-spacing: 0; }
 input {
-  background: var(--panel2);
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--txt);
   border-radius: 6px;
   padding: 9px 10px;
   font-size: 13px;
+  font-family: var(--sans);
   outline: none;
 }
-input:focus { border-color: var(--cyan-dim); }
+input::placeholder { color: var(--dim); }
+input:focus { border-color: var(--patina); }
 input.mono { font-family: var(--mono); font-size: 11px; }
 
 .btn {
-  background: var(--panel2);
+  background: var(--fill);
   border: 1px solid var(--line);
   color: var(--txt);
   border-radius: 6px;
   padding: 9px 14px;
   cursor: pointer;
+  font-family: var(--sans);
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 0;
 }
-.btn:hover { border-color: var(--cyan-dim); }
-.btn.primary { background: var(--cyan-dim); border-color: var(--cyan); color: #04141a; margin-top: 18px; }
+.btn:hover { border-color: var(--patina); }
+/* The one Copper element of the connect view. Copper as a background is only
+   allowed on a surface that IS the primary action (Kap. 8). */
+.btn.primary { background: var(--copper); border-color: var(--copper); color: var(--space); margin-top: 18px; }
+.btn.primary:hover { background: var(--focus); border-color: var(--focus); }
 .btn.primary:disabled { opacity: 0.5; cursor: default; }
-.btn.sm { padding: 6px 10px; font-size: 11px; margin-top: 4px; letter-spacing: 0.5px; }
+/* Second-rank action. A view offers at most one Copper surface, so every other
+   real action — join a session, install an update — is a Patina outline: still
+   an action, visibly not THE action. */
+.btn.alt { background: transparent; border-color: var(--patina); color: var(--patina); }
+.btn.alt:hover:not(:disabled) { background: var(--fill); }
+.btn.alt:disabled { opacity: 0.5; cursor: default; }
+.btn.sm { padding: 6px 10px; font-size: 11px; margin-top: 4px; }
 .btn.ghost { background: transparent; }
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
-.tab { flex: 1; background: var(--panel2); border: 1px solid var(--line); color: var(--dim); border-radius: 6px; padding: 8px; cursor: pointer; font-weight: 600; letter-spacing: 1px; font-size: 12px; }
-.tab.on { color: var(--cyan); border-color: var(--cyan-dim); background: #102028; }
+.tab { flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--dim); border-radius: 6px; padding: 8px; cursor: pointer; font-family: var(--sans); font-weight: 600; font-size: 12px; }
+.tab.on { color: var(--patina); border-color: var(--patina); background: var(--fill); }
 .sub2 { color: var(--dim); font-size: 11px; margin: 8px 0; line-height: 1.45; }
 .srole { display: flex; gap: 8px; margin-top: 8px; }
 .srole .btn { flex: 1; }
 .serverless { display: flex; flex-direction: column; }
-.serverless label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 12px 0 4px; }
-textarea.code { background: var(--panel2); border: 1px solid var(--line); color: var(--txt); border-radius: 6px; padding: 8px; font-family: var(--mono); font-size: 10px; height: 68px; resize: vertical; outline: none; width: 100%; box-sizing: border-box; }
-textarea.code:focus { border-color: var(--cyan-dim); }
+.serverless label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; font-family: var(--mono); color: var(--dim); margin: 12px 0 4px; }
+textarea.code { background: var(--panel); border: 1px solid var(--line); color: var(--txt); border-radius: 6px; padding: 8px; font-family: var(--mono); font-size: 10px; height: 68px; resize: vertical; outline: none; width: 100%; box-sizing: border-box; }
+textarea.code:focus { border-color: var(--patina); }
 
-.err, .footlog { color: var(--red); font-size: 12px; margin-top: 12px; font-family: var(--mono); }
+.err, .footlog { color: var(--err); font-size: 12px; margin-top: 12px; font-family: var(--mono); }
 .footlog { padding: 6px 14px; border-top: 1px solid var(--line); }
 
 header {
   display: flex; align-items: center; gap: 10px;
-  padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel2);
+  padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--fill);
 }
+/* Status dots always sit next to their own word (.hstatus), so the colour is
+   the second signal, not the only one. No glow — the guide rules it out. */
 .dot { width: 9px; height: 9px; border-radius: 50%; margin-left: auto; }
-.dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
-.dot.tx { background: var(--red); box-shadow: 0 0 8px var(--red); }
-.hstatus { font-size: 12px; letter-spacing: 1px; color: var(--dim); }
+.dot.ok { background: var(--ok); }
+/* Transmit mirrors the primary action, so it carries the action's colour. */
+.dot.tx { background: var(--copper); }
+.hstatus { font-size: 12px; letter-spacing: 0.07em; font-family: var(--mono); color: var(--dim); }
 
 main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); overflow: hidden; }
 section { background: var(--bg); padding: 14px 16px; display: flex; flex-direction: column; min-height: 0; }
-.hsec { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); margin-bottom: 10px; }
+/* Section marker: Patina's job in the system. */
+.hsec { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; font-family: var(--mono); color: var(--patina); margin-bottom: 10px; }
 
 .roster { gap: 6px; }
 /* Participant list scrolls on its own so PTT + self-controls stay visible no
@@ -101,21 +184,23 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   padding: 9px 11px;
 }
-.peer.speaking { border-color: var(--green); }
+.peer.speaking { border-color: var(--ok); }
 .talk { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
-.talk.on { background: var(--green); box-shadow: 0 0 7px var(--green); }
+.talk.on { background: var(--ok); }
 .pname { font-weight: 600; }
-.me { color: var(--cyan); font-weight: 400; }
+.me { color: var(--patina); font-weight: 400; }
 .badge {
-  margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  font-family: var(--mono);
   padding: 2px 7px; border-radius: 4px;
 }
-.badge.direct { color: var(--green); border: 1px solid var(--green); }
-.badge.relay { color: var(--yellow); border: 1px solid var(--yellow); }
+/* Both badges carry their word (DIRECT / RELAY); the colour repeats it. */
+.badge.direct { color: var(--ok); border: 1px solid var(--ok); }
+.badge.relay { color: var(--warn); border: 1px solid var(--warn); }
 /* Channel (frequency) badge on each peer. The chan badge takes the margin-auto
    so it right-aligns; a following connection badge trails it. */
 .badge.chan { margin-left: auto; }
-.badge.chan.same { color: var(--cyan); border: 1px solid var(--cyan-dim); }
+.badge.chan.same { color: var(--patina); border: 1px solid var(--patina); }
 .badge.chan.other { color: var(--dim); border: 1px solid var(--line); }
 .badge.chan + .badge { margin-left: 6px; }
 /* Off-channel peers: dimmed (you don't hear them). */
@@ -125,35 +210,37 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .chanbar { margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
 .chanchips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chanchip {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
   padding: 5px 10px; border-radius: 14px; cursor: pointer;
   background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+  font-family: var(--sans);
 }
-.chanchip:hover { border-color: var(--cyan-dim); color: var(--txt); }
-.chanchip.active { background: var(--panel2); border-color: var(--cyan); color: var(--cyan); }
+.chanchip:hover { border-color: var(--patina); color: var(--txt); }
+.chanchip.active { background: var(--fill); border-color: var(--patina); color: var(--patina); }
 .chanchipwrap { display: inline-flex; align-items: center; gap: 3px; }
 .chandel {
   width: 18px; height: 18px; line-height: 1; padding: 0; cursor: pointer;
-  border-radius: 50%; font-size: 13px; font-weight: 700;
+  border-radius: 50%; font-size: 13px; font-weight: 600;
   background: var(--panel); border: 1px solid var(--line); color: var(--dim);
 }
-.chandel:hover { border-color: var(--red, #d05); color: var(--red, #d05); }
+.chandel:hover { border-color: var(--err); color: var(--err); }
 
 /* ── Channel overlay window (separate transparent, click-through window) ── */
 .overlay-mode, .overlay-mode body, .overlay-mode #root {
   background: transparent !important; margin: 0; overflow: hidden;
   height: 100%; width: 100%;
 }
+/* Sits over the game: Space at 78% so it reads on any scene, Patina when it
+   flashes on a channel switch. No shadow — the border does the separating. */
 .ovl {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 12px; border-radius: 999px;
-  background: rgba(10, 14, 20, 0.72); border: 1px solid #2a3140;
-  color: #cfe0ff; font-weight: 700; letter-spacing: 0.3px;
+  background: rgba(18, 20, 22, 0.78); border: 1px solid var(--graphite);
+  color: var(--offwhite); font-family: var(--sans); font-weight: 600; letter-spacing: 0;
   white-space: nowrap; user-select: none;
   opacity: 0.5; transition: opacity 0.25s, border-color 0.25s, background 0.25s;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
-.ovl-flash { opacity: 1; border-color: #7fb0ff; background: rgba(16, 32, 58, 0.9); }
+.ovl-flash { opacity: 1; border-color: var(--patina); background: rgba(18, 20, 22, 0.92); }
 .ovl-ico { opacity: 0.85; }
 .ovl-s { font-size: 12px; padding: 3px 9px; }
 .ovl-m { font-size: 15px; padding: 5px 12px; }
@@ -163,14 +250,14 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .ovlcfg { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
 .ovlcfg-off { opacity: 0.5; }
 .ovlrow { display: flex; align-items: center; gap: 10px; }
-.ovllbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; width: 68px; flex: none; }
+.ovllbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.07em; font-family: var(--mono); width: 68px; flex: none; }
 .ovlposgrid { display: grid; grid-template-columns: repeat(3, 30px); grid-auto-rows: 26px; gap: 4px; }
 .ovlposbtn {
   background: var(--panel); border: 1px solid var(--line); color: var(--dim);
   border-radius: 5px; cursor: pointer; font-size: 13px; line-height: 1;
 }
-.ovlposbtn:hover:not(:disabled) { border-color: var(--cyan-dim); color: var(--txt); }
-.ovlposbtn.on { border-color: var(--cyan); color: var(--cyan); background: var(--panel2); }
+.ovlposbtn:hover:not(:disabled) { border-color: var(--patina); color: var(--txt); }
+.ovlposbtn.on { border-color: var(--patina); color: var(--patina); background: var(--fill); }
 .ovlposbtn:disabled { cursor: default; }
 .ovlsizes { display: flex; gap: 6px; }
 .ovlsizes .btn.sm { margin-top: 0; }
@@ -186,55 +273,62 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .redacted { filter: blur(7px); user-select: none; }
 .sesshead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .streamtoggle {
-  font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
   padding: 4px 9px; border-radius: 12px; cursor: pointer;
   background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+  font-family: var(--sans);
 }
-.streamtoggle:hover { border-color: var(--cyan-dim); color: var(--txt); }
-.streamtoggle.on { color: var(--yellow); border-color: var(--yellow); }
+.streamtoggle:hover { border-color: var(--patina); color: var(--txt); }
+/* A mode, not a warning — so Patina, not the functional set. */
+.streamtoggle.on { color: var(--patina); border-color: var(--patina); }
 
-/* Testmode: pre-session network self-check with an overall verdict. */
+/* Testmode: pre-session network self-check with an overall verdict. Each
+   verdict prints its own sentence, so the border colour only repeats it. */
 .testmode { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; }
 .testverdict {
   border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px;
   font-size: 12px; line-height: 1.5; background: var(--panel);
 }
-.testverdict.ok { border-color: var(--green); }
-.testverdict.warn { border-color: var(--yellow); }
-.testverdict.bad { border-color: var(--red, #d05); }
-.tvhead { font-weight: 700; letter-spacing: 0.3px; margin-bottom: 4px; }
-.tvrow { color: var(--dim); font-family: ui-monospace, monospace; font-size: 11px; }
-.tvhint { margin-top: 5px; color: var(--yellow); font-size: 11px; }
+.testverdict.ok { border-color: var(--ok); }
+.testverdict.warn { border-color: var(--warn); }
+.testverdict.bad { border-color: var(--err); }
+.tvhead { font-weight: 600; letter-spacing: 0; margin-bottom: 4px; }
+.tvrow { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+.tvhint { margin-top: 5px; color: var(--warn); font-size: 11px; }
 
+/* Push-to-talk: the primary action of the session view, and therefore the one
+   element here that carries Copper. Idle is the outline, transmitting fills —
+   the label changes with it, so the state never rests on colour alone. */
 .ptt {
   margin-top: auto;
-  background: var(--panel2); border: 2px solid var(--cyan-dim); color: var(--cyan);
-  border-radius: 8px; padding: 18px; font-weight: 700; letter-spacing: 1px;
-  cursor: pointer; font-size: 14px;
+  background: var(--panel); border: 2px solid var(--copper); color: var(--copper);
+  border-radius: 8px; padding: 18px; font-weight: 600; letter-spacing: 0;
+  cursor: pointer; font-size: 14px; font-family: var(--sans);
 }
-.ptt:hover { background: #102028; }
-.ptt.live { background: var(--red); border-color: var(--red); color: #fff; }
-.ptthint { display: block; margin-top: 6px; font-size: 10px; font-weight: 400; letter-spacing: 0.5px; color: var(--dim); }
-.ptt.live .ptthint { color: rgba(255, 255, 255, 0.7); }
+.ptt:hover { background: var(--fill); }
+.ptt.live { background: var(--copper); border-color: var(--copper); color: var(--space); }
+.ptthint { display: block; margin-top: 6px; font-size: 10px; font-weight: 400; letter-spacing: 0.02em; color: var(--dim); }
+.ptt.live .ptthint { color: var(--space); opacity: 0.75; }
 
 .chat { min-height: 0; }
 .chatlog { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .line { display: flex; gap: 8px; align-items: baseline; }
-.from { color: var(--cyan); font-weight: 600; font-size: 12px; flex: none; min-width: 60px; }
+.from { color: var(--patina); font-weight: 600; font-size: 12px; flex: none; min-width: 60px; }
 .text { word-break: break-word; }
 .chatin { display: flex; gap: 8px; margin-top: 10px; }
 .chatin input { flex: 1; }
 
 /* Session brokering (PIN link) */
 .session { display: flex; flex-direction: column; gap: .5rem; }
-.sessbox { margin-top: .6rem; padding: .7rem; border: 1px solid #1e293b; border-radius: 8px; background: rgba(2,8,20,.5); display: flex; flex-direction: column; gap: .4rem; }
-.pin { font-size: 1.5rem; font-weight: 700; letter-spacing: .18em; color: #38bdf8; padding: .2rem 0; }
+.sessbox { margin-top: .6rem; padding: .7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: .4rem; }
+/* The PIN is a machine-made identifier, not an action: mono and Patina. */
+.pin { font-size: 1.5rem; font-weight: 400; letter-spacing: .18em; font-family: var(--mono); color: var(--patina); padding: .2rem 0; }
 
 /* Fleetplanner-Modus: hidden corner toggle + direct-link box */
-.fpcorner { position: fixed; right: 14px; bottom: 12px; width: 30px; height: 30px; border: 1px solid #1e293b; border-radius: 8px; background: rgba(2,8,20,.5); color: #475569; font-size: 1rem; line-height: 1; cursor: pointer; opacity: .45; transition: opacity .15s, color .15s, border-color .15s; }
-.fpcorner:hover { opacity: 1; border-color: #334155; }
-.fpcorner.on { opacity: 1; color: #38bdf8; border-color: #38bdf8; }
-.fpbox { margin-top: .8rem; padding: .7rem; border: 1px solid #38bdf8; border-radius: 8px; background: rgba(2,8,20,.5); display: flex; flex-direction: column; gap: .4rem; }
+.fpcorner { position: fixed; right: 14px; bottom: 12px; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--dim); font-size: 1rem; line-height: 1; cursor: pointer; opacity: .45; transition: opacity .15s, color .15s, border-color .15s; }
+.fpcorner:hover { opacity: 1; border-color: var(--steel); }
+.fpcorner.on { opacity: 1; color: var(--patina); border-color: var(--patina); }
+.fpbox { margin-top: .8rem; padding: .7rem; border: 1px solid var(--patina); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: .4rem; }
 
 /* Share panel inside the connected session (host) */
 .sessbox-live { margin-bottom: .8rem; }
@@ -244,95 +338,108 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 
 /* Gear settings + volumes + net/enc */
 .brandrow { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.gear { background: none; border: 1px solid #1e293b; color: #cbd5e1; border-radius: 8px; width: 34px; height: 34px; font-size: 1.05rem; cursor: pointer; }
-.gear:hover { border-color: #334155; }
-.settings { margin: .6rem 0; padding: .7rem; border: 1px solid #1e293b; border-radius: 8px; background: rgba(2,8,20,.5); display: flex; flex-direction: column; gap: .35rem; }
-.settings select { background: rgba(0,0,0,.4); color: #e2e8f0; border: 1px solid #1e293b; border-radius: 6px; padding: .4rem; }
-.netbar { display: flex; gap: 1rem; align-items: center; padding: .35rem .8rem; font-size: .82rem; color: #94a3b8; border-bottom: 1px solid #11203a; }
-.netbar b { color: #38bdf8; }
+.gear { background: none; border: 1px solid var(--line); color: var(--txt); border-radius: 8px; width: 34px; height: 34px; font-size: 1.05rem; cursor: pointer; }
+.gear:hover { border-color: var(--patina); }
+.settings { margin: .6rem 0; padding: .7rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: .35rem; }
+.settings select { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: .4rem; font-family: var(--sans); }
+.netbar { display: flex; gap: 1rem; align-items: center; padding: .35rem .8rem; font-size: .82rem; color: var(--dim); border-bottom: 1px solid var(--line); font-family: var(--mono); }
+.netbar b { color: var(--patina); font-weight: 400; }
 .netest { opacity: .6; margin-left: auto; }
-.volrow { display: flex; align-items: center; gap: .6rem; padding: .45rem .8rem; border-bottom: 1px solid #11203a; }
-.volrow input[type=range], .peervol input[type=range] { flex: 1; }
-.vlabel { font-size: .85rem; color: #cbd5e1; min-width: 5rem; }
-.vval { font-size: .78rem; color: #94a3b8; min-width: 2.6rem; text-align: right; }
+.volrow { display: flex; align-items: center; gap: .6rem; padding: .45rem .8rem; border-bottom: 1px solid var(--line); }
+.volrow input[type=range], .peervol input[type=range] { flex: 1; accent-color: var(--patina); }
+.vlabel { font-size: .85rem; color: var(--txt); min-width: 5rem; }
+.vval { font-size: .78rem; color: var(--dim); min-width: 2.6rem; text-align: right; font-family: var(--mono); }
 .peerhead { display: flex; align-items: center; gap: .5rem; }
 .peervol { display: flex; align-items: center; gap: .45rem; margin-top: .3rem; padding-left: 1.2rem; }
 .vmini { font-size: .8rem; opacity: .8; }
-.encfoot { padding: .5rem .8rem; font-size: .72rem; color: #6b7a90; border-top: 1px solid #11203a; text-align: center; }
-.encfoot b { color: #8aa0b8; }
+.encfoot { padding: .5rem .8rem; font-size: .72rem; color: var(--dim); border-top: 1px solid var(--line); text-align: center; font-family: var(--mono); }
+.encfoot b { color: var(--txt); font-weight: 400; }
 
 /* PTT rebind row */
 .pttrow { display: flex; align-items: center; gap: .6rem; }
-.pttcur { flex: 1; font-family: ui-monospace, monospace; color: #38bdf8; background: rgba(0,0,0,.35); border: 1px solid #1e293b; border-radius: 6px; padding: .35rem .5rem; font-size: .85rem; }
+.pttcur { flex: 1; font-family: var(--mono); color: var(--patina); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .35rem .5rem; font-size: .85rem; }
 
 /* App logo on connect screen */
 .brandwrap { display: flex; align-items: center; gap: .55rem; }
-.applogo { width: 34px; height: 34px; border-radius: 7px; }
+/* The RDOC signet, standard cut at 34px — above the 32px floor where the 4°
+   radial slots stop resolving. No radius: the signet is a mark, not a tile. */
+.applogo { width: 34px; height: 34px; }
 
 /* Key rotation */
-.netbar .rekey { margin-left: auto; background: #1a2535; color: #cfe3ff; border: 1px solid #2b3f5c; border-radius: 6px; padding: .25rem .55rem; font-size: .8rem; cursor: pointer; }
-.netbar .rekey:hover:not(:disabled) { background: #213149; }
+.netbar .rekey { margin-left: auto; background: var(--fill); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: .25rem .55rem; font-size: .8rem; cursor: pointer; font-family: var(--sans); }
+.netbar .rekey:hover:not(:disabled) { border-color: var(--patina); }
 .netbar .rekey:disabled { opacity: .6; cursor: default; }
-.encfoot .keygen { color: #8fb6ff; }
-.encfoot .pqcvoice.on { color: #34d399; }
-.encfoot .pqcvoice.on b { color: #6ee7b7; }
-.encfoot .pqcvoice.neg { color: #b6893a; }
+.encfoot .keygen { color: var(--patina); }
+.encfoot .pqcvoice.on { color: var(--ok); }
+.encfoot .pqcvoice.on b { color: var(--ok); }
+.encfoot .pqcvoice.neg { color: var(--warn); }
 
-/* Signaling-down banner (P2P still alive) */
-.sigbanner { display: flex; align-items: center; gap: .7rem; justify-content: space-between; background: #3a2a12; border: 1px solid #6b4b1a; color: #ffd9a0; border-radius: 7px; padding: .5rem .8rem; margin: .4rem 0; font-size: .85rem; }
+/* Signaling-down banner (P2P still alive). Carries its own sentence; Warning
+   repeats it. */
+.sigbanner { display: flex; align-items: center; gap: .7rem; justify-content: space-between; background: var(--panel); border: 1px solid var(--warn); color: var(--txt); border-radius: 7px; padding: .5rem .8rem; margin: .4rem 0; font-size: .85rem; }
 
 /* Self controls: toggle transmit, mic mute, deafen */
 .selfctl { display: flex; gap: .5rem; margin-top: .5rem; flex-wrap: wrap; }
-.selfctl .ctl { flex: 1 1 8rem; background: #161b24; color: #cfd8e3; border: 1px solid #2b3340; border-radius: 7px; padding: .5rem .6rem; font-size: .85rem; cursor: pointer; }
-.selfctl .ctl:hover:not(:disabled) { background: #1d2530; }
+.selfctl .ctl { flex: 1 1 8rem; background: var(--fill); color: var(--txt); border: 1px solid var(--line); border-radius: 7px; padding: .5rem .6rem; font-size: .85rem; cursor: pointer; font-family: var(--sans); }
+.selfctl .ctl:hover:not(:disabled) { border-color: var(--patina); }
 .selfctl .ctl:disabled { opacity: .5; cursor: default; }
-.selfctl .ctl.on { background: #16323f; border-color: #2f6f86; color: #d6f0ff; }
+.selfctl .ctl.on { background: var(--fill); border-color: var(--patina); color: var(--patina); }
 .ptt.muted { opacity: .55; }
 
 /* DSP section in the gear menu */
-.dsp { background: rgba(0,0,0,.25); border: 1px solid #1e293b; border-radius: 7px; padding: .5rem .6rem; margin-top: .3rem; }
+.dsp { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: .5rem .6rem; margin-top: .3rem; }
 .dsp .dsphead { margin: .35rem 0 .15rem; }
-.dsp .chk { display: flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; }
+.dsp .chk { display: flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; accent-color: var(--patina); }
 .dsp .dsprow { display: flex; align-items: center; gap: .5rem; margin: .15rem 0 .15rem .3rem; }
-.dsp .dsprow > span:first-child { width: 4.5rem; font-size: .8rem; color: #9aa3ad; }
-.dsp .dsprow input[type=range] { flex: 1; }
-.dsp .dsprow .vval { width: 3rem; text-align: right; font-size: .8rem; color: #cfe3ff; }
-/* Leave/disconnect button */
-.leave { background: #3a1620; color: #ffd0d8; border: 1px solid #6b2436; border-radius: 6px; padding: .3rem .7rem; font-size: .8rem; cursor: pointer; margin-left: .4rem; }
-.leave:hover { background: #4a1c2a; }
+.dsp .dsprow > span:first-child { width: 4.5rem; font-size: .8rem; color: var(--dim); }
+.dsp .dsprow input[type=range] { flex: 1; accent-color: var(--patina); }
+.dsp .dsprow .vval { width: 3rem; text-align: right; font-size: .8rem; color: var(--txt); }
+/* Leave/disconnect: destructive, so it carries Error — as an outline, because
+   a filled Error button would compete with the Copper primary action. */
+.leave { background: transparent; color: var(--err); border: 1px solid var(--err); border-radius: 6px; padding: .3rem .7rem; font-size: .8rem; cursor: pointer; margin-left: .4rem; font-family: var(--sans); }
+.leave:hover { background: var(--fill); }
 
 /* Update notice */
-.updbar { background: #10233a; border: 1px solid #265a86; border-radius: 8px; padding: .6rem .8rem; margin: 0 0 .8rem; color: #dbeafe; }
+.updbar { background: var(--panel); border: 1px solid var(--info); border-radius: 8px; padding: .6rem .8rem; margin: 0 0 .8rem; color: var(--txt); }
 .updhead { display: flex; justify-content: space-between; align-items: center; }
-.updhead .x { background: none; border: none; color: #9aa3ad; font-size: 1.1rem; cursor: pointer; }
-.updnotes { max-height: 11rem; overflow: auto; background: rgba(0,0,0,.3); border-radius: 6px; padding: .5rem .6rem; margin: .5rem 0; font-size: .78rem; white-space: pre-wrap; line-height: 1.4; }
+.updhead .x { background: none; border: none; color: var(--dim); font-size: 1.1rem; cursor: pointer; }
+.updhead .x:hover { color: var(--txt); }
+.updnotes { max-height: 11rem; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .5rem .6rem; margin: .5rem 0; font-size: .78rem; white-space: pre-wrap; line-height: 1.4; font-family: var(--mono); }
 .updact { display: flex; gap: .5rem; }
 
 /* Low-bandwidth indicator */
-.netbar .lowbw { color: #9be7a0; font-size: .8rem; }
+.netbar .lowbw { color: var(--ok); font-size: .8rem; }
 
 /* Settings panel: scroll within instead of pushing the gear off-screen */
 .settings { max-height: 60vh; overflow-y: auto; }
-.setshead { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; background: #0f1320; padding: .2rem 0 .4rem; margin-bottom: .2rem; border-bottom: 1px solid #1e293b; z-index: 1; }
-.setshead .x { background: none; border: none; color: #9aa3ad; font-size: 1.2rem; cursor: pointer; line-height: 1; }
-.setshead .x:hover { color: #e2e8f0; }
+.setshead { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; background: var(--fill); padding: .2rem 0 .4rem; margin-bottom: .2rem; border-bottom: 1px solid var(--line); z-index: 1; }
+.setshead .x { background: none; border: none; color: var(--dim); font-size: 1.2rem; cursor: pointer; line-height: 1; }
+.setshead .x:hover { color: var(--txt); }
 
-/* Settings as a modal overlay (closable regardless of page scroll) */
-.settings-overlay { position: fixed; inset: 0; background: rgba(2,6,16,.7); display: flex; align-items: flex-start; justify-content: center; padding: 4vh 1rem; z-index: 50; overflow: auto; }
-.settings { max-height: 88vh; overflow-y: auto; width: min(34rem, 100%); background: #0f1320; border: 1px solid #1e293b; border-radius: 10px; padding: 1rem 1.1rem; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+/* Settings as a modal overlay (closable regardless of page scroll). The sheet
+   is Graphite on a dimmed Space scrim — no shadow, the guide rules it out, and
+   the scrim already separates it from the page. */
+.settings-overlay { position: fixed; inset: 0; background: rgba(18, 20, 22, .78); display: flex; align-items: flex-start; justify-content: center; padding: 4vh 1rem; z-index: 50; overflow: auto; }
+.settings { max-height: 88vh; overflow-y: auto; width: min(34rem, 100%); background: var(--fill); border: 1px solid var(--steel); border-radius: 10px; padding: 1rem 1.1rem; }
+/* Inside the Graphite sheet, Steel would fall to 3.36:1 — lift the small print
+   to Off White instead of tinting the sheet. */
+.settings .sub2, .settings .dsp .dsprow > span:first-child, .settings .vval { color: var(--txt); }
+.settings .dsp, .settings .netcheck, .settings select, .settings input, .settings textarea.code { background: var(--bg); }
 
 /* Network self-check results */
-.netcheck { background: rgba(0,0,0,.25); border: 1px solid #1e293b; border-radius: 7px; padding: .5rem .7rem; margin-top: .4rem; font-size: .85rem; line-height: 1.7; }
+.netcheck { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: .5rem .7rem; margin-top: .4rem; font-size: .85rem; line-height: 1.7; }
 
 /* Settings tabs (simple / expert) */
 .settabs { display: flex; gap: .4rem; margin: .3rem 0 .6rem; }
-.settabs button { flex: 1; background: #131722; color: #9aa3ad; border: 1px solid #242833; border-radius: 6px; padding: .35rem; font-size: .85rem; cursor: pointer; }
-.settabs button.on { background: #16323f; color: #d6f0ff; border-color: #2f6f86; }
+.settabs button { flex: 1; background: var(--bg); color: var(--dim); border: 1px solid var(--line); border-radius: 6px; padding: .35rem; font-size: .85rem; cursor: pointer; font-family: var(--sans); }
+.settabs button.on { background: var(--bg); color: var(--patina); border-color: var(--patina); }
 
-/* Send/receive activity light (when kbps hidden) */
+/* Send/receive activity light (when kbps hidden). Transmit repeats the primary
+   action's Copper, receive is Success. "Both" is two halves, not a gradient. */
 .txrx { display: inline-flex; align-items: center; gap: .35rem; }
-.txrxlbl { color: #9aa3ad; font-size: .8rem; }
-.txlight { width: 13px; height: 13px; border-radius: 50%; background: #2a2f3a; box-shadow: inset 0 0 0 1px #000; }
-.txlight.send { background: #ef3b3b; box-shadow: 0 0 6px #ef3b3b; }
-.txlight.recv { background: #2ec26a; box-shadow: 0 0 6px #2ec26a; }
-.txlight.both { background: linear-gradient(90deg, #ef3b3b 0 50%, #2ec26a 50% 100%); box-shadow: 0 0 6px rgba(239,59,59,.6), 0 0 6px rgba(46,194,106,.6); }
+.txrxlbl { color: var(--dim); font-size: .8rem; }
+.txlight { position: relative; width: 13px; height: 13px; border-radius: 50%; background: var(--graphite); overflow: hidden; }
+.txlight.send { background: var(--copper); }
+.txlight.recv { background: var(--ok); }
+.txlight.both { background: var(--copper); }
+.txlight.both::after { content: ""; position: absolute; inset: 0 0 0 50%; background: var(--ok); }
