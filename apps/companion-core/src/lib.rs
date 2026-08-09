@@ -885,7 +885,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                     // see LINK_RETRY_*) and warn once per dead episode.
                     let now = std::time::Instant::now();
                     let mut retry: Vec<String> = Vec::new();
-                    let mut warn: Vec<String> = Vec::new();
+                    let mut warn: Vec<(String, String)> = Vec::new();
                     for (id, m) in members.iter_mut() {
                         if m.linked {
                             continue;
@@ -902,15 +902,19 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         }
                         if !m.link_warned && now.duration_since(since) >= LINK_WARN_AFTER {
                             m.link_warned = true;
-                            warn.push(m.name.clone());
+                            warn.push((id.clone(), m.name.clone()));
                         }
                     }
                     for id in &retry {
                         let _ = mesh.relink(id).await;
                     }
-                    for name in warn {
+                    for (id, name) in warn {
+                        // Name the failure mode too: a lost offer and a blocked
+                        // path look identical from the outside, and only one of
+                        // them is worth reaching for a relay over.
+                        let why = mesh.link_why(&id);
                         sink(UiEvent::Log { text: format!(
-                            "Keine Verbindung zu {name} - ihr hoert euch gegenseitig nicht und seht die Kanaele des anderen nicht. Neuaufbau laeuft automatisch.") });
+                            "Keine Verbindung zu {name} - ihr hoert euch gegenseitig nicht und seht die Kanaele des anderen nicht. Grund: {why}. Neuaufbau laeuft automatisch.") });
                     }
                 }
                 // Forward mesh-originated signaling to the current connection.

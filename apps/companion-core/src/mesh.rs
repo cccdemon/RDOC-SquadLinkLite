@@ -3,7 +3,7 @@
 //! SRTP (proven in spikes/track-fanout). Each pair also gets a DataChannel for
 //! encrypted text chat. Glare: the lexicographically smaller user_id offers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,14 +35,77 @@ type ChatSlot = Arc<Mutex<Option<Arc<RTCDataChannel>>>>;
 /// Max ICE candidates buffered per peer before the remote description is set.
 const MAX_PENDING_ICE: usize = 128;
 
+/// What a link revealed while it was being set up. Read when it dies, so the
+/// user's log can say WHICH failure it was: nothing arrived (signaling / a lost
+/// offer) versus candidates on both sides but no pair (the path itself is
+/// blocked — the case only a TURN relay could fix). Without this the two are
+/// indistinguishable from the outside and every dead link looks like "NAT".
+#[derive(Default)]
+struct LinkDiag {
+    /// ICE candidate types we gathered ("host", "srflx", "relay").
+    local: Mutex<BTreeSet<String>>,
+    /// ICE candidate types the peer sent us.
+    remote: Mutex<BTreeSet<String>>,
+    /// Did the peer's offer/answer ever arrive?
+    remote_desc: AtomicBool,
+    /// Did a candidate pair ever get selected (i.e. was the link ever up)?
+    paired: AtomicBool,
+}
+
+/// Pull the type out of an SDP candidate line ("… typ srflx …"). The line may
+/// arrive as raw SDP or wrapped in an RTCIceCandidateInit JSON; both contain it.
+fn candidate_type(line: &str) -> Option<String> {
+    let rest = line.split(" typ ").nth(1)?;
+    let t = rest.split_whitespace().next()?;
+    Some(t.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string())
+}
+
+impl LinkDiag {
+    fn note_local(&self, line: &str) {
+        if let Some(t) = candidate_type(line) {
+            self.local.lock().unwrap().insert(t);
+        }
+    }
+    fn note_remote(&self, line: &str) {
+        if let Some(t) = candidate_type(line) {
+            self.remote.lock().unwrap().insert(t);
+        }
+    }
+    fn types(set: &Mutex<BTreeSet<String>>) -> String {
+        let s = set.lock().unwrap();
+        if s.is_empty() {
+            "keine".to_string()
+        } else {
+            s.iter().cloned().collect::<Vec<_>>().join(",")
+        }
+    }
+    /// One ASCII line naming the failure mode, for the app's log.
+    fn summary(&self) -> String {
+        let local = Self::types(&self.local);
+        let remote = Self::types(&self.remote);
+        if self.paired.load(Ordering::SeqCst) {
+            return format!("Verbindung stand und ist abgebrochen (lokal {local}, gegenueber {remote})");
+        }
+        if !self.remote_desc.load(Ordering::SeqCst) {
+            return "kein Offer/Answer angekommen - Signalisierung, nicht NAT".to_string();
+        }
+        if self.remote.lock().unwrap().is_empty() {
+            return format!("keine ICE-Kandidaten vom Gegenueber (lokal {local})");
+        }
+        format!("Kandidaten getauscht (lokal {local}, gegenueber {remote}), aber kein Paar durchgekommen - der Weg ist blockiert")
+    }
+}
+
 struct PeerConn {
     pc: Arc<RTCPeerConnection>,
     pending_ice: Mutex<Vec<String>>,
     remote_set: AtomicBool,
     chat: ChatSlot,
+    diag: Arc<LinkDiag>,
 }
 impl PeerConn {
     async fn add_or_queue_ice(&self, cand: String) {
+        self.diag.note_remote(&cand);
         if self.remote_set.load(Ordering::SeqCst) {
             if let Ok(init) = serde_json::from_str::<RTCIceCandidateInit>(&cand) {
                 let _ = self.pc.add_ice_candidate(init).await;
@@ -58,6 +121,7 @@ impl PeerConn {
     }
     async fn flush_ice(&self) {
         self.remote_set.store(true, Ordering::SeqCst);
+        self.diag.remote_desc.store(true, Ordering::SeqCst);
         let pending = std::mem::take(&mut *self.pending_ice.lock().unwrap());
         for c in pending {
             if let Ok(init) = serde_json::from_str::<RTCIceCandidateInit>(&c) {
@@ -281,15 +345,21 @@ impl Mesh {
             while sender.read(&mut b).await.is_ok() {}
         });
 
+        // What this link manages to gather / receive — read if it ever dies.
+        let diag = Arc::new(LinkDiag::default());
+
         // Local ICE candidates → signaling.
         let out = self.out.clone();
         let to = peer.to_string();
+        let diag_ice = diag.clone();
         pc.on_ice_candidate(Box::new(move |c| {
             let out = out.clone();
             let to = to.clone();
+            let diag_ice = diag_ice.clone();
             Box::pin(async move {
                 if let Some(c) = c {
                     if let Ok(init) = c.to_json() {
+                        diag_ice.note_local(&init.candidate);
                         if let Ok(s) = serde_json::to_string(&init) {
                             let _ = out.send(ClientMsg::Ice { to, candidate: s });
                         }
@@ -302,13 +372,16 @@ impl Mesh {
         let pid_s = peer.to_string();
         let pc_state = Arc::clone(&pc);
         let ev_state = self.events.clone();
+        let diag_state = diag.clone();
         pc.on_peer_connection_state_change(Box::new(move |s| {
             let pid_s = pid_s.clone();
             let pc_state = Arc::clone(&pc_state);
             let ev_state = ev_state.clone();
+            let diag_state = diag_state.clone();
             Box::pin(async move {
                 match s {
                     RTCPeerConnectionState::Connected => {
+                        diag_state.paired.store(true, Ordering::SeqCst);
                         let badge = selected_kind(&pc_state).await.unwrap_or("DIREKT").to_string();
                         let _ = ev_state.send(MeshEvent::Badge { peer: pid_s.clone(), badge });
                         let _ = ev_state.send(MeshEvent::Link { peer: pid_s, up: true });
@@ -367,6 +440,7 @@ impl Mesh {
                 pending_ice: Mutex::new(Vec::new()),
                 remote_set: AtomicBool::new(false),
                 chat,
+                diag,
             },
         );
         Ok(())
@@ -397,6 +471,15 @@ impl Mesh {
             self.ensure(peer).await?;
         }
         Ok(())
+    }
+
+    /// Why the link to `peer` is not up, in one line for the user's log. A peer
+    /// with no connection object at all never got as far as an offer.
+    pub fn link_why(&self, peer: &str) -> String {
+        match self.peers.get(peer) {
+            Some(p) => p.diag.summary(),
+            None => "keine Verbindung aufgebaut".to_string(),
+        }
     }
 
     /// Rebuild the connection to `peer` from scratch and re-offer, whatever
@@ -662,6 +745,59 @@ async fn read_track(
             }
             Err(_) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod diag_tests {
+    use super::*;
+
+    const HOST: &str = "candidate:1 1 udp 2130706431 192.168.1.5 50000 typ host generation 0";
+    const SRFLX: &str = "candidate:2 1 udp 1694498815 203.0.113.9 50001 typ srflx raddr 192.168.1.5 rport 50000";
+
+    #[test]
+    fn candidate_type_is_read_from_the_sdp_line() {
+        assert_eq!(candidate_type(HOST).as_deref(), Some("host"));
+        assert_eq!(candidate_type(SRFLX).as_deref(), Some("srflx"));
+        assert_eq!(candidate_type("garbage"), None);
+    }
+
+    #[test]
+    fn a_lost_offer_is_not_reported_as_a_blocked_path() {
+        // We gathered candidates but the peer's offer/answer never arrived.
+        let d = LinkDiag::default();
+        d.note_local(HOST);
+        assert!(d.summary().contains("Signalisierung"));
+    }
+
+    #[test]
+    fn silence_from_the_peer_is_named_as_such() {
+        let d = LinkDiag::default();
+        d.note_local(HOST);
+        d.remote_desc.store(true, Ordering::SeqCst);
+        assert!(d.summary().contains("keine ICE-Kandidaten vom Gegenueber"));
+    }
+
+    #[test]
+    fn candidates_on_both_sides_but_no_pair_is_a_blocked_path() {
+        let d = LinkDiag::default();
+        d.note_local(HOST);
+        d.note_local(SRFLX);
+        d.note_remote(SRFLX);
+        d.remote_desc.store(true, Ordering::SeqCst);
+        let s = d.summary();
+        assert!(s.contains("kein Paar durchgekommen"), "{s}");
+        assert!(s.contains("host,srflx"), "{s}"); // both local types listed
+    }
+
+    #[test]
+    fn a_link_that_was_up_reports_a_drop_not_a_setup_failure() {
+        let d = LinkDiag::default();
+        d.note_local(HOST);
+        d.note_remote(HOST);
+        d.remote_desc.store(true, Ordering::SeqCst);
+        d.paired.store(true, Ordering::SeqCst);
+        assert!(d.summary().contains("abgebrochen"));
     }
 }
 
