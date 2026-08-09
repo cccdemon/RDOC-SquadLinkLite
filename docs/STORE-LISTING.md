@@ -76,6 +76,17 @@ Previously published as SquadLink Lite.
 ### What's new in this version
 
 ```text
+Version 0.3.3 — a dead connection now tells you why.
+
+• The "no connection to X" message names the cause: the other side never
+  answered (a lost handshake, usually repaired by the automatic retry), or both
+  sides exchanged addresses and still found no route (the path is blocked, as a
+  strict router does). It lists the address types of both sides too.
+```
+
+Previous version, for reference:
+
+```text
 Version 0.3.2 — participants you could not reach are no longer silently mute.
 
 • Fixed: if the direct connection to another participant never came up, or
@@ -226,6 +237,18 @@ Früher veröffentlicht als SquadLink Lite.
 ```
 
 ### Neuerungen in dieser Version
+
+```text
+Version 0.3.3 — eine tote Verbindung sagt jetzt, woran es lag.
+
+• Die Meldung „keine Verbindung zu X" nennt den Grund: Die Gegenstelle hat nie
+  geantwortet (verlorener Verbindungsaufbau, den der automatische Neuaufbau
+  meist repariert), oder beide Seiten haben Adressen getauscht und trotzdem kam
+  keine Route zustande (der Weg ist blockiert, etwa durch einen strengen
+  Router). Die Adresstypen beider Seiten stehen mit dabei.
+```
+
+Vorherige Version, zur Referenz:
 
 ```text
 Version 0.3.2 — Teilnehmer ohne Verbindung stehen nicht mehr stumm in der Liste.

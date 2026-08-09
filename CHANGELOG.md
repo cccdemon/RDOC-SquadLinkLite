@@ -3,6 +3,19 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## v0.3.3 — 2026-08-09
+
+### Geändert
+- **Die Meldung über eine tote Verbindung sagt jetzt auch, woran es lag.** Bisher
+  stand da nur, dass zu jemandem keine Verbindung besteht. Von außen sehen zwei
+  völlig verschiedene Fälle gleich aus: Die Gegenstelle hat nie geantwortet (ein
+  verlorener Verbindungsaufbau — behebt sich meist beim automatischen
+  Neuaufbau), oder beide Seiten haben Adressen ausgetauscht und trotzdem kam
+  keine Route zustande (der Weg dorthin ist blockiert, typischerweise ein
+  strenger Router). Die App unterscheidet das jetzt und schreibt den Grund in
+  die Meldung, samt der Adresstypen beider Seiten. Wer meldet „ich höre X
+  nicht", kann damit sagen, welcher der beiden Fälle es war.
+
 ## v0.3.2 — 2026-08-09
 
 ### Behoben
