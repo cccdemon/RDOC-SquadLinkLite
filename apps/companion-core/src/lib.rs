@@ -44,6 +44,10 @@ pub struct Participant {
     pub channel: String,
     /// True once the post-quantum (ML-KEM-768) session with this peer is up.
     pub secure: bool,
+    /// True while the peer-to-peer connection to this member is up. False means
+    /// no audio, no chat and no channel announces reach them — the UI must say
+    /// so rather than showing a member who is silently mute.
+    pub linked: bool,
 }
 
 /// Events the engine pushes to the frontend.
@@ -97,6 +101,9 @@ pub(crate) enum MeshEvent {
     PeerChannelRemoved { name: String },
     /// The post-quantum session with this peer is established.
     Secure { peer: String },
+    /// The peer connection came up (`up: true`) or died (failed / disconnected /
+    /// closed). Drives the link watchdog and the roster's connection state.
+    Link { peer: String, up: bool },
     /// A peer sent us the group-audio room key. `from` is the DTLS+PQC-
     /// authenticated sender (used to verify it's really the elected authority).
     RoomKey { from: String, gen: u32, key: [u8; 32] },
@@ -148,6 +155,26 @@ const ROOM_KEY_GRACE: Duration = Duration::from_millis(400);
 /// the UI is told. Well past a normal handshake + key hand-out, so it only fires
 /// when the authority is genuinely unreachable.
 const KEYLESS_WARN_AFTER: Duration = Duration::from_secs(8);
+/// How long a peer connection may stay down before the watchdog rebuilds it.
+/// Staggered by side: the peer that owns the offer (smaller user_id, the glare
+/// rule) retries first; the other side only steps in later, so a pair whose
+/// offerer is the unreachable one still recovers without both re-offering at
+/// once.
+const LINK_RETRY_OFFERER: Duration = Duration::from_secs(8);
+const LINK_RETRY_ANSWERER: Duration = Duration::from_secs(24);
+/// How long a link stays down before we tell the user about that member.
+const LINK_WARN_AFTER: Duration = Duration::from_secs(20);
+
+/// Is another rebuild attempt for `peer` due? `down_for` is how long the link
+/// has been down, `since_try` how long ago we last rebuilt it (equal to
+/// `down_for` when we never did). The side that owns the offer under the glare
+/// rule (smaller user_id) retries first; the other side waits longer so both
+/// don't re-offer at once, but it does eventually step in — otherwise a pair
+/// whose offerer is the unreachable one never recovers.
+fn relink_due(me_id: &str, peer_id: &str, down_for: Duration, since_try: Duration) -> bool {
+    let due = if me_id < peer_id { LINK_RETRY_OFFERER } else { LINK_RETRY_ANSWERER };
+    down_for >= due && since_try >= due
+}
 
 /// Put the coordinator's decisions on the wire.
 async fn perform_key_actions(mesh: &Mesh, actions: Vec<KeyAction>) {
@@ -635,6 +662,32 @@ struct Member {
     speaking: bool,
     channel: String,
     secure: bool,
+    /// Peer connection up? Starts false: a member is in the roster the moment
+    /// signaling announces them, long before (or without ever) their ICE
+    /// completing.
+    linked: bool,
+    /// Since when the link has been down (None while it is up).
+    down_since: Option<std::time::Instant>,
+    /// Last rebuild attempt by the link watchdog.
+    last_relink: Option<std::time::Instant>,
+    /// Whether the user has already been told about this dead link.
+    link_warned: bool,
+}
+
+impl Member {
+    fn new(name: String, channel: String, secure: bool) -> Self {
+        Member {
+            name,
+            badge: None,
+            speaking: false,
+            channel,
+            secure,
+            linked: false,
+            down_since: Some(std::time::Instant::now()),
+            last_relink: None,
+            link_warned: false,
+        }
+    }
 }
 
 fn emit_roster(
@@ -653,6 +706,7 @@ fn emit_roster(
         speaking: transmitting,
         channel: me_channel.to_string(),
         secure: true, // our own row: we always hold the crypto
+        linked: true,
     }];
     let mut others: Vec<Participant> = members
         .iter()
@@ -664,6 +718,7 @@ fn emit_roster(
             speaking: m.speaking,
             channel: m.channel.clone(),
             secure: m.secure,
+            linked: m.linked,
         })
         .collect();
     others.sort_by(|a, b| a.name.cmp(&b.name));
@@ -823,6 +878,40 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         keyless_since = None;
                         keyless_warned = false;
                     }
+                    // Link watchdog: a member whose peer connection never came up
+                    // (or died) is silently mute — no audio, no chat, no channel
+                    // announces reach them, and before this nothing retried and
+                    // nothing said so. Rebuild on a stagger (offerer side first,
+                    // see LINK_RETRY_*) and warn once per dead episode.
+                    let now = std::time::Instant::now();
+                    let mut retry: Vec<String> = Vec::new();
+                    let mut warn: Vec<String> = Vec::new();
+                    for (id, m) in members.iter_mut() {
+                        if m.linked {
+                            continue;
+                        }
+                        let since = *m.down_since.get_or_insert(now);
+                        if relink_due(
+                            me_id.as_str(),
+                            id.as_str(),
+                            now.duration_since(since),
+                            now.duration_since(m.last_relink.unwrap_or(since)),
+                        ) {
+                            m.last_relink = Some(now);
+                            retry.push(id.clone());
+                        }
+                        if !m.link_warned && now.duration_since(since) >= LINK_WARN_AFTER {
+                            m.link_warned = true;
+                            warn.push(m.name.clone());
+                        }
+                    }
+                    for id in &retry {
+                        let _ = mesh.relink(id).await;
+                    }
+                    for name in warn {
+                        sink(UiEvent::Log { text: format!(
+                            "Keine Verbindung zu {name} - ihr hoert euch gegenseitig nicht und seht die Kanaele des anderen nicht. Neuaufbau laeuft automatisch.") });
+                    }
                 }
                 // Forward mesh-originated signaling to the current connection.
                 Some(up) = up_rx.recv() => {
@@ -879,24 +968,35 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         ServerMsg::Roster { peers } => {
                             // Seed each member's channel from any announce already
                             // received (DC may outlive a signaling reconnect).
-                            members = peers.iter().map(|p| (p.user_id.clone(), Member {
-                                name: p.name.clone(),
-                                badge: None,
-                                speaking: false,
-                                channel: chan.peer(&p.user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
-                                secure: crypto.is_secure(&p.user_id),
-                            })).collect();
+                            // Keep the live link state of members we already
+                            // know — a signaling reconnect must not make every
+                            // healthy peer look disconnected.
+                            let mut fresh: HashMap<String, Member> = HashMap::new();
+                            for p in &peers {
+                                let m = match members.remove(&p.user_id) {
+                                    Some(mut old) => {
+                                        old.name = p.name.clone();
+                                        old.secure = crypto.is_secure(&p.user_id);
+                                        old
+                                    }
+                                    None => Member::new(
+                                        p.name.clone(),
+                                        chan.peer(&p.user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                                        crypto.is_secure(&p.user_id),
+                                    ),
+                                };
+                                fresh.insert(p.user_id.clone(), m);
+                            }
+                            members = fresh;
                             for p in &peers { let _ = mesh.on_peer(&p.user_id).await; }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                         }
                         ServerMsg::PeerJoined { user_id, name } => {
-                            members.insert(user_id.clone(), Member {
+                            members.insert(user_id.clone(), Member::new(
                                 name,
-                                badge: None,
-                                speaking: false,
-                                channel: chan.peer(&user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
-                                secure: crypto.is_secure(&user_id),
-                            });
+                                chan.peer(&user_id).unwrap_or_else(|| DEFAULT_CHANNEL.to_string()),
+                                crypto.is_secure(&user_id),
+                            ));
                             let _ = mesh.on_peer(&user_id).await;
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                             // Future secrecy: if I'm the authority and a room key
@@ -972,6 +1072,27 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         Some(MeshEvent::Badge { peer, badge }) => {
                             if let Some(m) = members.get_mut(&peer) { m.badge = Some(badge); }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                        }
+                        Some(MeshEvent::Link { peer, up }) => {
+                            if let Some(m) = members.get_mut(&peer) {
+                                if up {
+                                    m.linked = true;
+                                    m.down_since = None;
+                                    m.last_relink = None;
+                                    if m.link_warned {
+                                        m.link_warned = false;
+                                        sink(UiEvent::Log { text: format!("Verbindung zu {} steht wieder.", m.name) });
+                                    }
+                                } else if m.linked || m.down_since.is_none() {
+                                    // Fresh drop: forget the stale badge/session
+                                    // state so the UI stops implying a live link.
+                                    m.linked = false;
+                                    m.badge = None;
+                                    m.secure = false;
+                                    m.down_since = Some(std::time::Instant::now());
+                                }
+                                emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                            }
                         }
                         Some(MeshEvent::PeerChannel { peer, name }) => {
                             // A peer announced its channel; reflect it in the roster.
@@ -1141,17 +1262,43 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
 }
 
 #[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn offerer_side_retries_first() {
+        // "a" < "b": we own the offer, so we rebuild after the short delay.
+        assert!(relink_due("a", "b", LINK_RETRY_OFFERER, LINK_RETRY_OFFERER));
+        // The answerer side must still be waiting at that point.
+        assert!(!relink_due("b", "a", LINK_RETRY_OFFERER, LINK_RETRY_OFFERER));
+    }
+
+    #[test]
+    fn answerer_steps_in_eventually() {
+        // A pair whose offerer is the unreachable one must still recover.
+        assert!(relink_due("b", "a", LINK_RETRY_ANSWERER, LINK_RETRY_ANSWERER));
+    }
+
+    #[test]
+    fn no_retry_before_the_delay() {
+        let short = Duration::from_secs(1);
+        assert!(!relink_due("a", "b", short, short));
+        assert!(!relink_due("b", "a", short, short));
+    }
+
+    #[test]
+    fn a_recent_attempt_blocks_the_next_one() {
+        // Down for ages, but we just rebuilt it — don't hammer the peer.
+        assert!(!relink_due("a", "b", Duration::from_secs(600), Duration::from_secs(1)));
+    }
+}
+
+#[cfg(test)]
 mod authority_tests {
     use super::*;
 
     fn member() -> Member {
-        Member {
-            name: "n".into(),
-            badge: None,
-            speaking: false,
-            channel: DEFAULT_CHANNEL.into(),
-            secure: false,
-        }
+        Member::new("n".into(), DEFAULT_CHANNEL.into(), false)
     }
 
     #[test]
@@ -1231,7 +1378,7 @@ mod authority_tests {
     }
 
     fn member_on(ch: &str) -> Member {
-        Member { name: "n".into(), badge: None, speaking: false, channel: ch.into(), secure: false }
+        Member::new("n".into(), ch.into(), false)
     }
 
     #[test]
@@ -1289,13 +1436,7 @@ mod room_key_tests {
                 .iter()
                 .filter(|i| **i != self.id)
                 .map(|i| {
-                    (i.to_string(), Member {
-                        name: i.to_string(),
-                        badge: None,
-                        speaking: false,
-                        channel: DEFAULT_CHANNEL.to_string(),
-                        secure: true,
-                    })
+                    (i.to_string(), Member::new(i.to_string(), DEFAULT_CHANNEL.to_string(), true))
                 })
                 .collect();
         }

@@ -307,9 +307,22 @@ impl Mesh {
             let pc_state = Arc::clone(&pc_state);
             let ev_state = ev_state.clone();
             Box::pin(async move {
-                if s == RTCPeerConnectionState::Connected {
-                    let badge = selected_kind(&pc_state).await.unwrap_or("DIREKT").to_string();
-                    let _ = ev_state.send(MeshEvent::Badge { peer: pid_s, badge });
+                match s {
+                    RTCPeerConnectionState::Connected => {
+                        let badge = selected_kind(&pc_state).await.unwrap_or("DIREKT").to_string();
+                        let _ = ev_state.send(MeshEvent::Badge { peer: pid_s.clone(), badge });
+                        let _ = ev_state.send(MeshEvent::Link { peer: pid_s, up: true });
+                    }
+                    // A dead link used to be invisible: no badge, no audio, no
+                    // channel announces, and nothing telling the engine to retry.
+                    // Report it so the loop can rebuild the connection and the UI
+                    // can say so instead of showing a silently mute member.
+                    RTCPeerConnectionState::Failed
+                    | RTCPeerConnectionState::Disconnected
+                    | RTCPeerConnectionState::Closed => {
+                        let _ = ev_state.send(MeshEvent::Link { peer: pid_s, up: false });
+                    }
+                    _ => {}
                 }
             })
         }));
@@ -383,6 +396,31 @@ impl Mesh {
         } else {
             self.ensure(peer).await?;
         }
+        Ok(())
+    }
+
+    /// Rebuild the connection to `peer` from scratch and re-offer, whatever
+    /// state it was in. Unlike [`Mesh::on_peer`] this ignores the glare rule —
+    /// the caller (the engine's link watchdog) staggers the two sides by time
+    /// instead, so a pair whose ICE never came up still gets retried when the
+    /// side that would normally offer is the unreachable one.
+    pub async fn relink(&mut self, peer: &str) -> Result<()> {
+        // Never tear down a negotiation that is still running — a slow ICE run
+        // is not a dead link, and rebuilding it would restart the clock forever.
+        // Only an absent, failed, disconnected or closed connection is rebuilt;
+        // webrtc-rs reaches those states on its own when checking gives up.
+        if let Some(p) = self.peers.get(peer) {
+            match p.pc.connection_state() {
+                RTCPeerConnectionState::New | RTCPeerConnectionState::Connecting => return Ok(()),
+                _ => {}
+            }
+        }
+        if let Some(old) = self.peers.remove(peer) {
+            self.crypto.remove(peer); // stale session; a fresh DC re-handshakes
+            let _ = old.pc.close().await;
+        }
+        self.ensure(peer).await?;
+        self.offer(peer).await?;
         Ok(())
     }
 

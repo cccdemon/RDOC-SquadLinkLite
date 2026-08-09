@@ -209,6 +209,11 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .badge.chan.same { color: var(--patina); border: 1px solid var(--patina); }
 .badge.chan.other { color: var(--dim); border: 1px solid var(--line); }
 .badge.chan + .badge { margin-left: 6px; }
+/* No peer-to-peer link: the member is in the room but unreachable — nothing
+   audible in either direction. Louder than the off-channel dimming, because
+   this one is a fault, not a choice. */
+.badge.nolink { color: var(--err); border: 1px solid var(--err); }
+.peer.unlinked { border-color: var(--err); }
 /* Off-channel peers: dimmed (you don't hear them). */
 .peer.offchannel { opacity: 0.45; }
 

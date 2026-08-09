@@ -122,6 +122,9 @@ type Participant = {
   badge: string | null;
   speaking: boolean;
   channel: string;
+  /// False while the peer-to-peer link to this member is down: no audio, no
+  /// chat, no channel announces. Shown explicitly instead of a silently mute row.
+  linked: boolean;
 };
 type ChatLine = { from: string; text: string };
 
@@ -1920,7 +1923,7 @@ PIN: ${sessionInfo.pin}`);
           {participants.map((p) => {
             const sameChan = canonChannel(p.channel) === canonChannel(myChannel);
             return (
-            <div key={p.user_id} className={`peer ${p.speaking ? "speaking" : ""} ${sameChan ? "" : "offchannel"}`}>
+            <div key={p.user_id} className={`peer ${p.speaking ? "speaking" : ""} ${sameChan ? "" : "offchannel"} ${p.you || p.linked ? "" : "unlinked"}`}>
               <div className="peerhead">
                 <span className={`talk ${p.speaking ? "on" : ""}`} />
                 <span className="pname">
@@ -1933,6 +1936,14 @@ PIN: ${sessionInfo.pin}`);
                 {p.badge && (
                   <span className={`badge ${p.badge.includes("RELAY") ? "relay" : "direct"}`}>
                     {p.badge}
+                  </span>
+                )}
+                {!p.you && !p.linked && (
+                  <span
+                    className="badge nolink"
+                    title="Keine direkte Verbindung — ihr hört euch gegenseitig nicht und seht die Kanäle des anderen nicht. Neuaufbau läuft automatisch."
+                  >
+                    KEINE VERBINDUNG
                   </span>
                 )}
               </div>

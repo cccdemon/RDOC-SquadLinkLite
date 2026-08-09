@@ -9,7 +9,7 @@ WORKDIR /src
 COPY . .
 RUN cargo build --release -p companion-core -p init-connection
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 libopus0 ca-certificates \
     && rm -rf /var/lib/apt/lists/*

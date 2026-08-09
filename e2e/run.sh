@@ -32,7 +32,7 @@ trap cleanup EXIT
 cleanup
 
 echo "== build =="
-"$DOCKER" build -q -t "$IMG" -f e2e/Dockerfile . >/dev/null
+"$DOCKER" build -q --target headless -t "$IMG" -f e2e/Dockerfile . >/dev/null
 
 echo "== server =="
 "$DOCKER" run -d --name sb-init \
