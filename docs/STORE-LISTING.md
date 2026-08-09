@@ -76,6 +76,21 @@ Previously published as SquadLink Lite.
 ### What's new in this version
 
 ```text
+Version 0.3.2 — participants you could not reach are no longer silently mute.
+
+• Fixed: if the direct connection to another participant never came up, or
+  dropped later, the app neither noticed nor said so. You heard nothing from
+  each other and nothing told you why. The app now spots the dead link, rebuilds
+  the connection on its own, and marks the member NO CONNECTION until it is
+  back.
+• Fixed: channels you created did not show up for everyone. Same cause —
+  channel announcements travel over that same direct connection — and it is
+  fixed with it.
+```
+
+Previous version, for reference:
+
+```text
 Version 0.3.1 — a calmer window and hands-free transmit.
 
 • The main window now shows only what you act on. The network bar and the
@@ -211,6 +226,21 @@ Früher veröffentlicht als SquadLink Lite.
 ```
 
 ### Neuerungen in dieser Version
+
+```text
+Version 0.3.2 — Teilnehmer ohne Verbindung stehen nicht mehr stumm in der Liste.
+
+• Behoben: Kam die direkte Verbindung zu einem Teilnehmer nie zustande oder
+  brach sie später weg, hat die App das weder gemerkt noch gesagt. Ihr habt
+  euch gegenseitig nicht gehört, und nichts erklärte warum. Die App erkennt den
+  toten Draht jetzt, baut die Verbindung selbstständig neu auf und schreibt bis
+  dahin KEINE VERBINDUNG hinter den Namen.
+• Behoben: Selbst angelegte Kanäle erschienen nicht bei allen. Gleiche Ursache —
+  Kanal-Meldungen laufen über genau diese Direktverbindung — und damit mit
+  erledigt.
+```
+
+Vorherige Version, zur Referenz:
 
 ```text
 Version 0.3.1 — ein ruhigeres Fenster und Dauersenden ohne Halten.

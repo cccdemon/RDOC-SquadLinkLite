@@ -3,6 +3,27 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## v0.3.2 — 2026-08-09
+
+### Behoben
+- **Teilnehmer, zu denen keine direkte Verbindung zustande kam, standen stumm in
+  der Liste — ohne jeden Hinweis.** Kam die Peer-Verbindung nie zustande oder
+  brach sie später weg, hat die App das weder gemerkt noch gemeldet: kein Ton in
+  beide Richtungen, und nichts, was den Zustand von einer stillen Runde
+  unterschieden hätte. Jetzt erkennt die App den toten Draht, baut die
+  Verbindung selbstständig neu auf (gestaffelt, damit nicht beide Seiten
+  gleichzeitig neu aufbauen) und schreibt bis dahin **KEINE VERBINDUNG** hinter
+  den Namen, dazu eine Zeile im Protokoll. Kommt die Verbindung zurück, sagt die
+  App auch das.
+- **Selbst angelegte Kanäle erschienen nicht bei allen.** Kein eigener Fehler,
+  sondern dieselbe Ursache: Kanal-Meldungen laufen über genau diese
+  Direktverbindung. Wer nicht verbunden war, bekam den Kanal nie zu sehen. Mit
+  dem automatischen Neuaufbau löst sich das mit.
+
+### Intern
+- Der End-to-End-Testaufbau (drei echte Clients plus Server in Docker) war seit
+  dem Desktop-Testlauf defekt und baute das falsche Abbild. Wieder in Betrieb.
+
 ## v0.3.1 — 2026-08-08
 
 ### Geändert
