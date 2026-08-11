@@ -54,3 +54,11 @@ windows = { version = "0.59", features = [
   "Win32_System_Variant",
   "Win32_Media_Audio",
 ] }
+# WebView2 settings (turning off the browser accelerator keys — F3 find bar,
+# F7 caret browsing, F5 reload). Must stay on the same versions Tauri resolves,
+# or the COM interfaces we cast to are different types than the ones the
+# webview handed us: tauri 2.11 → webview2-com 0.38 → windows-core 0.61.
+# Note the deliberate version split with the WASAPI `windows` 0.59 above; both
+# trees coexist, they just must not be mixed in one call.
+webview2-com = "0.38"
+windows-core = "0.61"

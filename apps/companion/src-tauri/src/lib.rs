@@ -1113,6 +1113,39 @@ fn open_url(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
+/// Turn off WebView2's browser accelerator keys for a window.
+///
+/// WebView2 brings Edge's key bindings along, and they surface as bugs in an
+/// app that is not a browser: F3 opens the find bar over the session UI, F7
+/// pops the caret-browsing prompt, F5/Ctrl+R reload the shell out from under a
+/// live call. Both F3 and F7 were reported by users. They are handled by the
+/// host before the DOM sees them, so `preventDefault()` in the webview cannot
+/// suppress them — the one switch that does is on `ICoreWebView2Settings3`.
+/// It covers only browser-specific accelerators; text editing (Ctrl+C/V/X/A)
+/// and our own hotkeys are unaffected.
+///
+/// webkitgtk and WKWebView have no such bindings, hence Windows-only with a
+/// no-op fallback.
+#[cfg(windows)]
+fn disable_browser_accelerators(win: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows_core::Interface;
+
+    let _ = win.with_webview(|webview| unsafe {
+        let controller = webview.controller();
+        let Ok(core) = controller.CoreWebView2() else { return };
+        let Ok(settings) = core.Settings() else { return };
+        // Settings3 is WebView2 runtime 1.0.774.44+ (2020). Older runtimes just
+        // keep the accelerators rather than losing the window.
+        if let Ok(s3) = settings.cast::<ICoreWebView2Settings3>() {
+            let _ = s3.SetAreBrowserAcceleratorKeysEnabled(false);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn disable_browser_accelerators(_win: &tauri::WebviewWindow) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK 2.42+ (shipped by rolling distros like Arch) defaults to a DMABUF
@@ -1161,6 +1194,21 @@ pub fn run() {
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
             start_raw_input();
+            // Kill WebView2's own key bindings on every window. The overlay is
+            // created later from the webview, so also catch window-created —
+            // otherwise F3 keeps working in the second window.
+            for (_, win) in app.webview_windows() {
+                disable_browser_accelerators(&win);
+            }
+            {
+                use tauri::Listener;
+                let handle = app.handle().clone();
+                app.listen("tauri://window-created", move |_| {
+                    for (_, win) in handle.webview_windows() {
+                        disable_browser_accelerators(&win);
+                    }
+                });
+            }
             // Local control API (Stream Deck / Companion): loopback WS + token.
             // Commands land here and are re-emitted as the SAME events the
             // Raw-Input hook and hotkeys use, so all gating (self-mute blocks
