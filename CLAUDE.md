@@ -41,11 +41,11 @@ cargo build --release            # headless engine binary
 its own directory (`cd apps/companion/src-tauri && cargo check`). `spikes/*` are
 standalone throwaway crates, also excluded.
 
-Tests live in `#[cfg(test)]` modules inside `lib.rs`, `mesh.rs`, `crypto.rs`,
-`signaling.rs` (companion-core) and `crates/protocol/src/lib.rs`. There is no
-separate test dir. On `main`, `server/init` + `src-tauri` have no tests yet —
-the pushed branch `fix/keyless-guidance` adds them (auth/turn/sessions + IPC
-guards) plus a 3-node room-key simulation; drop this sentence when it merges.
+Tests live in `#[cfg(test)]` modules inside the source files — there is no
+separate test dir: `lib.rs`, `mesh.rs`, `crypto.rs`, `audio.rs`, `signaling.rs`
+(companion-core), `crates/protocol/src/lib.rs`, `auth.rs`/`turn.rs`/`sessions.rs`
+(server/init) and `lib.rs`/`control.rs` (src-tauri, which needs its own
+`cargo test` from its directory — it is out of the workspace).
 
 ## Build hosts
 
@@ -135,20 +135,22 @@ must be a dependency of `notify-pull` or its artifact silently misses the site
 
 The Windows workflow gates the build on `pnpm audit --audit-level moderate` — a
 **blocking** step, so any moderate transitive advisory fails CI before anything is
-built (fix via `pnpm.overrides` in `apps/companion/package.json`; `esbuild` and
-`postcss` are pinned there today). `cargo audit` runs right after but is
+built (fix via `pnpm.overrides` in `apps/companion/package.json`; `esbuild`,
+`postcss` and `nanoid` are pinned there today). `cargo audit` runs right after but is
 `|| true` — advisory only.
 
 ### Cutting a release
 Push a `subraum-v*` tag. Before tagging:
 
 1. Bump the version in **both** `apps/companion/package.json` and
-   `apps/companion/src-tauri/tauri.conf.json`.
+   `apps/companion/src-tauri/tauri.conf.json`. (`src-tauri/Cargo.toml`'s
+   `package.version` is *not* part of this — nothing reads it, and it has
+   trailed the app version since 0.3.0.)
 2. Add the release section to `CHANGELOG.md` (German, user-facing; older releases
    are tagged `squadlink-lite-v*`).
 
 `apps/companion/msix/AppxManifest.xml` carries a hardcoded `Identity/@Version`
-that is **deliberately stale** (0.1.35.0 while the app is 0.2.0) — the MSIX job
+that is **deliberately stale** (0.1.35.0, far behind the app version) — the MSIX job
 rewrites it from `tauri.conf.json` as `"$ver.0"` before packing. Don't hand-sync
 it and don't "fix" the mismatch.
 
@@ -204,7 +206,15 @@ selection and mic gain versus a webview-based client).
   `#[cfg_attr(mobile, tauri::mobile_entry_point)]` because Tauri mobile builds the
   app as `--lib`. Desktop-only plugins must stay behind `cfg(desktop)`, or the
   Android build breaks.
-- **`apps/companion/src`** — React UI. `App.tsx` is the whole app (~1.6k lines);
+  - `control.rs` — local control API for external controllers (Stream Deck,
+    Bitfocus Companion, scripts): a WS server bound to `127.0.0.1` with a
+    per-start token written to `control.json` in the app config dir; first
+    frame must be `{"t":"auth","token":…}`, three bad tries drop the socket.
+    It owns **no** feature logic — commands are forwarded to the webview, which
+    reports state back via the `control_state` command, so mute/channel state
+    has one owner and cannot drift. `e2e/desktop.sh` probes this API to prove
+    the app booted.
+- **`apps/companion/src`** — React UI. `App.tsx` is the whole app (~2k lines);
   `Overlay.tsx` is the separate in-game overlay window.
 - **`server/init`** — InitConnection: axum + tokio-tungstenite, in-memory rooms, no
   DB. Also serves the multilingual marketing site (`i18n.rs`) and the `/j/:code`
@@ -229,12 +239,20 @@ selection and mic gain versus a webview-based client).
     `rsvg-convert -w 1200 -h 630 og-image.svg -o og-image.png` and the
     JetBrains Mono font installed.
 
+- **`streamdeck-plugin`** — the Stream Deck plugin, plain Node/JS (no Rust, no
+  build step): `org.raumdock.subraum.sdPlugin` is the shipped folder,
+  `generate-icons.mjs` renders its key art with `sharp`, `pack.ps1` zips it
+  locally and `test-harness.mjs` drives it without a deck. CI's `streamdeck`
+  job in `build-companion.yml` does `npm ci --omit=dev` inside the `.sdPlugin`
+  folder and zips it to `subraum.streamDeckPlugin`. It talks to `control.rs`
+  over the loopback WS — protocol changes must land on both sides.
+
 `apps/web-participant` is a concept only (`CONCEPT.md`, no code). `deploy/` holds
 the docker-compose stacks, `turnserver.conf`, and `pull-installer.sh` (the target
 of the CI forced-command deploy key). Per-topic docs live in `docs/`: shipped
 platforms (`LINUX.md`, `MACOS-IOS-PLAN.md`, `MSIX-PACKAGING.md`,
 `STORE-SUBMISSION.md`, `STORE-LISTING.md`, `PRIVACY-POLICY.md`,
-`FLEETPLANNER-DEEPLINK.md`) and **unbuilt concepts** —
+`STREAMDECK.md`, `FLEETPLANNER-DEEPLINK.md`) and **unbuilt concepts** —
 `TURN-RELAY-FALLBACK-CONCEPT.md`, `NATIVE-VIDEO-CONCEPT.md`,
 `VIDEO-FILESHARING-CONCEPT.md` describe designs with no code behind them, so
 don't read them as documentation of what exists.
