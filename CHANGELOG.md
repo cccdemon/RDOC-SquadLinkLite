@@ -3,6 +3,19 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## v0.3.4 — 2026-08-11
+
+### Behoben
+- **F3 öffnete ein Suchfeld, F7 fragte nach „Tastaturnavigation" — beides
+  Browser-Funktionen, die in subraum nichts zu suchen haben.** Das Fenster von
+  subraum wird unter Windows von einer eingebauten Browser-Komponente
+  gezeichnet, und die brachte ihre eigenen Tastenkürzel mit: F3 legte eine
+  Suchleiste über die laufende Sitzung, F7 einen Dialog zur Tastaturnavigation,
+  F5 hätte die Oberfläche mitten im Gespräch neu geladen. Gemeldet von einem
+  Nutzer. Diese Kürzel sind jetzt abgeschaltet — im Hauptfenster wie im
+  Overlay. Textbearbeitung (Kopieren, Einfügen, Alles markieren) und die
+  Tasten von subraum selbst bleiben unverändert.
+
 ## v0.3.3 — 2026-08-09
 
 ### Geändert
