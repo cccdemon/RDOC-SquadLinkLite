@@ -26,7 +26,7 @@ use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSampl
 use webrtc::track::track_local::TrackLocal;
 use webrtc::track::track_remote::TrackRemote;
 
-use crate::{build_api, setup_audio, Participant, Sink, UiEvent};
+use crate::{build_api, setup_audio, Participant, Sink, StopGuard, UiEvent};
 
 type ChatSlot = Arc<Mutex<Option<Arc<RTCDataChannel>>>>;
 
@@ -84,9 +84,14 @@ fn decode_code(code: &str) -> Result<String> {
 }
 
 /// Build a single PeerConnection wired to the audio rig + chat slot + UI sink.
-async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc<AtomicBool>, ChatSlot)> {
-    let (transmit, mut opus_rx, decode_tx, _gains, _dsp, _radio, _monitor, _stop, _br, _dtx, _dev_tx, _earcon) =
+async fn build_pc(
+    sink: Sink,
+    me: String,
+) -> Result<(Arc<RTCPeerConnection>, Arc<AtomicBool>, Arc<AtomicBool>, ChatSlot)> {
+    let (transmit, mut opus_rx, decode_tx, _gains, _dsp, _radio, _monitor, stop, _br, _dtx, _dev_tx, _earcon) =
         setup_audio(None, None)?;
+    // Until `Serverless` owns `stop`, a failing `?` below must take the rig down.
+    let rig = StopGuard::new(stop.clone());
     let api = build_api()?;
     let local = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
@@ -192,42 +197,65 @@ async fn build_pc(sink: Sink, me: String) -> Result<(Arc<RTCPeerConnection>, Arc
         })
     }));
 
-    Ok((pc, transmit, chat))
+    rig.disarm();
+    Ok((pc, transmit, stop, chat))
 }
 
 pub struct Serverless {
     pc: Arc<RTCPeerConnection>,
+    /// Stops the audio rig `build_pc` started; set on drop.
+    stop: Arc<AtomicBool>,
     transmit: Arc<AtomicBool>,
     chat: ChatSlot,
     sink: Sink,
     me: String,
 }
 
+impl Drop for Serverless {
+    fn drop(&mut self) {
+        // Release the microphone and the PC: the Tauri layer replaces a
+        // `Serverless` on every new offer/accept and nothing else closes them.
+        self.stop.store(true, Ordering::SeqCst);
+        let pc = self.pc.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                let _ = pc.close().await;
+            });
+        }
+    }
+}
+
 impl Serverless {
     /// Role A: create an offer, return the base64 code to hand to the peer.
     pub async fn create_offer(sink: Sink, me: String) -> Result<(Serverless, String)> {
-        let (pc, transmit, chat) = build_pc(sink.clone(), me.clone()).await?;
-        let dc = pc.create_data_channel("chat", None).await?;
-        wire_chat(chat.clone(), dc, sink.clone());
+        let (pc, transmit, stop, chat) = build_pc(sink.clone(), me.clone()).await?;
+        // Own the rig + PC before negotiating, so a failing step below drops
+        // them through `Drop` instead of leaking an open microphone.
+        let s = Serverless { pc, stop, transmit, chat, sink, me };
+        let dc = s.pc.create_data_channel("chat", None).await?;
+        wire_chat(s.chat.clone(), dc, s.sink.clone());
 
-        let offer = pc.create_offer(None).await?;
-        let mut gather = pc.gathering_complete_promise().await;
-        pc.set_local_description(offer).await?;
+        let offer = s.pc.create_offer(None).await?;
+        let mut gather = s.pc.gathering_complete_promise().await;
+        s.pc.set_local_description(offer).await?;
         let _ = gather.recv().await; // non-trickle: full SDP with candidates
-        let sdp = pc.local_description().await.ok_or_else(|| anyhow!("no local description"))?.sdp;
-        Ok((Serverless { pc, transmit, chat, sink, me }, STANDARD.encode(sdp)))
+        let sdp = s.pc.local_description().await.ok_or_else(|| anyhow!("no local description"))?.sdp;
+        Ok((s, STANDARD.encode(sdp)))
     }
 
     /// Role B: accept the peer's offer code, return our answer code.
     pub async fn accept_offer(code: String, sink: Sink, me: String) -> Result<(Serverless, String)> {
-        let (pc, transmit, chat) = build_pc(sink.clone(), me.clone()).await?;
-        pc.set_remote_description(RTCSessionDescription::offer(decode_code(&code)?)?).await?;
-        let answer = pc.create_answer(None).await?;
-        let mut gather = pc.gathering_complete_promise().await;
-        pc.set_local_description(answer).await?;
+        // Validate the code first: a typo must not open the mic or allocate a PC.
+        let offer = RTCSessionDescription::offer(decode_code(&code)?)?;
+        let (pc, transmit, stop, chat) = build_pc(sink.clone(), me.clone()).await?;
+        let s = Serverless { pc, stop, transmit, chat, sink, me }; // see create_offer
+        s.pc.set_remote_description(offer).await?;
+        let answer = s.pc.create_answer(None).await?;
+        let mut gather = s.pc.gathering_complete_promise().await;
+        s.pc.set_local_description(answer).await?;
         let _ = gather.recv().await;
-        let sdp = pc.local_description().await.ok_or_else(|| anyhow!("no local description"))?.sdp;
-        Ok((Serverless { pc, transmit, chat, sink, me }, STANDARD.encode(sdp)))
+        let sdp = s.pc.local_description().await.ok_or_else(|| anyhow!("no local description"))?.sdp;
+        Ok((s, STANDARD.encode(sdp)))
     }
 
     /// Role A: finish the handshake with the peer's answer code.
@@ -264,5 +292,55 @@ impl Serverless {
             }
             sink(UiEvent::Chat { from: me, text });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sink() -> Sink {
+        Arc::new(|_| {})
+    }
+
+    /// A mistyped code must fail fast, before `build_pc` opens the microphone
+    /// and allocates a PeerConnection that nothing would ever close.
+    #[tokio::test]
+    async fn bad_offer_code_is_rejected_before_any_audio_rig_is_built() {
+        let r = tokio::time::timeout(
+            Duration::from_secs(5),
+            Serverless::accept_offer("###".into(), sink(), "me".into()),
+        )
+        .await
+        .expect("accept_offer hung");
+        let err = r.err().expect("bad code accepted").to_string();
+        assert!(err.contains("ungültiger Code"), "unexpected error: {err}");
+    }
+
+    /// Replacing or discarding a serverless session must release the microphone
+    /// and close the PeerConnection; nothing else ever will.
+    #[tokio::test]
+    async fn dropping_the_session_stops_the_rig_and_closes_the_pc() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let api = build_api().unwrap();
+        let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = Serverless {
+            pc: pc.clone(),
+            stop: stop.clone(),
+            transmit: Arc::new(AtomicBool::new(false)),
+            chat: Arc::new(Mutex::new(None)),
+            sink: sink(),
+            me: "me".into(),
+        };
+        drop(s);
+        assert!(stop.load(Ordering::SeqCst), "audio rig not stopped on drop");
+        for _ in 0..50 {
+            if pc.connection_state() == RTCPeerConnectionState::Closed {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("peer connection still open 1 s after drop");
     }
 }

@@ -493,6 +493,31 @@ impl Drop for Engine {
         self.stop.store(true, Ordering::SeqCst);
     }
 }
+
+/// Stops the audio rig if its owner never comes to exist. `setup_audio` runs
+/// before signaling connects, so an early `?` in `start()` (bad URL, server
+/// down, PIN mismatch) would otherwise leave capture/encode/mixer threads and
+/// an open microphone behind on every failed attempt. Disarm once the rig has
+/// an owner whose `Drop` takes over.
+pub(crate) struct StopGuard {
+    stop: Arc<AtomicBool>,
+    armed: bool,
+}
+impl StopGuard {
+    pub(crate) fn new(stop: Arc<AtomicBool>) -> Self {
+        Self { stop, armed: true }
+    }
+    pub(crate) fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+impl Drop for StopGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+}
 impl Engine {
     pub fn toggle_transmit(&self) {
         let _ = self.cmd_tx.send(Cmd::ToggleTx);
@@ -733,6 +758,8 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
 
     let (transmit, mut opus_rx, decode_tx, gains, dsp_cfg, radio_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon) =
         setup_audio(cfg.input_device.clone(), cfg.output_device.clone())?;
+    // From here until `Engine` owns `stop`, any `?` must take the rig down.
+    let rig = StopGuard::new(stop.clone());
     // Cloned into the mesh loop (fires the click); the original stays in Engine
     // so the frontend can toggle it on/off.
     let earcon_loop = earcon.clone();
@@ -1262,6 +1289,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         }
     });
 
+    rig.disarm();
     Ok(Engine { cmd_tx, gains, dsp: dsp_cfg, radio: radio_cfg, monitor, stop, bitrate, dtx, dev_tx, earcon })
 }
 
@@ -1662,5 +1690,28 @@ mod room_key_tests {
         route(&mut nodes, acts.into_iter().map(|a| ("t".to_string(), a)).collect());
 
         assert_converged(&mut nodes).await;
+    }
+}
+
+#[cfg(test)]
+mod stop_guard_tests {
+    use super::*;
+
+    /// `start()` opens the audio rig before it knows whether signaling will
+    /// connect. If it bails out, the guard must stop the rig; otherwise every
+    /// failed connect stacks another live microphone capture.
+    #[test]
+    fn armed_guard_stops_the_rig_on_drop() {
+        let stop = Arc::new(AtomicBool::new(false));
+        drop(StopGuard::new(stop.clone()));
+        assert!(stop.load(Ordering::SeqCst), "rig left running after an aborted start");
+    }
+
+    #[test]
+    fn disarmed_guard_leaves_the_rig_to_the_engine() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let g = StopGuard::new(stop.clone());
+        g.disarm();
+        assert!(!stop.load(Ordering::SeqCst), "rig stopped although start() succeeded");
     }
 }
