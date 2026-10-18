@@ -15,6 +15,10 @@ const MAX_AGE_SECS: u64 = 24 * 3600;
 /// Grace after the room goes empty (covers create→connect + brief reconnects).
 const EMPTY_GRACE_SECS: u64 = 5 * 60;
 const MAX_ATTEMPTS: u32 = 6; // wrong-PIN tries before the code locks
+/// How long a lock holds. A permanent lock would let anyone with the share
+/// link deny the host's session for its whole lifetime; a 6-digit PIN stays
+/// safe at MAX_ATTEMPTS guesses per window (~900/day).
+const LOCK_SECS: u64 = 10 * 60;
 
 pub struct Session {
     pub room: String,
@@ -25,6 +29,8 @@ pub struct Session {
     /// has the grace window to connect before it counts as empty).
     last_active: u64,
     attempts: u32,
+    /// When the guess budget ran out (0 = never); the lock lifts LOCK_SECS later.
+    locked_at: u64,
 }
 
 pub enum JoinError {
@@ -89,23 +95,33 @@ impl Sessions {
         }
         map.insert(
             code.clone(),
-            Session { room: room.clone(), token: token.clone(), pin: pin.clone(), created: t, last_active: t, attempts: 0 },
+            Session { room: room.clone(), token: token.clone(), pin: pin.clone(), created: t, last_active: t, attempts: 0, locked_at: 0 },
         );
         (code, pin, room, token)
     }
 
     /// Resolve a code with a PIN. Rate-limited per code.
     pub fn join(&self, code: &str, pin: &str) -> Result<(String, Option<String>), JoinError> {
+        self.join_at(code, pin, now())
+    }
+
+    fn join_at(&self, code: &str, pin: &str, t: u64) -> Result<(String, Option<String>), JoinError> {
         let mut map = self.inner.lock().unwrap();
         let s = map.get_mut(code).ok_or(JoinError::NotFound)?;
         if s.attempts >= MAX_ATTEMPTS {
-            return Err(JoinError::Locked);
+            if t < s.locked_at.saturating_add(LOCK_SECS) {
+                return Err(JoinError::Locked);
+            }
+            s.attempts = 0; // lock expired: a fresh guess budget, not an open door
         }
         if ct_eq(s.pin.as_bytes(), pin.as_bytes()) {
-            s.last_active = now(); // a successful join keeps it alive
+            s.last_active = t; // a successful join keeps it alive
             Ok((s.room.clone(), s.token.clone()))
         } else {
             s.attempts += 1;
+            if s.attempts >= MAX_ATTEMPTS {
+                s.locked_at = t;
+            }
             Err(JoinError::BadPin)
         }
     }
@@ -200,6 +216,27 @@ mod tests {
         assert!(matches!(s.join(&code, wrong), Err(JoinError::Locked)));
         // Locked means locked: the CORRECT PIN no longer helps either.
         assert!(matches!(s.join(&code, &pin), Err(JoinError::Locked)));
+    }
+
+    /// A permanent lock lets anyone holding the share link deny the host's
+    /// session for its whole 24 h lifetime by burning six guesses. The lock
+    /// has to expire; brute force stays capped at MAX_ATTEMPTS per window.
+    #[test]
+    fn a_locked_code_reopens_after_the_lock_window() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        let wrong = if pin == "000000" { "111111" } else { "000000" };
+        let t0 = now();
+        for _ in 0..MAX_ATTEMPTS {
+            let _ = s.join_at(&code, wrong, t0);
+        }
+        assert!(matches!(s.join_at(&code, &pin, t0 + LOCK_SECS - 1), Err(JoinError::Locked)));
+        assert!(s.join_at(&code, &pin, t0 + LOCK_SECS).is_ok(), "lock never expires");
+        // ... and a fresh guess budget applies after it, not an open door.
+        for _ in 0..MAX_ATTEMPTS {
+            let _ = s.join_at(&code, wrong, t0 + LOCK_SECS);
+        }
+        assert!(matches!(s.join_at(&code, &pin, t0 + LOCK_SECS + 1), Err(JoinError::Locked)));
     }
 
     #[test]
