@@ -101,13 +101,17 @@ Protokoll: `ClientMsg::Rekey` → Server-Broadcast `ServerMsg::Rekey` → `mesh.
 | Variable | Zweck |
 |---|---|
 | `ROOM_AUTH_SECRET` | **Pflicht in Prod** — HMAC-Secret für Room-Join-Tokens. Erzeugen: `openssl rand -hex 32`. |
-| `ALLOW_OPEN_AUTH` | `1` erlaubt Open-Mode **ohne** Secret (nur Dev). |
+| `ALLOW_OPEN_AUTH` | `1`/`true` erlaubt Open-Mode **ohne** Secret (nur Dev). |
 | `PORT` | Listen-Port (Default 8080). |
-| `TLS_DISABLE` | `1` = plain ws (nur hinter TLS-terminierendem Proxy). Bindet dann `127.0.0.1`. |
+| `TLS_DISABLE` | `1`/`true` = plain ws (nur hinter TLS-terminierendem Proxy). Bindet dann `127.0.0.1`. Andere Werte (auch `0`) lassen TLS an. |
 | `ALLOW_PLAIN_PUBLIC_BIND` | `1` = plain ws auf `0.0.0.0` binden. **In Docker nötig** (Host-Mapping `127.0.0.1:…` schützt). |
 | `PUBLIC_BASE` / `PUBLIC_WS` | Öffentliche URLs für Share-Links + zurückgegebene ws-URL. |
 | `TURN_SECRET` / `TURN_URLS` | optionale coturn-Creds (NAT-Relay-Fallback; im Client opt-in). |
 | `EXTRA_CORS_ORIGINS` | zusätzliche erlaubte Origins (kommagetrennt). |
+| `TLS_CERT` / `TLS_KEY` | Pfade für das selbstsignierte Zertifikat + Key (Default `init-cert.pem` / `init-key.pem` im Arbeitsverzeichnis). Werden beim ersten Start erzeugt und **behalten**, damit der gepinnte Fingerprint stabil bleibt. |
+| `TLS_SAN` | zusätzliche SANs für dieses Zertifikat (kommagetrennt; `localhost` und `127.0.0.1` sind immer drin). |
+| `DOWNLOADS_DIR` | Installer-Spiegel für `/get` (Default `/srv/downloads/subraum`; gefüllt von `deploy/pull-installer.sh`). |
+| `RUST_LOG` | Log-Filter (Default `init_connection=info,tower_http=info`). |
 
 Prod läuft hinter dem RDOC-Suite-Caddy auf `subraum.cc`
 (`deploy/docker-compose.proxy.yml`); `.env` **muss** `ROOM_AUTH_SECRET` setzen (sonst

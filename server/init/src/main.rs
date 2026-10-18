@@ -3,11 +3,17 @@
 //! Dumb relay: routes offer/answer/ice by `to`, keeps the per-room roster,
 //! enforces room-auth + cap, mints ephemeral TURN creds. No media here.
 //!
-//! Env:
+//! Env (full table in README.md):
 //!   PORT             listen port (default 8080)
-//!   ROOM_AUTH_SECRET HMAC secret for room tokens (unset = open dev mode)
+//!   ROOM_AUTH_SECRET HMAC secret for room tokens — required; the server
+//!                    refuses to start without it unless ALLOW_OPEN_AUTH=1 (dev)
+//!   TLS_DISABLE      1/true = plain ws behind a TLS proxy (binds 127.0.0.1
+//!                    unless ALLOW_PLAIN_PUBLIC_BIND=1)
+//!   TLS_CERT/TLS_KEY self-signed cert + key paths (generated on first run)
+//!   TLS_SAN          extra SANs for that cert, comma-separated
 //!   TURN_SECRET      coturn shared secret (optional)
 //!   TURN_URLS        comma-separated turn: urls (optional)
+//!   DOWNLOADS_DIR    installer mirror read by /get (default /srv/downloads/subraum)
 //!
 //! Subcommand: `init-connection mint <room>` prints that room's join token.
 
