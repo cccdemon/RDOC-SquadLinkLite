@@ -6,6 +6,7 @@
 //!     is pinned by SHA-256 via env CERT_SHA256 (no CA needed).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use futures::{SinkExt, StreamExt};
@@ -121,7 +122,26 @@ fn pinned_connector(cert_sha256: &str) -> Result<Connector> {
     Ok(Connector::Rustls(Arc::new(config)))
 }
 
+/// Budget for the whole WS handshake (TCP + TLS + upgrade). The engine runs
+/// `connect` inline in its select loop, so without a bound a blackholed server
+/// freezes PTT, chat and mesh events for the OS connect timeout.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Inbound silence after which the link counts as dead (server pongs every
+/// 25 s ping, so a live link never gets near this).
+const RECV_IDLE: Duration = Duration::from_secs(60);
+
 pub async fn connect(url: &str, cert_sha256: Option<&str>) -> Result<Signaling> {
+    connect_with_timeout(url, cert_sha256, CONNECT_TIMEOUT).await
+}
+
+pub async fn connect_with_timeout(url: &str, cert_sha256: Option<&str>, budget: Duration) -> Result<Signaling> {
+    match tokio::time::timeout(budget, connect_inner(url, cert_sha256)).await {
+        Ok(r) => r,
+        Err(_) => bail!("Signaling-Server antwortet nicht (Timeout nach {} s)", budget.as_secs_f32()),
+    }
+}
+
+async fn connect_inner(url: &str, cert_sha256: Option<&str>) -> Result<Signaling> {
     let ws = if url.starts_with("wss://") {
         if let Some(pin) = cert_sha256 {
             // Self-signed server → pin its cert by SHA-256 (no CA).
@@ -165,7 +185,12 @@ pub async fn connect(url: &str, cert_sha256: Option<&str>) -> Result<Signaling> 
                                 }
                             }
                         }
-                        None => break,
+                        None => {
+                            // Owner dropped the handle: close the socket, or it
+                            // lingers server-side until the idle reaper runs.
+                            let _ = sink.close().await;
+                            break;
+                        }
                     }
                 }
                 _ = ping.tick() => {
@@ -177,7 +202,11 @@ pub async fn connect(url: &str, cert_sha256: Option<&str>) -> Result<Signaling> 
         }
     });
     tokio::spawn(async move {
-        while let Some(Ok(msg)) = stream.next().await {
+        // Dead-link watchdog: pings go out every 25 s, but a half-open TCP
+        // connection answers nothing and `next()` would block until the OS
+        // gives up. Silence past RECV_IDLE ends the connection; the engine
+        // sees `incoming` close and runs its reconnect path.
+        while let Ok(Some(Ok(msg))) = tokio::time::timeout(RECV_IDLE, stream.next()).await {
             if let Message::Text(t) = msg {
                 if let Ok(sm) = serde_json::from_str::<ServerMsg>(&t) {
                     if in_tx.send(sm).is_err() {
@@ -232,5 +261,35 @@ mod tests {
         assert!(!is_loopback("ws://localhost.evil.example/ws"));
         assert!(!is_loopback("ws://127.0.0.1@evil.example/ws"));
         assert!(!is_loopback("wss://subraum.cc/ws"));
+    }
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A server that accepts TCP but never finishes the WS handshake (black
+    /// hole, broken proxy) must not stall the caller: the engine runs this
+    /// inline in its select loop, so a hang freezes PTT, chat and the mesh.
+    #[tokio::test]
+    async fn connect_gives_up_when_the_server_never_answers() {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((s, _)) = l.accept().await {
+                held.push(s); // keep the socket open, say nothing
+            }
+        });
+        let url = format!("ws://{addr}");
+        let r = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect_with_timeout(&url, None, Duration::from_millis(300)),
+        )
+        .await
+        .expect("connect hung past its budget");
+        let err = r.err().expect("connect succeeded against a silent server").to_string();
+        assert!(err.contains("Timeout"), "unexpected error: {err}");
     }
 }

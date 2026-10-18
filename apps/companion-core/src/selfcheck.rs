@@ -14,6 +14,7 @@ use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 #[derive(Serialize, Clone, Copy, Debug)]
@@ -50,6 +51,14 @@ async fn webrtc_loopback() -> Result<(bool, bool, bool)> {
     let api = crate::build_api()?;
     let a = Arc::new(api.new_peer_connection(config()).await?);
     let b = Arc::new(api.new_peer_connection(config()).await?);
+    // Close both whatever the probe does: an early `?` must not leak sockets.
+    let r = loopback_probe(a.clone(), b.clone()).await;
+    let _ = a.close().await;
+    let _ = b.close().await;
+    r
+}
+
+async fn loopback_probe(a: Arc<RTCPeerConnection>, b: Arc<RTCPeerConnection>) -> Result<(bool, bool, bool)> {
 
     let b_recv = Arc::new(AtomicBool::new(false)); // B got A's data → A can send
     let a_recv = Arc::new(AtomicBool::new(false)); // A got the echo → A can receive
@@ -119,8 +128,6 @@ async fn webrtc_loopback() -> Result<(bool, bool, bool)> {
 
     let send = b_recv.load(Ordering::SeqCst);
     let recv = a_recv.load(Ordering::SeqCst);
-    let _ = a.close().await;
-    let _ = b.close().await;
     Ok((send, recv, stun))
 }
 
