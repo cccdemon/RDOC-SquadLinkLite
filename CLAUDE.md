@@ -275,7 +275,9 @@ platforms (`LINUX.md`, `MACOS-IOS-PLAN.md`, `MSIX-PACKAGING.md`,
 `STREAMDECK.md`, `FLEETPLANNER-DEEPLINK.md`) and **unbuilt concepts** —
 `TURN-RELAY-FALLBACK-CONCEPT.md`, `NATIVE-VIDEO-CONCEPT.md`,
 `VIDEO-FILESHARING-CONCEPT.md` describe designs with no code behind them, so
-don't read them as documentation of what exists.
+don't read them as documentation of what exists. `AUDIT-2026-10-18.md` is the
+full code audit: what was fixed (with commits) and which design decisions are
+still open — read its Offen section before re-auditing the same ground.
 
 Encode-once fan-out is the load-bearing performance assumption: one
 `TrackLocalStaticRTP` is attached to all peer connections and a single `write_rtp()`

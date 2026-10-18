@@ -3,6 +3,47 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## Unveröffentlicht
+
+Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
+
+### Behoben
+- **Nach einem fehlgeschlagenen Verbindungsversuch blieb das Mikrofon offen.**
+  Bei falscher Adresse, nicht erreichbarem Server oder falscher PIN lief die
+  Aufnahme im Hintergrund weiter, bei jedem weiteren Versuch eine mehr. Jetzt
+  wird sie beim Abbruch sauber beendet.
+- **Eine verlorene Verbindungsanfrage wurde nie wiederholt.** Ging das erste
+  Angebot an einen Mitspieler verloren, blieb die Verbindung dauerhaft im
+  Aufbau stecken, obwohl die Meldung „Neuaufbau läuft automatisch" versprach.
+  Der automatische Neuaufbau greift jetzt auch in diesem Fall.
+- **Wer die Sitzung verließ, wurde beim Verlassen manchmal selbst
+  hinausgeworfen.** Bei einem Reconnect konnte die alte, noch halb offene
+  Verbindung die neue aus dem Raum entfernen. Beide Fälle sind getrennt.
+- **Ein Server, der nicht antwortet, fror Sprechtaste, Chat und
+  Verbindungsaufbau ein.** Der Verbindungsversuch hat jetzt ein Zeitlimit von
+  zehn Sekunden, und eine stumm gewordene Verbindung wird nach einer Minute
+  als tot erkannt und neu aufgebaut.
+- **Nach dem Verlassen blieben andere Programme leise.** Die Liste der
+  Teilnehmer wurde beim Verlassen nicht geleert, deshalb hielt das Absenken
+  anderer Programme an. Der Startbildschirm behauptete außerdem weiter
+  „DTLS-SRTP + PQC".
+- **Mitspieler, die während einer Signaling-Störung gingen, blieben als
+  Geister in der Sitzung** und hörten weiter mit dem alten Schlüssel. Beim
+  Wiederverbinden wird die Teilnehmerliste jetzt abgeglichen und der Schlüssel
+  rotiert.
+- **Ein Direktlink während einer laufenden Sitzung warf die Oberfläche auf
+  den Startbildschirm,** während die Sitzung im Hintergrund weiterlief. Der
+  Link wird jetzt ignoriert, solange eine Sitzung läuft.
+- **Auf dem Mac tat „Herunterladen" im Update-Hinweis nichts.**
+- **Stream Deck:** Nach einem Neustart von subraum blieb das Plugin mit
+  veraltetem Token offline hängen, statt sich neu zu verbinden.
+- **Server:** Ein Mitglied konnte die Schlüsselrotation über eine zweite
+  Verbindung beliebig oft auslösen und damit alle Verbindungen immer wieder
+  unterbrechen. Sechs falsche PIN-Eingaben sperrten eine Sitzung bis zu 24
+  Stunden; die Sperre läuft jetzt nach zehn Minuten ab. `TLS_DISABLE=0`
+  schaltete TLS **ab**; nur `1`/`true` zählt noch. Der private Schlüssel wird
+  nur noch für den Eigentümer lesbar abgelegt.
+
 ## v0.3.4 — 2026-08-11
 
 ### Behoben
