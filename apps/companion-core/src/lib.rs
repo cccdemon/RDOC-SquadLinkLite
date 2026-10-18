@@ -383,6 +383,17 @@ fn departed(known: &HashMap<String, Member>, roster: &[protocol::PeerInfo]) -> V
     known.keys().filter(|id| !roster.iter().any(|p| &p.user_id == *id)).cloned().collect()
 }
 
+/// Upper bound on channel tombstones. The directory itself is capped at
+/// MAX_CHANNELS, but add/remove churn could grow the tombstone set forever.
+const MAX_TOMBSTONES: usize = MAX_CHANNELS * 4;
+
+/// May a peer's ChannelRemoved for `canon` be honored? Only for a name in our
+/// directory — a peer can remove a channel, not plant arbitrary strings that
+/// we would then store and rebroadcast — and only while the set has room.
+fn tombstone_allowed(canon: &str, known: &[String], removed: &HashSet<String>) -> bool {
+    known.iter().any(|d| canon_channel(d) == canon) && removed.len() < MAX_TOMBSTONES
+}
+
 fn remove_from_dir(dir: &mut Vec<String>, canon: &str) -> bool {
     let before = dir.len();
     dir.retain(|d| canon_channel(d) != canon);
@@ -654,7 +665,7 @@ pub(crate) fn setup_audio(
     let out_rate = Arc::new(AtomicU32::new(audio::OPUS_SR));
     let (dev_tx, dev_rx) = std::sync::mpsc::channel::<audio::DevCmd>();
 
-    let (rate_tx, rate_rx) = std::sync::mpsc::channel::<(u32, u32)>();
+    let (rate_tx, rate_rx) = std::sync::mpsc::channel::<Result<(u32, u32), String>>();
     {
         let (cap, play, stop, in_rate, out_rate) =
             (cap.clone(), play.clone(), stop.clone(), in_rate.clone(), out_rate.clone());
@@ -662,7 +673,9 @@ pub(crate) fn setup_audio(
             audio::run_devices(cap, play, rate_tx, in_name, out_name, stop, in_rate, out_rate, dev_rx)
         });
     }
-    rate_rx.recv()?; // block until the devices are open (rates live in the atomics)
+    // Block until the devices are open (rates live in the atomics) — or the
+    // device thread reports why it could not open them.
+    rate_rx.recv()?.map_err(|e| anyhow::anyhow!(e))?;
 
     let (opus_tx, opus_rx) = mpsc::unbounded_channel::<Bytes>();
     let (decode_tx, decode_rx) = mpsc::unbounded_channel::<(String, Bytes)>();
@@ -1188,6 +1201,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             if !canon.is_empty()
                                 && canon != canon_channel(DEFAULT_CHANNEL)
                                 && !channel_in_use(&canon, &my_channel, &members)
+                                && tombstone_allowed(&canon, &known_channels, &removed_channels)
                                 && removed_channels.insert(canon.clone())
                             {
                                 remove_from_dir(&mut known_channels, &canon);
@@ -1777,5 +1791,28 @@ mod roster_diff_tests {
     #[test]
     fn roster_diff_is_empty_when_nobody_left() {
         assert!(departed(&known(&["a", "b"]), &roster(&["b", "a", "new"])).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tombstone_tests {
+    use super::*;
+
+    /// Any peer may send ChannelRemoved for any string; tombstoning names we
+    /// never had lets one peer grow the set without bound and rebroadcast junk.
+    #[test]
+    fn unknown_channel_names_are_not_tombstoned() {
+        assert!(!tombstone_allowed("ghost", &["alpha".to_string()], &HashSet::new()));
+    }
+
+    #[test]
+    fn known_channel_is_tombstoned_until_the_cap() {
+        let known = vec!["Alpha".to_string()];
+        let mut removed = HashSet::new();
+        assert!(tombstone_allowed("alpha", &known, &removed));
+        for i in 0..MAX_TOMBSTONES {
+            removed.insert(format!("x{i}"));
+        }
+        assert!(!tombstone_allowed("alpha", &known, &removed), "cap not enforced");
     }
 }

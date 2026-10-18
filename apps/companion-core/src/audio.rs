@@ -350,7 +350,7 @@ pub enum DevCmd {
 pub fn run_devices(
     cap: Buf,
     play: Buf,
-    rate_tx: std::sync::mpsc::Sender<(u32, u32)>,
+    rate_tx: std::sync::mpsc::Sender<Result<(u32, u32), String>>,
     in_name: Option<String>,
     out_name: Option<String>,
     stop: Arc<AtomicBool>,
@@ -361,8 +361,25 @@ pub fn run_devices(
     let host = cpal::default_host();
     let in_want = in_name.or_else(|| std::env::var("IN_DEVICE").ok());
     let out_want = out_name.or_else(|| std::env::var("OUT_DEVICE").ok());
-    let inp = choose(&host, true, in_want.as_deref()).expect("Input-Device");
-    let outp = choose(&host, false, out_want.as_deref()).expect("Output-Device");
+    // Open and start both streams BEFORE reporting back: a panic after the
+    // report would leave setup_audio believing it has a working rig with no
+    // mic or speaker behind it. Any failure is handed to the caller instead.
+    let opened = (|| -> Result<(Picked, Picked, cpal::Stream, cpal::Stream)> {
+        let inp = choose(&host, true, in_want.as_deref())?;
+        let outp = choose(&host, false, out_want.as_deref())?;
+        let in_s = build_input(&inp, cap.clone())?;
+        let out_s = build_output(&outp, play.clone())?;
+        in_s.play().map_err(|e| anyhow!("Input-Stream startet nicht: {e}"))?;
+        out_s.play().map_err(|e| anyhow!("Output-Stream startet nicht: {e}"))?;
+        Ok((inp, outp, in_s, out_s))
+    })();
+    let (inp, outp, in_s, out_s) = match opened {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = rate_tx.send(Err(e.to_string()));
+            return;
+        }
+    };
     eprintln!(
         "Input : {} @ {}Hz | Output: {} @ {}Hz",
         inp.device.name().unwrap_or_default(),
@@ -372,11 +389,9 @@ pub fn run_devices(
     );
     in_rate.store(inp.rate, Ordering::SeqCst);
     out_rate.store(outp.rate, Ordering::SeqCst);
-    let _ = rate_tx.send((inp.rate, outp.rate)); // unblocks setup_audio once devices are open
-    let mut in_s = Some(build_input(&inp, cap.clone()).expect("input stream"));
-    let mut out_s = Some(build_output(&outp, play.clone()).expect("output stream"));
-    in_s.as_ref().unwrap().play().expect("play input");
-    out_s.as_ref().unwrap().play().expect("play output");
+    let _ = rate_tx.send(Ok((inp.rate, outp.rate))); // unblocks setup_audio once devices run
+    let mut in_s = Some(in_s);
+    let mut out_s = Some(out_s);
 
     // Hold the streams alive until shutdown; dropping them stops capture/playback.
     while !stop.load(Ordering::SeqCst) {

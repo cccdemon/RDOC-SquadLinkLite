@@ -285,10 +285,20 @@ impl Serverless {
         let sink = self.sink.clone();
         tokio::spawn(async move {
             let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            if let Some(dc) = dc {
-                if let Ok(j) = serde_json::to_string(&ChatMsg { text: text.clone(), ts }) {
-                    let _ = dc.send_text(j).await;
-                }
+            // Echo locally only once the peer really got it: a line that
+            // shows as sent but never left is worse than an error.
+            let Some(dc) = dc else {
+                sink(UiEvent::Log { text: "Chat: noch nicht verbunden".into() });
+                return;
+            };
+            let Ok(j) = serde_json::to_string(&ChatMsg { text: text.clone(), ts }) else { return };
+            if j.len() > crate::MAX_CHAT_BYTES {
+                sink(UiEvent::Log { text: "Chat: Nachricht zu lang".into() });
+                return;
+            }
+            if dc.send_text(j).await.is_err() {
+                sink(UiEvent::Log { text: "Chat: Senden fehlgeschlagen".into() });
+                return;
             }
             sink(UiEvent::Chat { from: me, text });
         });
