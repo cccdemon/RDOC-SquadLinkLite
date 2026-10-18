@@ -68,6 +68,10 @@ const PEER_CHAN: usize = 256;
 const MSG_RATE_WINDOW: Duration = Duration::from_secs(1);
 const MSG_RATE_MAX: u32 = 50; // WS frames per window before excess is dropped
 const REKEY_COOLDOWN: Duration = Duration::from_secs(5); // min gap between rekeys
+/// A socket that sends nothing for this long is dropped. Clients ping every
+/// 25 s, so a live client never trips it; a half-open one stops counting toward
+/// the cap and stops keeping its session alive.
+const WS_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn len_ok(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max
@@ -178,6 +182,8 @@ struct AppState {
     turn: Option<TurnConfig>,
     sessions: Sessions,
     rate: RateLimiter,
+    /// See [`WS_IDLE_TIMEOUT`]; a field so tests can shorten it.
+    ws_idle: Duration,
 }
 
 #[tokio::main]
@@ -214,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
         turn,
         sessions: Sessions::default(),
         rate: RateLimiter::default(),
+        ws_idle: WS_IDLE_TIMEOUT,
     });
 
     // Session lifecycle: keep a session alive while its room has members,
@@ -232,30 +239,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let app = Router::new()
-        .route("/", get(home))
-        .route("/get", get(downloads_page))
-        .route("/privacy", get(privacy))
-        .route("/legal", get(legal))
-        .route("/license", get(license_page))
-        .route("/changelog", get(changelog_page))
-        .route("/ws", get(ws_handler))
-        .route("/healthz", get(|| async { "ok" }))
-        // Brand assets are compiled into the binary, so a fresh deploy serves the
-        // right logo with no files to copy onto the host.
-        .route("/assets/logo.svg", get(logo_svg))
-        .route("/assets/rdoc.svg", get(rdoc_svg))
-        .route("/assets/rdoc-light.svg", get(rdoc_light_svg))
-        .route("/assets/fonts/:name", get(font_file))
-        .route("/assets/og-image.png", get(og_image))
-        .route("/assets/shot/:n", get(shot_png))
-        // PIN-protected session brokering (REST, called by the app webview → CORS).
-        .route("/session", post(create_session))
-        .route("/session/:code/join", post(join_session))
-        .route("/j/:code", get(landing))
-        .layer(DefaultBodyLimit::max(MAX_REST_BODY))
-        .layer(build_cors())
-        .with_state(state);
+    let app = router(state);
 
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
 
@@ -292,6 +276,34 @@ async fn main() -> anyhow::Result<()> {
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await?;
     Ok(())
+}
+
+/// Every route the server exposes; shared by `main` and the WS tests.
+fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/", get(home))
+        .route("/get", get(downloads_page))
+        .route("/privacy", get(privacy))
+        .route("/legal", get(legal))
+        .route("/license", get(license_page))
+        .route("/changelog", get(changelog_page))
+        .route("/ws", get(ws_handler))
+        .route("/healthz", get(|| async { "ok" }))
+        // Brand assets are compiled into the binary, so a fresh deploy serves the
+        // right logo with no files to copy onto the host.
+        .route("/assets/logo.svg", get(logo_svg))
+        .route("/assets/rdoc.svg", get(rdoc_svg))
+        .route("/assets/rdoc-light.svg", get(rdoc_light_svg))
+        .route("/assets/fonts/:name", get(font_file))
+        .route("/assets/og-image.png", get(og_image))
+        .route("/assets/shot/:n", get(shot_png))
+        // PIN-protected session brokering (REST, called by the app webview → CORS).
+        .route("/session", post(create_session))
+        .route("/session/:code/join", post(join_session))
+        .route("/j/:code", get(landing))
+        .layer(DefaultBodyLimit::max(MAX_REST_BODY))
+        .layer(build_cors())
+        .with_state(state)
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -1017,7 +1029,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut win_count: u32 = 0;
     let mut last_rekey: Option<Instant> = None;
 
-    while let Some(Ok(msg)) = stream.next().await {
+    // Idle timeout: any frame (text, ping, pong) counts as activity. A socket
+    // that goes quiet longer than `ws_idle` is treated as dead and cleaned up
+    // like a Leave, instead of lingering in the roster until TCP gives up.
+    while let Ok(Some(Ok(msg))) = tokio::time::timeout(state.ws_idle, stream.next()).await {
         let text = match msg {
             Message::Text(t) => t,
             Message::Close(_) => break,
@@ -1177,19 +1192,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    // Cleanup: drop from room, notify peers.
+    // Cleanup: drop from room, notify peers. Only if the room still holds THIS
+    // socket's handle: a superseded socket must not evict the live connection
+    // that replaced it under the same user_id.
     if let Some((room, user_id)) = me {
         let mut rooms = state.rooms.lock().unwrap();
         if let Some(r) = rooms.get_mut(&room) {
-            r.remove(&user_id);
-            for h in r.values() {
-                let _ = h.tx.try_send(ServerMsg::PeerLeft { user_id: user_id.clone() });
-            }
-            if r.is_empty() {
-                rooms.remove(&room);
+            let mine = r.get(&user_id).map_or(false, |h| h.tx.same_channel(&tx));
+            if mine {
+                r.remove(&user_id);
+                for h in r.values() {
+                    let _ = h.tx.try_send(ServerMsg::PeerLeft { user_id: user_id.clone() });
+                }
+                if r.is_empty() {
+                    rooms.remove(&room);
+                }
+                tracing::info!(%room, %user_id, "leave");
+            } else {
+                tracing::info!(%room, %user_id, "stale socket closed (already superseded)");
             }
         }
-        tracing::info!(%room, %user_id, "leave");
     }
     writer.abort();
 }
@@ -1208,5 +1230,137 @@ fn relay_to(
         if let Some(h) = r.get(to) {
             let _ = h.tx.try_send(build(from.clone()));
         }
+    }
+}
+
+#[cfg(test)]
+mod ws_tests {
+    //! Real sockets against the real router: these cover the join / supersede /
+    //! cleanup path in `handle_socket`, which has no seams for unit tests.
+    use super::*;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+    use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+
+    type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+    async fn spawn_server(ws_idle: Duration) -> (String, Arc<AppState>) {
+        let state = Arc::new(AppState {
+            rooms: Mutex::new(HashMap::new()),
+            auth: AuthConfig::Open,
+            turn: None,
+            sessions: Sessions::default(),
+            rate: RateLimiter::default(),
+            ws_idle,
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+        });
+        (format!("ws://{addr}/ws"), state)
+    }
+
+    /// Next ServerMsg, or None once the server has closed the socket.
+    async fn next_msg(c: &mut Client) -> Option<ServerMsg> {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(3), c.next()).await {
+                Ok(Some(Ok(WsMsg::Text(t)))) => return Some(serde_json::from_str(&t).unwrap()),
+                Ok(Some(Ok(WsMsg::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => return None,
+                Ok(Some(Ok(_))) => continue,
+                Err(_) => panic!("no frame within 3 s"),
+            }
+        }
+    }
+
+    /// Connect and join; returns once the Roster has arrived.
+    async fn join(url: &str, room: &str, user_id: &str) -> Client {
+        let (mut c, _) = connect_async(url).await.unwrap();
+        let j = serde_json::to_string(&ClientMsg::Join {
+            room: room.into(),
+            user_id: user_id.into(),
+            name: user_id.into(),
+            token: None,
+        })
+        .unwrap();
+        c.send(WsMsg::Text(j)).await.unwrap();
+        match next_msg(&mut c).await {
+            Some(ServerMsg::Roster { .. }) => c,
+            other => panic!("expected Roster, got {other:?}"),
+        }
+    }
+
+    fn member_present(state: &AppState, room: &str, user_id: &str) -> bool {
+        state.rooms.lock().unwrap().get(room).map(|r| r.contains_key(user_id)).unwrap_or(false)
+    }
+
+    /// A client reconnects while its old socket is still half-open. The old
+    /// socket is superseded; when it finally dies, its cleanup must not evict
+    /// the live replacement or announce a PeerLeft for it.
+    #[tokio::test]
+    async fn stale_superseded_socket_does_not_evict_the_live_member() {
+        let (url, state) = spawn_server(Duration::from_secs(60)).await;
+        let mut observer = join(&url, "r", "w").await;
+        let mut old = join(&url, "r", "u").await;
+        let mut fresh = join(&url, "r", "u").await;
+        match next_msg(&mut old).await {
+            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "superseded"),
+            other => panic!("expected superseded error, got {other:?}"),
+        }
+        // observer saw u join twice
+        for _ in 0..2 {
+            match next_msg(&mut observer).await {
+                Some(ServerMsg::PeerJoined { user_id, .. }) => assert_eq!(user_id, "u"),
+                other => panic!("expected PeerJoined, got {other:?}"),
+            }
+        }
+
+        old.close(None).await.unwrap();
+        drop(old);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert!(member_present(&state, "r", "u"), "live member evicted by the stale socket's cleanup");
+        let leaked = tokio::time::timeout(Duration::from_millis(300), observer.next()).await;
+        assert!(leaked.is_err(), "observer got a frame for the stale close: {leaked:?}");
+        let leaked = tokio::time::timeout(Duration::from_millis(100), fresh.next()).await;
+        assert!(leaked.is_err(), "live member got a frame for the stale close: {leaked:?}");
+    }
+
+    /// A socket that falls silent (half-open TCP, crashed client) must be
+    /// dropped by the server and leave the room, so it stops counting toward
+    /// the cap and stops holding the session open.
+    #[tokio::test]
+    async fn silent_socket_is_dropped_after_the_idle_timeout_and_leaves_the_room() {
+        let (url, state) = spawn_server(Duration::from_millis(300)).await;
+        let mut c = join(&url, "r", "u").await;
+        assert!(member_present(&state, "r", "u"));
+        let ended = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match c.next().await {
+                    None | Some(Err(_)) | Some(Ok(WsMsg::Close(_))) => break,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .is_ok();
+        assert!(ended, "server kept the idle socket open");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!member_present(&state, "r", "u"), "idle member still in the roster");
+    }
+
+    /// The client heartbeat is a WS ping; it must count as activity.
+    #[tokio::test]
+    async fn pings_keep_a_quiet_socket_alive() {
+        let (url, state) = spawn_server(Duration::from_millis(300)).await;
+        let mut c = join(&url, "r", "u").await;
+        for _ in 0..8 {
+            c.send(WsMsg::Ping(vec![])).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // drain pongs so the read side keeps moving
+            while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(10), c.next()).await {}
+        }
+        assert!(member_present(&state, "r", "u"), "pinging member was dropped as idle");
     }
 }
