@@ -562,6 +562,16 @@ impl Mesh {
         }
     }
 
+    /// Tear down every link: close each PC and drop its crypto session. Used on
+    /// engine shutdown so peers see the DTLS/ICE teardown right away instead of
+    /// a ghost member that only fades once their ICE times out.
+    pub async fn close_all(&mut self) {
+        for (id, p) in self.peers.drain() {
+            self.crypto.remove(&id);
+            let _ = p.pc.close().await;
+        }
+    }
+
     pub async fn on_left(&mut self, peer: &str) {
         self.crypto.remove(peer);
         if let Some(p) = self.peers.remove(peer) {
@@ -1050,5 +1060,33 @@ mod rekey_tests {
         let pc2 = a.peer_pc("b").unwrap();
         assert!(!Arc::ptr_eq(&pc1, &pc2), "relink kept the unanswered PC");
         assert!(wait_offer(&mut out_rx).await, "relink sent no fresh offer");
+    }
+
+    /// Engine shutdown must close every PC: a dropped-but-open PC keeps ICE
+    /// alive, so remote peers see a ghost member until their ICE times out.
+    #[tokio::test]
+    async fn close_all_closes_every_peer_connection() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (out_tx, mut out_rx) = unbounded_channel::<ClientMsg>();
+        let (dec, mut dec_rx) = unbounded_channel::<(String, Bytes)>();
+        let (ev, mut ev_rx) = unbounded_channel::<MeshEvent>();
+        tokio::spawn(async move { while out_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while dec_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while ev_rx.recv().await.is_some() {} });
+        let mut a = Mesh::new(
+            Arc::new(build_api().unwrap()), track(), "a".into(), out_tx, dec, ev,
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("a".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
+        );
+        a.on_peer("b").await.unwrap();
+        a.on_peer("c").await.unwrap();
+        let pcs: Vec<_> = ["b", "c"].iter().map(|p| a.peer_pc(p).unwrap()).collect();
+
+        a.close_all().await;
+
+        assert!(a.peer_pc("b").is_none() && a.peer_pc("c").is_none(), "peers still registered");
+        for pc in pcs {
+            assert_eq!(pc.connection_state(), RTCPeerConnectionState::Closed, "PC left open");
+        }
     }
 }

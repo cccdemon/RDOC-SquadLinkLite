@@ -376,6 +376,13 @@ pub(crate) fn merge_channels(dir: &mut Vec<String>, add: &[String]) -> bool {
 
 /// Remove the channel whose canonical form is `canon` from the directory `dir`.
 /// Returns true if it was present (and dropped).
+/// Members we knew that a fresh roster no longer lists. They left while
+/// signaling was down, so no PeerLeft ever arrived; the roster is the only
+/// notice, and without acting on it their PC, key and channel state linger.
+fn departed(known: &HashMap<String, Member>, roster: &[protocol::PeerInfo]) -> Vec<String> {
+    known.keys().filter(|id| !roster.iter().any(|p| &p.user_id == *id)).cloned().collect()
+}
+
 fn remove_from_dir(dir: &mut Vec<String>, canon: &str) -> bool {
     let before = dir.len();
     dir.retain(|d| canon_channel(d) != canon);
@@ -1002,6 +1009,15 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             // Keep the live link state of members we already
                             // know — a signaling reconnect must not make every
                             // healthy peer look disconnected.
+                            // Members absent from the fresh roster left while
+                            // signaling was down (no PeerLeft ever came): drop
+                            // their link, key and channel state as PeerLeft would.
+                            let gone = departed(&members, &peers);
+                            for id in &gone {
+                                members.remove(id);
+                                chan.remove_peer(id);
+                                mesh.on_left(id).await;
+                            }
                             let mut fresh: HashMap<String, Member> = HashMap::new();
                             for p in &peers {
                                 let m = match members.remove(&p.user_id) {
@@ -1021,6 +1037,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             members = fresh;
                             for p in &peers { let _ = mesh.on_peer(&p.user_id).await; }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
+                            // Forward secrecy for the departed, same as PeerLeft.
+                            if !gone.is_empty() && am_authority(&me_id, &members) {
+                                let acts = keys.rotate(&secure_peer_ids(&members, &crypto));
+                                perform_key_actions(&mesh, acts).await;
+                                sink(UiEvent::RoomAudio { gen: keys.generation(), authority: true });
+                            }
                         }
                         ServerMsg::PeerJoined { user_id, name } => {
                             members.insert(user_id.clone(), Member::new(
@@ -1089,7 +1111,14 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             }
                         }
                         ServerMsg::Warn { size, cap } => { sink(UiEvent::Log { text: format!("Room {size}/{cap} — Audioqualität kann leiden") }); }
-                        ServerMsg::RoomFull { cap } => { sink(UiEvent::Log { text: format!("Room voll @ {cap}") }); break; }
+                        ServerMsg::RoomFull { cap } => {
+                            // Refused: tear down like a disconnect, or the UI keeps
+                            // showing a session that no longer exists.
+                            sink(UiEvent::Log { text: format!("Room voll @ {cap}") });
+                            mesh.close_all().await;
+                            sink(UiEvent::Status { connected: false, transmitting: false });
+                            break;
+                        }
                         ServerMsg::Error { code, message } => { sink(UiEvent::Log { text: format!("{code}: {message}") }); }
                     }
                 }
@@ -1108,6 +1137,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             if let Some(m) = members.get_mut(&peer) {
                                 if up {
                                     m.linked = true;
+                                    // A transient drop cleared `secure`; the pairwise
+                                    // session usually survives, so read it back.
+                                    m.secure = crypto.is_secure(&peer);
                                     m.down_since = None;
                                     m.last_relink = None;
                                     if m.link_warned {
@@ -1272,6 +1304,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             }
                         }
                         None => {
+                            // Engine dropped: close every PC now so peers see us
+                            // leave instead of a ghost that fades with ICE.
+                            mesh.close_all().await;
                             sink(UiEvent::Status { connected: false, transmitting: false });
                             break;
                         }
@@ -1713,5 +1748,34 @@ mod stop_guard_tests {
         let g = StopGuard::new(stop.clone());
         g.disarm();
         assert!(!stop.load(Ordering::SeqCst), "rig stopped although start() succeeded");
+    }
+}
+
+#[cfg(test)]
+mod roster_diff_tests {
+    use super::*;
+    use protocol::PeerInfo;
+
+    fn known(ids: &[&str]) -> HashMap<String, Member> {
+        ids.iter()
+            .map(|id| (id.to_string(), Member::new(id.to_string(), DEFAULT_CHANNEL.to_string(), false)))
+            .collect()
+    }
+    fn roster(ids: &[&str]) -> Vec<PeerInfo> {
+        ids.iter().map(|id| PeerInfo { user_id: id.to_string(), name: id.to_string() }).collect()
+    }
+
+    /// A member who left while signaling was down never produced a PeerLeft.
+    /// The next Roster is the only notice: whoever is missing from it is gone.
+    #[test]
+    fn roster_diff_names_members_missing_from_the_fresh_roster() {
+        let mut gone = departed(&known(&["a", "b", "c"]), &roster(&["a", "c"]));
+        gone.sort();
+        assert_eq!(gone, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn roster_diff_is_empty_when_nobody_left() {
+        assert!(departed(&known(&["a", "b"]), &roster(&["b", "a", "new"])).is_empty());
     }
 }
