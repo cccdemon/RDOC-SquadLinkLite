@@ -5,7 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use audiopus::coder::{Decoder, Encoder};
@@ -757,14 +757,26 @@ pub fn encode_loop(
     }
 }
 
+/// A peer silent for this long is forgotten by the decoder and the mixer.
+/// Both maps are keyed by peer id; without this, every member who ever
+/// spoke stays in the per-frame mixer scan for the rest of the session.
+const DECODER_IDLE: Duration = Duration::from_secs(30);
+
 /// Decode incoming Opus frames (per peer) → push i16 @48k into the mix map.
-pub fn decode_loop(mut rx: UnboundedReceiver<(String, Bytes)>, mix: MixMap) {
-    let mut decoders: HashMap<String, Decoder> = HashMap::new();
+pub fn decode_loop(rx: UnboundedReceiver<(String, Bytes)>, mix: MixMap) {
+    decode_loop_with_idle(rx, mix, DECODER_IDLE)
+}
+
+pub fn decode_loop_with_idle(mut rx: UnboundedReceiver<(String, Bytes)>, mix: MixMap, idle: Duration) {
+    let mut decoders: HashMap<String, (Decoder, Instant)> = HashMap::new();
     let mut out = [0i16; FRAME];
+    let mut last_gc = Instant::now();
     while let Some((peer, payload)) = rx.blocking_recv() {
-        let dec = decoders
-            .entry(peer.clone())
-            .or_insert_with(|| Decoder::new(SampleRate::Hz48000, Channels::Mono).expect("opus decoder"));
+        let now = Instant::now();
+        let (dec, seen) = decoders.entry(peer.clone()).or_insert_with(|| {
+            (Decoder::new(SampleRate::Hz48000, Channels::Mono).expect("opus decoder"), now)
+        });
+        *seen = now;
         if let Ok(n) = dec.decode(Some(&payload[..]), &mut out[..], false) {
             let mut m = mix.lock().unwrap();
             let b = m.entry(peer).or_default();
@@ -773,6 +785,22 @@ pub fn decode_loop(mut rx: UnboundedReceiver<(String, Bytes)>, mix: MixMap) {
             }
             while b.len() > 19200 {
                 b.pop_front(); // cap ~400ms jitter
+            }
+        }
+        // GC on a coarse cadence: forget peers silent past `idle`.
+        if now.duration_since(last_gc) >= idle / 2 {
+            last_gc = now;
+            let stale: Vec<String> = decoders
+                .iter()
+                .filter(|(_, (_, seen))| now.duration_since(*seen) >= idle)
+                .map(|(k, _)| k.clone())
+                .collect();
+            if !stale.is_empty() {
+                let mut m = mix.lock().unwrap();
+                for k in &stale {
+                    decoders.remove(k);
+                    m.remove(k);
+                }
             }
         }
     }
@@ -956,5 +984,41 @@ mod radio_fx_tests {
             let y = fx.process(x, &c);
             assert!(y.is_finite());
         }
+    }
+}
+
+#[cfg(test)]
+mod decode_gc_tests {
+    use super::*;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn opus_silence() -> Bytes {
+        let mut enc = Encoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip).unwrap();
+        let pcm = [0i16; FRAME];
+        let mut out = [0u8; 400];
+        let n = enc.encode(&pcm, &mut out).unwrap();
+        Bytes::copy_from_slice(&out[..n])
+    }
+
+    /// Decoders and mix queues are keyed by peer id and were never removed, so
+    /// a long session with churn scanned every past member each 20 ms frame.
+    /// A peer silent past the idle budget is forgotten.
+    #[test]
+    fn idle_peer_is_dropped_from_the_mix_map() {
+        let (tx, rx) = unbounded_channel::<(String, Bytes)>();
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let m2 = mix.clone();
+        let t = std::thread::spawn(move || decode_loop_with_idle(rx, m2, Duration::from_millis(50)));
+
+        tx.send(("gone".into(), opus_silence())).unwrap();
+        std::thread::sleep(Duration::from_millis(120));
+        tx.send(("here".into(), opus_silence())).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let keys: Vec<String> = mix.lock().unwrap().keys().cloned().collect();
+        drop(tx);
+        t.join().unwrap();
+        assert!(keys.iter().any(|k| k == "here"), "live peer missing: {keys:?}");
+        assert!(!keys.iter().any(|k| k == "gone"), "idle peer kept: {keys:?}");
     }
 }
