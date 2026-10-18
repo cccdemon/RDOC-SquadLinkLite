@@ -492,9 +492,17 @@ impl Mesh {
         // is not a dead link, and rebuilding it would restart the clock forever.
         // Only an absent, failed, disconnected or closed connection is rebuilt;
         // webrtc-rs reaches those states on its own when checking gives up.
+        //
+        // One exception: a PC with no remote description never leaves `New` —
+        // ICE cannot start without the peer's candidates — so `New` there means
+        // "the offer or answer got lost", not "still negotiating". The watchdog
+        // stagger (LINK_RETRY_*) already gives a fresh offer time to be answered.
         if let Some(p) = self.peers.get(peer) {
+            let negotiating = p.remote_set.load(Ordering::SeqCst);
             match p.pc.connection_state() {
-                RTCPeerConnectionState::New | RTCPeerConnectionState::Connecting => return Ok(()),
+                RTCPeerConnectionState::New | RTCPeerConnectionState::Connecting if negotiating => {
+                    return Ok(())
+                }
                 _ => {}
             }
         }
@@ -1003,5 +1011,44 @@ mod rekey_tests {
         let pc_b2 = b.lock().await.peer_pc("a").unwrap();
         assert!(!Arc::ptr_eq(&pc_a1, &pc_a2), "A kept the same PC (no rekey)");
         assert!(!Arc::ptr_eq(&pc_b1, &pc_b2), "B kept the same PC (no rekey)");
+    }
+
+    async fn wait_offer(rx: &mut tokio::sync::mpsc::UnboundedReceiver<ClientMsg>) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(ClientMsg::Offer { .. })) => return true,
+                Ok(Some(_)) => continue,
+                _ => return false,
+            }
+        }
+    }
+
+    /// The offer was lost in transit (signaling hiccup), so the PC never gets
+    /// an answer and sits in `New` forever. The watchdog's relink must rebuild
+    /// and re-offer instead of reading `New` as "still negotiating".
+    #[tokio::test]
+    async fn relink_rebuilds_a_link_whose_offer_was_never_answered() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (out_tx, mut out_rx) = unbounded_channel::<ClientMsg>();
+        let (dec, mut dec_rx) = unbounded_channel::<(String, Bytes)>();
+        let (ev, mut ev_rx) = unbounded_channel::<MeshEvent>();
+        tokio::spawn(async move { while dec_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while ev_rx.recv().await.is_some() {} });
+        let mut a = Mesh::new(
+            Arc::new(build_api().unwrap()), track(), "a".into(), out_tx, dec, ev,
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("a".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
+        );
+
+        a.on_peer("b").await.unwrap();
+        assert!(wait_offer(&mut out_rx).await, "initial offer never sent");
+        let pc1 = a.peer_pc("b").unwrap();
+        assert_eq!(pc1.connection_state(), RTCPeerConnectionState::New);
+
+        a.relink("b").await.unwrap();
+        let pc2 = a.peer_pc("b").unwrap();
+        assert!(!Arc::ptr_eq(&pc1, &pc2), "relink kept the unanswered PC");
+        assert!(wait_offer(&mut out_rx).await, "relink sent no fresh offer");
     }
 }
