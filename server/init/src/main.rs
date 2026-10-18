@@ -169,6 +169,16 @@ fn build_cors() -> CorsLayer {
         .allow_headers([axum::http::header::CONTENT_TYPE])
 }
 
+/// Boolean env switch: only `1` / `true` (any case) turn it on. `is_ok()` would
+/// read `TLS_DISABLE=0` as "disable TLS".
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).map(|v| flag_on(&v)).unwrap_or(false)
+}
+fn flag_on(v: &str) -> bool {
+    let v = v.trim();
+    v == "1" || v.eq_ignore_ascii_case("true")
+}
+
 struct PeerHandle {
     name: String,
     tx: mpsc::Sender<ServerMsg>,
@@ -184,6 +194,10 @@ struct AppState {
     rate: RateLimiter,
     /// See [`WS_IDLE_TIMEOUT`]; a field so tests can shorten it.
     ws_idle: Duration,
+    /// Last accepted Rekey per room. Per room, not per socket: the room token
+    /// is shared, so one member could otherwise dodge the cooldown by opening
+    /// a second connection and tear down every link again and again.
+    rekeys: Mutex<HashMap<String, Instant>>,
 }
 
 #[tokio::main]
@@ -221,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
         sessions: Sessions::default(),
         rate: RateLimiter::default(),
         ws_idle: WS_IDLE_TIMEOUT,
+        rekeys: Mutex::new(HashMap::new()),
     });
 
     // Session lifecycle: keep a session alive while its room has members,
@@ -246,8 +261,8 @@ async fn main() -> anyhow::Result<()> {
     // TLS by default (wss). TLS_DISABLE=1 → plain ws (must sit behind a TLS proxy);
     // bind loopback only unless ALLOW_PLAIN_PUBLIC_BIND=1, so a misconfig can't
     // expose plain ws to the network.
-    if std::env::var("TLS_DISABLE").is_ok() {
-        let bind_ip = if std::env::var("ALLOW_PLAIN_PUBLIC_BIND").is_ok() {
+    if env_flag("TLS_DISABLE") {
+        let bind_ip = if env_flag("ALLOW_PLAIN_PUBLIC_BIND") {
             "0.0.0.0"
         } else {
             "127.0.0.1"
@@ -1024,10 +1039,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // (room, user_id) once this socket has joined.
     let mut me: Option<(String, String)> = None;
-    // Sliding-window message rate limit + rekey cooldown, per connection.
+    // Sliding-window message rate limit, per connection.
     let mut win_start = Instant::now();
     let mut win_count: u32 = 0;
-    let mut last_rekey: Option<Instant> = None;
 
     // Idle timeout: any frame (text, ping, pong) counts as activity. A socket
     // that goes quiet longer than `ws_idle` is treated as dead and cleaned up
@@ -1169,15 +1183,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             ClientMsg::Rekey => {
                 // Throttle: a full-room rekey tears down every link, so one
                 // member must not be able to spam it and interrupt audio.
-                if let Some(t) = last_rekey {
-                    if now.duration_since(t) < REKEY_COOLDOWN {
-                        continue;
-                    }
-                }
-                last_rekey = Some(now);
                 // Broadcast a key-rotation request to the whole room (incl. the
                 // initiator) so every client re-handshakes together.
                 if let Some((room, from)) = &me {
+                    {
+                        let mut rekeys = state.rekeys.lock().unwrap();
+                        if rekeys.get(room).map_or(false, |t| now.duration_since(*t) < REKEY_COOLDOWN) {
+                            continue;
+                        }
+                        rekeys.insert(room.clone(), now);
+                    }
                     let rooms = state.rooms.lock().unwrap();
                     if let Some(r) = rooms.get(room) {
                         let by = r.get(from).map(|h| h.name.clone()).unwrap_or_default();
@@ -1206,6 +1221,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
                 if r.is_empty() {
                     rooms.remove(&room);
+                    state.rekeys.lock().unwrap().remove(&room);
                 }
                 tracing::info!(%room, %user_id, "leave");
             } else {
@@ -1252,6 +1268,7 @@ mod ws_tests {
             sessions: Sessions::default(),
             rate: RateLimiter::default(),
             ws_idle,
+            rekeys: Mutex::new(HashMap::new()),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1350,6 +1367,38 @@ mod ws_tests {
         assert!(!member_present(&state, "r", "u"), "idle member still in the roster");
     }
 
+    /// One member must not be able to tear down every link in the room
+    /// repeatedly by opening a second socket: the cooldown belongs to the room.
+    #[tokio::test]
+    async fn rekey_cooldown_is_per_room_not_per_socket() {
+        let (url, _state) = spawn_server(Duration::from_secs(60)).await;
+        let mut observer = join(&url, "r", "w").await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        for _ in 0..2 {
+            assert!(matches!(next_msg(&mut observer).await, Some(ServerMsg::PeerJoined { .. })));
+        }
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+
+        let rekey = serde_json::to_string(&ClientMsg::Rekey).unwrap();
+        a.send(WsMsg::Text(rekey.clone())).await.unwrap();
+        b.send(WsMsg::Text(rekey)).await.unwrap();
+
+        let mut rekeys = 0;
+        loop {
+            match tokio::time::timeout(Duration::from_millis(500), observer.next()).await {
+                Ok(Some(Ok(WsMsg::Text(t)))) => {
+                    if matches!(serde_json::from_str::<ServerMsg>(&t).unwrap(), ServerMsg::Rekey { .. }) {
+                        rekeys += 1;
+                    }
+                }
+                Ok(Some(Ok(_))) => continue,
+                _ => break,
+            }
+        }
+        assert_eq!(rekeys, 1, "second socket bypassed the room's rekey cooldown");
+    }
+
     /// The client heartbeat is a WS ping; it must count as activity.
     #[tokio::test]
     async fn pings_keep_a_quiet_socket_alive() {
@@ -1362,5 +1411,22 @@ mod ws_tests {
             while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(10), c.next()).await {}
         }
         assert!(member_present(&state, "r", "u"), "pinging member was dropped as idle");
+    }
+}
+
+#[cfg(test)]
+mod env_flag_tests {
+    use super::flag_on;
+
+    /// `TLS_DISABLE=0` used to disable TLS: the check was `is_ok()`, so any
+    /// value — including "0" or "" — counted as set.
+    #[test]
+    fn only_one_or_true_switch_a_flag_on() {
+        for on in ["1", "true", "TRUE", " true "] {
+            assert!(flag_on(on), "{on:?} should be on");
+        }
+        for off in ["0", "", "false", "no", "yes", "2"] {
+            assert!(!flag_on(off), "{off:?} should be off");
+        }
     }
 }
