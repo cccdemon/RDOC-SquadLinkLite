@@ -700,6 +700,13 @@ export default function App() {
         if (p.connected) {
           setConnecting(false);
           setSigUp(true);
+        } else {
+          // Teardown: the engine sends no final roster, so clear per-session
+          // state here. An empty roster also drops duckActive, which releases
+          // the other apps' volume; roomAudio must not keep advertising PQC
+          // on the start screen after the session is gone.
+          setParticipants([]);
+          setRoomAudio({ gen: null, authority: false });
         }
       } else if (p.type === "log") setLog(p.text);
       else if (p.type === "net") setNet({ peers: p.peers, up: p.up_kbps, down: p.down_kbps });
