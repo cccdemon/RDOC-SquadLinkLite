@@ -82,9 +82,12 @@ function connectSubraum() {
     } else if (msg.t === "state") {
       state = msg.state || {};
       renderAll();
+    } else if (msg.t === "auth-failed") {
+      // Stale token (app restarted between read and connect). The server only
+      // closes after three bad tries, so close ourselves; the close handler
+      // retries and re-reads the fresh token file.
+      ws.close();
     }
-    // auth-failed: stale token (app restarted between read and connect) — the
-    // close handler retries, and the retry re-reads the fresh file.
   });
   ws.on("close", () => {
     if (sub === ws) sub = null;
