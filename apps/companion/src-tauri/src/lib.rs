@@ -763,6 +763,15 @@ async fn connect(
     let input_device = clean_dev(input_device)?;
     let output_device = clean_dev(output_device)?;
 
+    // One engine at a time. A deep link arriving mid-session would otherwise
+    // stack a second engine, and the first one's teardown Status knocks the UI
+    // off the session that is still running.
+    if state.engine.lock().unwrap().is_some() {
+        return Err("already connected — disconnect first".into());
+    }
+    // Transmit/chat consult the serverless slot first; a stale one would eat them.
+    *state.serverless.lock().unwrap() = None;
+
     let engine = start(
         EngineConfig { server, room, user_id, name, token, cert_sha256, input_device, output_device, relay_enabled },
         make_sink(&app),
@@ -1108,7 +1117,13 @@ fn open_url(url: &str) {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+// Linux (and, for lack of a launcher, Android: the spawn fails silently there).
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn open_url(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }

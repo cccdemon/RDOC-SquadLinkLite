@@ -1171,7 +1171,17 @@ PIN: ${sessionInfo.pin}`);
       return null;
     }
   };
+  const connectedRef = useRef(connected);
+  connectedRef.current = connected;
+  const connectingRef = useRef(connecting);
+  connectingRef.current = connecting;
   const connectDirect = async (raw: string) => {
+    // A link while connected (or mid-connect) would start a second engine; the
+    // backend refuses that too, but refusing here keeps the log message clear.
+    if (connectedRef.current || connectingRef.current) {
+      setLog("Direktlink ignoriert – erst die laufende Sitzung verlassen.");
+      return;
+    }
     const cfg = parseDirectLink(raw);
     if (!cfg) {
       setLog("Ungültiger subraum-Direktlink");
