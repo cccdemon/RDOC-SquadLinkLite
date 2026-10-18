@@ -41,6 +41,11 @@ cargo build --release            # headless engine binary
 its own directory (`cd apps/companion/src-tauri && cargo check`). `spikes/*` are
 standalone throwaway crates, also excluded.
 
+Local compilates and CI-downloaded installers go in `test-build/<version>/`
+(gitignored) — never loose in the repo root. `screenshots/` and `store-art/`
+(`generate.mjs` renders the Store tiles/promo PNGs) are intentionally
+untracked local dirs, not stray files to clean up.
+
 Tests live in `#[cfg(test)]` modules inside the source files — there is no
 separate test dir: `lib.rs`, `mesh.rs`, `crypto.rs`, `audio.rs`, `signaling.rs`
 (companion-core), `crates/protocol/src/lib.rs`, `auth.rs`/`turn.rs`/`sessions.rs`
@@ -59,7 +64,22 @@ docker run --rm subraum-build cargo test --workspace   # full test suite
 bash e2e/run.sh   # REAL 3-client mesh + server in containers: reproduces the
                   # late-joining-authority room-key handover end to end
 bash e2e/desktop.sh   # REAL Linux desktop app (webkit2gtk) under Xvfb; probes
-                      # the control API from inside — proves boot + webview
+                      # the control API from inside (e2e/probe-control.py) —
+                      # proves boot + webview
+```
+
+`docker build` re-copies the tree, so every edit means a cold build. For an
+edit-test loop, bind-mount the repo into the already-built image and keep the
+target dir in a named volume — incremental runs take ~20 s:
+
+```sh
+export MSYS_NO_PATHCONV=1   # Git Bash: keep C:/... paths intact for -v
+docker run --rm -v "$PWD:/work" -v subraum-target:/target -w /work \
+  -e CARGO_TARGET_DIR=/target subraum-build cargo test --workspace
+# src-tauri (needs webkit2gtk etc.) — same trick with the desktop image:
+docker run --rm -v "$PWD:/work" -v subraum-target-tauri:/target \
+  -w /work/apps/companion/src-tauri -e CARGO_TARGET_DIR=/target \
+  subraum-desktopbuild cargo check
 ```
 
 The desktop stage builds src-tauri with `--features tauri/custom-protocol` —
