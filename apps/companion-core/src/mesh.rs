@@ -24,6 +24,7 @@ use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::signaling_state::RTCSignalingState;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
@@ -489,6 +490,8 @@ impl Mesh {
     /// the caller (the engine's link watchdog) staggers the two sides by time
     /// instead, so a pair whose ICE never came up still gets retried when the
     /// side that would normally offer is the unreachable one.
+    /// That means both sides can offer at once; [`Mesh::on_offer`] resolves the
+    /// collision (the smaller id keeps its offer, the larger one answers).
     pub async fn relink(&mut self, peer: &str) -> Result<()> {
         // Never tear down a negotiation that is still running — a slow ICE run
         // is not a dead link, and rebuilding it would restart the clock forever.
@@ -530,6 +533,20 @@ impl Mesh {
     }
 
     pub async fn on_offer(&mut self, from: &str, sdp: String) -> Result<()> {
+        // Glare: both sides offered. The designated offerer (smaller id) keeps its
+        // offer and ignores the peer's; the other side drops its own half-built PC
+        // and answers instead.
+        if let Some(p) = self.peers.get(from) {
+            if p.pc.signaling_state() == RTCSignalingState::HaveLocalOffer {
+                if self.my_id.as_str() < from {
+                    return Ok(());
+                }
+                if let Some(old) = self.peers.remove(from) {
+                    self.crypto.remove(from);
+                    let _ = old.pc.close().await;
+                }
+            }
+        }
         // A fresh offer for an already-established peer is a renegotiation /
         // rekey: drop the old PC so ensure() builds a new one with new keys.
         if let Some(p) = self.peers.get(from) {
@@ -1062,6 +1079,85 @@ mod rekey_tests {
         let pc2 = a.peer_pc("b").unwrap();
         assert!(!Arc::ptr_eq(&pc1, &pc2), "relink kept the unanswered PC");
         assert!(wait_offer(&mut out_rx).await, "relink sent no fresh offer");
+    }
+
+    /// Both sides relink before either offer is delivered (the watchdog may
+    /// fire on both ends inside its stagger window). Each PC sits in
+    /// `HaveLocalOffer` when the peer's offer arrives; `on_offer` must resolve
+    /// the glare so the pair still converges to one working link.
+    #[tokio::test]
+    async fn simultaneous_relinks_converge_to_one_link_per_pair() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (out_a_tx, mut out_a_rx) = unbounded_channel::<ClientMsg>();
+        let (out_b_tx, mut out_b_rx) = unbounded_channel::<ClientMsg>();
+        let (dec_a, mut dec_a_rx) = unbounded_channel::<(String, Bytes)>();
+        let (dec_b, mut dec_b_rx) = unbounded_channel::<(String, Bytes)>();
+        let (ev_a, mut ev_a_rx) = unbounded_channel::<MeshEvent>();
+        let (ev_b, mut ev_b_rx) = unbounded_channel::<MeshEvent>();
+        tokio::spawn(async move { while dec_a_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while dec_b_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while ev_a_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while ev_b_rx.recv().await.is_some() {} });
+
+        let a = Arc::new(AsyncMutex::new(Mesh::new(
+            Arc::new(build_api().unwrap()), track(), "a".into(), out_a_tx, dec_a, ev_a,
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("a".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
+        )));
+        let b = Arc::new(AsyncMutex::new(Mesh::new(
+            Arc::new(build_api().unwrap()), track(), "b".into(), out_b_tx, dec_b, ev_b,
+            Arc::new(ChanState::new()), Arc::new(crate::crypto::PeerCrypto::new("b".into())),
+            Arc::new(crate::crypto::RoomAudio::new()),
+        )));
+
+        // Both relink first; nothing is delivered yet.
+        a.lock().await.relink("b").await.unwrap();
+        b.lock().await.relink("a").await.unwrap();
+
+        // Hold back everything up to and including each side's offer, so both
+        // offers are in flight before either is processed.
+        async fn until_offer(rx: &mut tokio::sync::mpsc::UnboundedReceiver<ClientMsg>) -> Vec<ClientMsg> {
+            let mut held = Vec::new();
+            loop {
+                let m = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                    .await
+                    .expect("no offer sent")
+                    .expect("channel closed");
+                let done = matches!(m, ClientMsg::Offer { .. });
+                held.push(m);
+                if done { return held; }
+            }
+        }
+        let held_a = until_offer(&mut out_a_rx).await;
+        let held_b = until_offer(&mut out_b_rx).await;
+
+        // Relay: first the held messages, then whatever follows live.
+        async fn relay(
+            held: Vec<ClientMsg>,
+            mut rx: tokio::sync::mpsc::UnboundedReceiver<ClientMsg>,
+            to: Arc<AsyncMutex<Mesh>>,
+            from: &'static str,
+        ) {
+            let mut pending: std::collections::VecDeque<ClientMsg> = held.into();
+            loop {
+                let msg = match pending.pop_front() {
+                    Some(m) => m,
+                    None => match rx.recv().await { Some(m) => m, None => return },
+                };
+                let mut g = to.lock().await;
+                match msg {
+                    ClientMsg::Offer { sdp, .. } => { let _ = g.on_offer(from, sdp).await; }
+                    ClientMsg::Answer { sdp, .. } => { let _ = g.on_answer(from, sdp).await; }
+                    ClientMsg::Ice { candidate, .. } => { g.on_ice(from, candidate).await; }
+                    _ => {}
+                }
+            }
+        }
+        tokio::spawn(relay(held_a, out_a_rx, b.clone(), "a"));
+        tokio::spawn(relay(held_b, out_b_rx, a.clone(), "b"));
+
+        assert!(wait_connected(&a, "b").await, "A->B never connected after simultaneous relink");
+        assert!(wait_connected(&b, "a").await, "B->A never connected after simultaneous relink");
     }
 
     /// Engine shutdown must close every PC: a dropped-but-open PC keeps ICE
