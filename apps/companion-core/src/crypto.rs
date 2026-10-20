@@ -546,31 +546,43 @@ impl RoomAudio {
         }
     }
 
-    /// Frame an outbound audio payload: sealed with the active send key, else raw.
-    pub fn seal_outbound(&self, sender: &str, opus: &[u8]) -> Vec<u8> {
+    /// Frame an outbound audio payload: sealed with the active send key; raw
+    /// only while no key has ever been staged (before the first key). `None`
+    /// means "drop this frame": a key is staged but not yet promoted to send,
+    /// which cannot persist past the first promote — kept as a guard so a
+    /// keyed node never emits plaintext.
+    pub fn seal_outbound(&self, sender: &str, opus: &[u8]) -> Option<Vec<u8>> {
         if let Some(k) = self.send.lock().unwrap().as_ref() {
             let sealed = k.seal_audio(sender, opus);
             let mut out = Vec::with_capacity(5 + sealed.len());
             out.push(AUDIO_SEALED);
             out.extend_from_slice(&k.generation().to_be_bytes());
             out.extend_from_slice(&sealed);
-            out
+            Some(out)
+        } else if self.cur.lock().unwrap().is_some() {
+            None
         } else {
             let mut out = Vec::with_capacity(1 + opus.len());
             out.push(AUDIO_RAW);
             out.extend_from_slice(opus);
-            out
+            Some(out)
         }
     }
 
     /// Parse an inbound audio payload from `sender` → the Opus bytes, or None to
     /// drop (unknown tag, or a sealed frame we can't authenticate). A raw frame
-    /// is accepted even when we hold a key: the threat is passive harvest-now,
-    /// and an active downgrade would still sit inside the authenticated DTLS
-    /// channel, so leniency costs nothing against the modeled adversary.
+    /// is accepted only before we hold any key: once keyed, plaintext audio is
+    /// a downgrade (or a peer that never got the key) and is dropped, so a
+    /// keyed node can never be made to play unauthenticated audio.
     pub fn open_inbound(&self, sender: &str, wire: &[u8]) -> Option<Vec<u8>> {
         match wire.split_first() {
-            Some((&AUDIO_RAW, opus)) => Some(opus.to_vec()),
+            Some((&AUDIO_RAW, opus)) => {
+                if self.cur.lock().unwrap().is_some() {
+                    None
+                } else {
+                    Some(opus.to_vec())
+                }
+            }
             Some((&AUDIO_SEALED, rest)) if rest.len() >= 4 => {
                 let gen = u32::from_be_bytes(rest[..4].try_into().ok()?);
                 let body = &rest[4..];
@@ -625,7 +637,7 @@ mod tests {
     #[test]
     fn room_audio_raw_passthrough_without_key() {
         let ra = RoomAudio::new();
-        let wire = ra.seal_outbound("a", b"opus"); // no key → raw
+        let wire = ra.seal_outbound("a", b"opus").unwrap(); // no key → raw
         assert_eq!(wire[0], AUDIO_RAW);
         // A receiver (with or without a key) recovers the plaintext Opus.
         assert_eq!(ra.open_inbound("a", &wire).unwrap(), b"opus");
@@ -638,7 +650,7 @@ mod tests {
         let recv = RoomAudio::new();
         sender.install(key.clone());
         recv.install(key);
-        let wire = sender.seal_outbound("alice", b"voice");
+        let wire = sender.seal_outbound("alice", b"voice").unwrap();
         assert_eq!(wire[0], AUDIO_SEALED);
         assert_eq!(recv.open_inbound("alice", &wire).unwrap(), b"voice");
         // A receiver without the key can't open it.
@@ -651,7 +663,7 @@ mod tests {
         let recv = RoomAudio::new();
         sender.install(RoomKey::generate(1, "auth".into()));
         recv.install(sender.current().unwrap()); // both at gen 1
-        let old_frame = sender.seal_outbound("a", b"old");
+        let old_frame = sender.seal_outbound("a", b"old").unwrap();
         // Receiver rekeys to gen 2 before the old frame arrives.
         recv.install(RoomKey::generate(2, "auth".into()));
         // gen-1 frame still opens via the retained previous key.
@@ -664,7 +676,7 @@ mod tests {
         recv.install(RoomKey::generate(5, "auth".into()));
         let other = RoomAudio::new();
         other.install(RoomKey::generate(9, "auth".into())); // gen the receiver never saw
-        let wire = other.seal_outbound("a", b"x");
+        let wire = other.seal_outbound("a", b"x").unwrap();
         assert!(recv.open_inbound("a", &wire).is_none());
     }
 
@@ -782,7 +794,7 @@ mod tests {
         let w1 = {
             let s = RoomAudio::new();
             s.install(k1.clone());
-            s.seal_outbound("p", b"one")
+            s.seal_outbound("p", b"one").unwrap()
         };
         a.install(k1);
         a.stage(k2);
@@ -797,12 +809,35 @@ mod tests {
         let w1 = {
             let s = RoomAudio::new();
             s.install(k1.clone());
-            s.seal_outbound("p", b"one")
+            s.seal_outbound("p", b"one").unwrap()
         };
         a.install(k1);
         for g in 2..=4 {
             a.stage(RoomKey::generate(g, "x".into()));
         }
         assert!(a.open_inbound("p", &w1).is_none());
+    }
+
+    #[test]
+    fn raw_inbound_accepted_before_first_key() {
+        let a = RoomAudio::new();
+        let raw = RoomAudio::new().seal_outbound("p", b"hi").unwrap();
+        assert_eq!(raw[0], AUDIO_RAW);
+        assert_eq!(a.open_inbound("p", &raw), Some(b"hi".to_vec()));
+    }
+
+    #[test]
+    fn raw_inbound_rejected_once_keyed() {
+        let a = RoomAudio::new();
+        a.install(RoomKey::generate(1, "x".into()));
+        let raw = RoomAudio::new().seal_outbound("p", b"hi").unwrap();
+        assert!(a.open_inbound("p", &raw).is_none());
+    }
+
+    #[test]
+    fn no_raw_outbound_once_a_key_is_staged() {
+        let a = RoomAudio::new();
+        assert!(a.stage(RoomKey::generate(1, "x".into()))); // staged, not promoted
+        assert!(a.seal_outbound("p", b"hi").is_none());
     }
 }

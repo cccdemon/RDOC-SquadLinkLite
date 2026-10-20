@@ -213,7 +213,7 @@ selection and mic gain versus a webview-based client).
     generation 1 and every member rejects that key as stale (silence both ways).
     And the key only ever travels the pairwise session **with the authority**, so
     an unreachable authority (STUN-only, strict NAT) leaves a peer keyless on
-    otherwise-healthy links — it is heard (raw fallback) but hears nothing.
+    otherwise-healthy links — it is neither heard nor hears (raw audio is only accepted before the first key).
     Encode-once rules out serving that peer plaintext, so the engine warns
     instead (`KEYLESS_WARN_AFTER`).
   - `signaling.rs` — WS client to InitConnection, keepalive, reconnect with backoff.

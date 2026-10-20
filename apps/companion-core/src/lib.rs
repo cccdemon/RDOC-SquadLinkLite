@@ -805,9 +805,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         tokio::spawn(async move {
             while let Some(b) = opus_rx.recv().await {
                 // Seal the Opus frame with the room key (raw passthrough until a
-                // key is installed) — sealed ONCE here, then fanned out to every
-                // peer, so encode-once is preserved.
-                let payload = room.seal_outbound(&my_id_seal, &b);
+                // key is installed; dropped while a key is staged but not yet
+                // sending) — sealed ONCE here, then fanned out to every peer,
+                // so encode-once is preserved.
+                let Some(payload) = room.seal_outbound(&my_id_seal, &b) else {
+                    continue;
+                };
                 let sample = Sample {
                     data: Bytes::from(payload),
                     duration: Duration::from_millis(20),
@@ -929,7 +932,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         if !keyless_warned && since.elapsed() >= KEYLESS_WARN_AFTER {
                             keyless_warned = true;
                             sink(UiEvent::Log { text:
-                                "Sprach-Schluessel nicht erhalten - keine direkte Verbindung zum Schluessel-Verwalter. Du wirst gehoert, hoerst die anderen aber nicht. Abhilfe: \"Session neu verschluesseln\" druecken - das baut jede Verbindung neu auf und verteilt den Schluessel erneut. Hilft das nicht, sollte der Teilnehmer mit dem Stern in seiner Verschluesselungs-Zeile die Session neu betreten.".into() });
+                                "Sprach-Schluessel nicht erhalten - keine direkte Verbindung zum Schluessel-Verwalter. Du hoerst die anderen nicht und wirst nicht gehoert. Abhilfe: \"Session neu verschluesseln\" druecken - das baut jede Verbindung neu auf und verteilt den Schluessel erneut. Hilft das nicht, sollte der Teilnehmer mit dem Stern in seiner Verschluesselungs-Zeile die Session neu betreten.".into() });
                         }
                     } else {
                         keyless_since = None;
@@ -1470,7 +1473,7 @@ mod authority_tests {
         // Both sides are now on one generation → audio opens again.
         let newcomer = crypto::RoomAudio::new();
         newcomer.install(fresh);
-        let wire = newcomer.seal_outbound("a", b"opus");
+        let wire = newcomer.seal_outbound("a", b"opus").unwrap();
         assert_eq!(held.open_inbound("a", &wire), Some(b"opus".to_vec()));
     }
 
@@ -1630,7 +1633,7 @@ mod room_key_tests {
         // node's audio.
         let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
         for sender in &ids {
-            let wire = node(nodes, sender).room.seal_outbound(sender, b"opus-frame");
+            let wire = node(nodes, sender).room.seal_outbound(sender, b"opus-frame").unwrap();
             for listener in &ids {
                 if listener == sender {
                     continue;
@@ -1725,9 +1728,9 @@ mod room_key_tests {
         assert_eq!(node(&mut nodes, "m").generation(), Some(2));
 
         // And that is exactly what silence looks like on the wire.
-        let wire = node(&mut nodes, "a").room.seal_outbound("a", b"opus-frame");
+        let wire = node(&mut nodes, "a").room.seal_outbound("a", b"opus-frame").unwrap();
         assert!(node(&mut nodes, "m").room.open_inbound("a", &wire).is_none(), "m should not hear a");
-        let wire = node(&mut nodes, "m").room.seal_outbound("m", b"opus-frame");
+        let wire = node(&mut nodes, "m").room.seal_outbound("m", b"opus-frame").unwrap();
         assert!(node(&mut nodes, "a").room.open_inbound("m", &wire).is_none(), "a should not hear m");
     }
 
