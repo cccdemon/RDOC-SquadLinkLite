@@ -142,6 +142,11 @@ pub async fn connect_with_timeout(url: &str, cert_sha256: Option<&str>, budget: 
 }
 
 async fn connect_inner(url: &str, cert_sha256: Option<&str>) -> Result<Signaling> {
+    // Same policy as the IPC layer. Without this gate `WSS://host` skips the
+    // `wss://` branch and would connect without honoring the certificate pin.
+    if !server_url_ok(url) {
+        bail!("ungültige Server-Adresse - erlaubt sind wss://host oder ws://127.0.0.1");
+    }
     let ws = if url.starts_with("wss://") {
         if let Some(pin) = cert_sha256 {
             // Self-signed server → pin its cert by SHA-256 (no CA).
@@ -291,5 +296,24 @@ mod connect_tests {
         .expect("connect hung past its budget");
         let err = r.err().expect("connect succeeded against a silent server").to_string();
         assert!(err.contains("Timeout"), "unexpected error: {err}");
+    }
+}
+
+#[cfg(test)]
+mod scheme_gate_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn connect_rejects_an_uppercase_scheme_instead_of_skipping_the_pin() {
+        let err = match connect_inner("WSS://127.0.0.1:1/ws", Some("00")).await {
+            Ok(_) => panic!("uppercase scheme must be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("wss://"), "{err}");
+    }
+    #[test]
+    fn server_url_ok_rejects_uppercase_schemes() {
+        assert!(!server_url_ok("WSS://subraum.cc/ws"));
+        assert!(!server_url_ok("WS://127.0.0.1/ws"));
     }
 }
