@@ -314,6 +314,8 @@ export default function App() {
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [log, setLog] = useState("");
   const [connecting, setConnecting] = useState(false);
+  // Deep link to a server outside TRUSTED_LINK_HOSTS, waiting for the user's OK.
+  const [pendingLink, setPendingLink] = useState<{ raw: string; host: string } | null>(null);
   const [form, setForm] = useState(() => {
     try {
       const s = localStorage.getItem("sa.form");
@@ -1177,7 +1179,9 @@ PIN: ${sessionInfo.pin}`);
   connectedRef.current = connected;
   const connectingRef = useRef(connecting);
   connectingRef.current = connecting;
-  const connectDirect = async (raw: string) => {
+  // Hosts a deep link may connect to without asking. Anything else needs a click.
+  const TRUSTED_LINK_HOSTS = ["subraum.cc", "squadlink.raumdock.org"];
+  const connectDirect = async (raw: string, trusted = false) => {
     // A link while connected (or mid-connect) would start a second engine; the
     // backend refuses that too, but refusing here keeps the log message clear.
     if (connectedRef.current || connectingRef.current) {
@@ -1189,6 +1193,21 @@ PIN: ${sessionInfo.pin}`);
       setLog("Ungültiger subraum-Direktlink");
       return;
     }
+    if (!trusted) {
+      let host: string;
+      try {
+        // hostname carries no port; lowercase so "Subraum.cc:443" still matches.
+        host = new URL(cfg.ws).hostname.toLowerCase();
+      } catch {
+        setLog("Ungültiger subraum-Direktlink");
+        return;
+      }
+      if (!TRUSTED_LINK_HOSTS.includes(host)) {
+        setPendingLink({ raw, host });
+        return;
+      }
+    }
+    setPendingLink(null);
     setConnecting(true);
     setLog("");
     setChat([]);
@@ -1213,6 +1232,9 @@ PIN: ${sessionInfo.pin}`);
   };
 
   // subraum:// deep link (from Rust) → auto-connect with the carried creds.
+  useEffect(() => {
+    if (connected || connecting) setPendingLink(null);
+  }, [connected, connecting]);
   const connectDirectRef = useRef(connectDirect);
   connectDirectRef.current = connectDirect;
   useEffect(() => {
@@ -1741,6 +1763,28 @@ PIN: ${sessionInfo.pin}`);
               <button className="btn alt" onClick={() => connectDirect(directLink)} disabled={connecting || !directLink.trim()}>
                 {connecting ? "VERBINDE…" : "DIREKT VERBINDEN"}
               </button>
+            </div>
+          )}
+          {pendingLink && !connected && !connecting && (
+            <div className="err linkconfirm">
+              <div>
+                Dieser Link verbindet mit einem fremden Server: <b>{pendingLink.host}</b>
+              </div>
+              <div>Der Server sieht deine IP-Adresse und deinen Namen und vermittelt die Verbindung.</div>
+              <div className="linkconfirm-btns">
+                <button className="btn sm" onClick={() => connectDirect(pendingLink.raw, true)}>
+                  Verbinden
+                </button>
+                <button
+                  className="btn sm"
+                  onClick={() => {
+                    setPendingLink(null);
+                    setLog("Direktlink abgebrochen.");
+                  }}
+                >
+                  Abbrechen
+                </button>
+              </div>
             </div>
           )}
           {log && <div className="err">{log}</div>}

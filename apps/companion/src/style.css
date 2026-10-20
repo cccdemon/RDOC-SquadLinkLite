@@ -476,3 +476,7 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 .txlight.recv { background: var(--ok); }
 .txlight.both { background: var(--copper); }
 .txlight.both::after { content: ""; position: absolute; inset: 0 0 0 50%; background: var(--ok); }
+
+/* Deep-link host confirmation */
+.linkconfirm { display: flex; flex-direction: column; gap: 6px; }
+.linkconfirm-btns { display: flex; gap: 8px; }
