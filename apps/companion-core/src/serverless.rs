@@ -79,7 +79,9 @@ async fn badge_of(pc: &RTCPeerConnection) -> String {
 }
 
 fn decode_code(code: &str) -> Result<String> {
-    let bytes = STANDARD.decode(code.trim()).map_err(|_| anyhow!("ungültiger Code (kein base64)"))?;
+    // Chat apps hard-wrap long pastes; whitespace is never part of base64.
+    let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = STANDARD.decode(compact).map_err(|_| anyhow!("ungültiger Code (kein base64)"))?;
     String::from_utf8(bytes).map_err(|_| anyhow!("ungültiger Code (kein UTF-8)"))
 }
 
@@ -313,6 +315,13 @@ mod tests {
 
     fn sink() -> Sink {
         Arc::new(|_| {})
+    }
+
+    #[test]
+    fn decode_code_tolerates_wrapped_and_padded_input() {
+        let enc = STANDARD.encode("v=0\r\nhello");
+        let wrapped = format!("  {}\n{}\t", &enc[..4], &enc[4..]);
+        assert_eq!(decode_code(&wrapped).unwrap(), "v=0\r\nhello");
     }
 
     /// A mistyped code must fail fast, before `build_pc` opens the microphone

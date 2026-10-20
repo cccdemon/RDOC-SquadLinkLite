@@ -709,6 +709,19 @@ fn valid_id(s: &str, max: usize) -> bool {
 fn valid_user_id(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
+/// Display name: 1–64 chars, no control chars (the rule `connect` applies).
+fn valid_name(s: &str) -> bool {
+    !s.is_empty() && s.chars().count() <= 64 && !s.chars().any(|c| c.is_control())
+}
+/// Upper bound for a serverless SDP code (base64 of an SDP is a few KiB).
+pub(crate) const MAX_CODE_LEN: usize = 32 * 1024;
+/// Serverless code guard: non-empty, bounded, base64 alphabet plus whitespace
+/// (chat apps wrap long pastes; the engine strips it).
+fn valid_code(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_CODE_LEN
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=') || c.is_whitespace())
+}
 fn valid_hex(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -740,7 +753,7 @@ async fn connect(
         return Err("invalid user_id".into());
     }
     let name = name.trim().to_string();
-    if name.is_empty() || name.chars().count() > 64 || name.chars().any(|c| c.is_control()) {
+    if !valid_name(&name) {
         return Err("invalid name (1–64 chars, no control chars)".into());
     }
     let token = match token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
@@ -785,6 +798,10 @@ async fn connect(
 // ── Serverless 1:1 (copy-paste SDP) ───────────────────────────────────────
 #[tauri::command]
 async fn serverless_offer(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    if !valid_name(&name) {
+        return Err("invalid name (1–64 chars, no control chars)".into());
+    }
     let (s, code) = Serverless::create_offer(make_sink(&app), name).await.map_err(|e| e.to_string())?;
     *state.serverless.lock().unwrap() = Some(Arc::new(s));
     Ok(code)
@@ -792,6 +809,13 @@ async fn serverless_offer(app: AppHandle, state: State<'_, AppState>, name: Stri
 
 #[tauri::command]
 async fn serverless_accept_offer(app: AppHandle, state: State<'_, AppState>, name: String, code: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    if !valid_name(&name) {
+        return Err("invalid name (1–64 chars, no control chars)".into());
+    }
+    if !valid_code(&code) {
+        return Err("invalid code".into());
+    }
     let (s, answer) = Serverless::accept_offer(code, make_sink(&app), name).await.map_err(|e| e.to_string())?;
     *state.serverless.lock().unwrap() = Some(Arc::new(s));
     Ok(answer)
@@ -799,6 +823,9 @@ async fn serverless_accept_offer(app: AppHandle, state: State<'_, AppState>, nam
 
 #[tauri::command]
 async fn serverless_accept_answer(state: State<'_, AppState>, code: String) -> Result<(), String> {
+    if !valid_code(&code) {
+        return Err("invalid code".into());
+    }
     let s = state.serverless.lock().unwrap().clone();
     match s {
         Some(s) => s.accept_answer(code).await.map_err(|e| e.to_string()),
@@ -1328,6 +1355,22 @@ pub fn run() {
 #[cfg(test)]
 mod ipc_validation_tests {
     use super::*;
+
+    #[test]
+    fn valid_name_bounds_and_control_chars() {
+        assert!(valid_name("Commander"));
+        assert!(!valid_name(""));
+        assert!(!valid_name(&"x".repeat(65)));
+        assert!(!valid_name("a\u{7}b"));
+    }
+
+    #[test]
+    fn valid_code_accepts_base64_with_whitespace_and_rejects_junk() {
+        assert!(valid_code("QUJD\nREVG=="));
+        assert!(!valid_code(""));
+        assert!(!valid_code("<script>"));
+        assert!(!valid_code(&"A".repeat(MAX_CODE_LEN + 1)));
+    }
 
     #[test]
     fn valid_id_accepts_the_ids_we_generate() {
