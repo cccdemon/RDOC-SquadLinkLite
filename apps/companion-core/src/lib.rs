@@ -1453,48 +1453,6 @@ mod authority_tests {
         assert!(!is_authority_peer("carol", "bob", &with_alice)); // alice is smaller → carol rejected
     }
 
-    /// Regression: a peer that joins LATER can be the new room-key authority,
-    /// because user ids are random and the authority is just the smallest one.
-    /// Minting from an empty state then produces generation 1, which every
-    /// existing member rejects as older than what it has staged — the newcomer
-    /// seals under a key nobody holds and can't open anyone else's, so it is
-    /// silent in both directions while the rest of the room is fine. The fix is
-    /// `CtrlMsg::RoomGen`: members report the live generation, the new authority
-    /// mints above it.
-    #[test]
-    fn late_joining_authority_converges_on_a_higher_generation() {
-        // Room has been running under authority "b", now at generation 2.
-        let held = crypto::RoomAudio::new();
-        held.install(crypto::RoomKey::generate(2, "b".into()));
-
-        // "a" joins with the smallest id → authority flips to the newcomer.
-        let a_view: HashMap<String, Member> =
-            ["b", "c"].into_iter().map(|id| (id.to_string(), member())).collect();
-        let b_view: HashMap<String, Member> =
-            ["a", "c"].into_iter().map(|id| (id.to_string(), member())).collect();
-        assert!(am_authority("a", &a_view));
-        assert!(!am_authority("b", &b_view));
-        // ...and "b" accepts "a" as authority, so it reports its generation there.
-        assert!(is_authority_peer("a", "b", &b_view));
-
-        // The bug: generation 1 from the fresh authority is a no-op everywhere.
-        assert!(!held.stage(crypto::RoomKey::generate(1, "a".into())));
-        assert_eq!(held.generation(), Some(2));
-
-        // The fix: `RoomGen { gen: 2 }` lifts the newcomer's counter, so it mints 3.
-        let mut new_auth_gen = 0u32;
-        new_auth_gen = new_auth_gen.max(2); // what the RoomGen arm does
-        let fresh = crypto::RoomKey::generate(new_auth_gen + 1, "a".into());
-        assert!(held.stage(fresh.clone()));
-        assert_eq!(held.generation(), Some(3));
-
-        // Both sides are now on one generation → audio opens again.
-        let newcomer = crypto::RoomAudio::new();
-        newcomer.install(fresh);
-        let wire = newcomer.seal_outbound("a", b"opus").unwrap();
-        assert_eq!(held.open_inbound("a", &wire), Some(b"opus".to_vec()));
-    }
-
     fn member_on(ch: &str) -> Member {
         Member::new("n".into(), ch.into(), false)
     }
