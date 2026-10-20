@@ -36,7 +36,51 @@ static PENDING_DEEPLINK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PTT_BINDINGS: OnceLock<Mutex<[Option<String>; 2]>> = OnceLock::new();
 static PTT_CAPTURE_SLOT: AtomicI32 = AtomicI32::new(-1); // -1 idle, 0/1 = capturing slot
 static PTT_SLOT_DOWN: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
-static PTT_COMBINED: AtomicBool = AtomicBool::new(false); // last emitted transmit state
+
+/// Transmit state merged from every PTT source: the keyboard/mouse/pad
+/// bindings (`key`) and the local control API, e.g. Stream Deck (`ctl`).
+/// Transmitting while EITHER is held; `emitted` is what the webview last saw.
+#[derive(Default)]
+struct PttSources {
+    key: bool,
+    ctl: bool,
+    emitted: bool,
+}
+
+impl PttSources {
+    /// Record the sources that changed (`None` = unchanged). Returns
+    /// `Some(combined)` only when the combined state differs from the last
+    /// one handed out, so a source releasing while the other still holds
+    /// emits nothing.
+    fn update(&mut self, key: Option<bool>, ctl: Option<bool>) -> Option<bool> {
+        if let Some(k) = key {
+            self.key = k;
+        }
+        if let Some(c) = ctl {
+            self.ctl = c;
+        }
+        let combined = self.key || self.ctl;
+        if combined == self.emitted {
+            return None;
+        }
+        self.emitted = combined;
+        Some(combined)
+    }
+}
+
+static PTT_SOURCES: Mutex<PttSources> = Mutex::new(PttSources { key: false, ctl: false, emitted: false });
+
+/// Merge a source change into the combined PTT state and tell the webview
+/// when it flips. The lock is held across the emit so edges reach the
+/// webview in the order they were merged.
+fn publish_ptt(key: Option<bool>, ctl: Option<bool>) {
+    let mut src = PTT_SOURCES.lock().unwrap();
+    if let Some(combined) = src.update(key, ctl) {
+        if let Some(app) = APP_HANDLE.get() {
+            let _ = app.emit("ptt", combined);
+        }
+    }
+}
 
 // Channel-cycle hotkeys (slot 0 = prev, slot 1 = next). A press edge emits
 // `chan-cycle` (-1 / +1); the webview steps through the session's channel list.
@@ -213,11 +257,7 @@ fn handle_raw(code: String, down: bool) {
                 .unwrap_or(false)
         })
     };
-    if PTT_COMBINED.swap(combined, Ordering::SeqCst) != combined {
-        if let Some(app) = APP_HANDLE.get() {
-            let _ = app.emit("ptt", combined);
-        }
-    }
+    publish_ptt(Some(combined), None);
 
     // ── Channel cycle: fire once on the base's press edge with modifiers held.
     // Fast-path: skip the lock + loop entirely when no cycle key is bound. ────
@@ -1288,7 +1328,7 @@ pub fn run() {
                             }
                             while let Some(cmd) = out_rx.recv().await {
                                 match cmd {
-                                    control::CtlOut::Ptt(on) => { let _ = handle.emit("ptt", on); }
+                                    control::CtlOut::Ptt(on) => publish_ptt(None, Some(on)),
                                     control::CtlOut::ChanCycle(d) => { let _ = handle.emit("chan-cycle", d); }
                                     control::CtlOut::Ctl(v) => { let _ = handle.emit("ctl", v); }
                                     control::CtlOut::Refresh => { let _ = handle.emit("ctl-refresh", ()); }
@@ -1387,6 +1427,22 @@ mod ipc_validation_tests {
         assert!(!valid_code(""));
         assert!(!valid_code("<script>"));
         assert!(!valid_code(&"A".repeat(MAX_CODE_LEN + 1)));
+    }
+
+    #[test]
+    fn control_ptt_release_does_not_cut_a_held_key() {
+        let mut s = PttSources::default();
+        assert_eq!(s.update(Some(true), None), Some(true));
+        assert_eq!(s.update(None, Some(true)), None); // already transmitting
+        assert_eq!(s.update(None, Some(false)), None); // key still held
+        assert_eq!(s.update(Some(false), None), Some(false));
+    }
+
+    #[test]
+    fn control_ptt_alone_still_works() {
+        let mut s = PttSources::default();
+        assert_eq!(s.update(None, Some(true)), Some(true));
+        assert_eq!(s.update(None, Some(false)), Some(false));
     }
 
     #[test]
