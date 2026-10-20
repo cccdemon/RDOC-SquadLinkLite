@@ -44,6 +44,9 @@ pub struct Participant {
     pub channel: String,
     /// True once the post-quantum (ML-KEM-768) session with this peer is up.
     pub secure: bool,
+    /// PQC session fingerprint for out-of-band comparison; None for our own row
+    /// and until the session is up.
+    pub fingerprint: Option<String>,
     /// True while the peer-to-peer connection to this member is up. False means
     /// no audio, no chat and no channel announces reach them — the UI must say
     /// so rather than showing a member who is silently mute.
@@ -100,7 +103,7 @@ pub(crate) enum MeshEvent {
     /// A peer deleted a channel from the shared directory (tombstone it).
     PeerChannelRemoved { name: String },
     /// The post-quantum session with this peer is established.
-    Secure { peer: String },
+    Secure { peer: String, fingerprint: String },
     /// The peer connection came up (`up: true`) or died (failed / disconnected /
     /// closed). Drives the link watchdog and the roster's connection state.
     Link { peer: String, up: bool },
@@ -707,6 +710,8 @@ struct Member {
     speaking: bool,
     channel: String,
     secure: bool,
+    /// Fingerprint of the PQC session with this peer (set on `Secure`).
+    fingerprint: Option<String>,
     /// Peer connection up? Starts false: a member is in the roster the moment
     /// signaling announces them, long before (or without ever) their ICE
     /// completing.
@@ -727,6 +732,7 @@ impl Member {
             speaking: false,
             channel,
             secure,
+            fingerprint: None,
             linked: false,
             down_since: Some(std::time::Instant::now()),
             last_relink: None,
@@ -751,6 +757,7 @@ fn emit_roster(
         speaking: transmitting,
         channel: me_channel.to_string(),
         secure: true, // our own row: we always hold the crypto
+        fingerprint: None,
         linked: true,
     }];
     let mut others: Vec<Participant> = members
@@ -763,6 +770,7 @@ fn emit_roster(
             speaking: m.speaking,
             channel: m.channel.clone(),
             secure: m.secure,
+            fingerprint: m.fingerprint.clone(),
             linked: m.linked,
         })
         .collect();
@@ -1229,9 +1237,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 sink(UiEvent::ChannelRemoved { name: canon });
                             }
                         }
-                        Some(MeshEvent::Secure { peer }) => {
+                        Some(MeshEvent::Secure { peer, fingerprint }) => {
                             // The PQC session with this peer came up → show the lock.
-                            if let Some(m) = members.get_mut(&peer) { m.secure = true; }
+                            if let Some(m) = members.get_mut(&peer) {
+                                m.secure = true;
+                                m.fingerprint = Some(fingerprint).filter(|f| !f.is_empty());
+                            }
                             emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
                             // The authority hands over the key; everyone else reports
                             // the live generation to the authority. Both directions

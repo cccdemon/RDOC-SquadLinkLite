@@ -170,6 +170,7 @@ async fn build_pc(
                                 badge: None,
                                 speaking: false,
                                 channel: crate::DEFAULT_CHANNEL.into(),
+                                fingerprint: None,
                                 secure: true,
                                 linked: true,
                             },
@@ -182,6 +183,7 @@ async fn build_pc(
                                 channel: crate::DEFAULT_CHANNEL.into(),
                                 // Serverless (1:1 copy-paste) PQC handshake is a
                                 // follow-up; media is still DTLS-encrypted.
+                                fingerprint: None,
                                 secure: false,
                                 // This roster is only emitted on Connected.
                                 linked: true,

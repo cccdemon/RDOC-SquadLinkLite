@@ -122,6 +122,8 @@ type Participant = {
   badge: string | null;
   speaking: boolean;
   channel: string;
+  /// PQC session fingerprint to compare out of band; null for our own row.
+  fingerprint: string | null;
   /// False while the peer-to-peer link to this member is down: no audio, no
   /// chat, no channel announces. Shown explicitly instead of a silently mute row.
   linked: boolean;
@@ -1953,6 +1955,12 @@ PIN: ${sessionInfo.pin}`);
                 {p.badge && (
                   <span className={`badge ${p.badge.includes("RELAY") ? "relay" : "direct"}`}>
                     {p.badge}
+                  </span>
+                )}
+                {p.fingerprint && (
+                  <span className="badge pqc" title={`PQC-Fingerabdruck dieser Verbindung. Stimmt er mit dem überein, den ${p.name} sieht, hört niemand Drittes mit.
+${p.fingerprint}`}>
+                    🔒 {p.fingerprint.slice(0, 9)}
                   </span>
                 )}
                 {!p.you && !p.linked && (

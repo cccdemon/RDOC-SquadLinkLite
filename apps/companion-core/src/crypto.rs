@@ -114,9 +114,9 @@ fn derive(
     let (k_ab, p_ab) = kdf_dir(&salt, &ikm, b"A->B");
     let (k_ba, p_ba) = kdf_dir(&salt, &ikm, b"B->A");
     if initiator {
-        Session::new(k_ab, p_ab, k_ba, p_ba)
+        Session::new(k_ab, p_ab, k_ba, p_ba, salt)
     } else {
-        Session::new(k_ba, p_ba, k_ab, p_ab)
+        Session::new(k_ba, p_ba, k_ab, p_ab, salt)
     }
 }
 
@@ -186,10 +186,12 @@ pub struct Session {
     send_ctr: u64,
     recv_max: u64,
     recv_window: u64, // bitmap of the 64 counters below recv_max
+    /// Transcript hash of the handshake; both sides hold the same value.
+    fp: [u8; 32],
 }
 
 impl Session {
-    fn new(send_key: Key, send_prefix: [u8; 4], recv_key: Key, recv_prefix: [u8; 4]) -> Self {
+    fn new(send_key: Key, send_prefix: [u8; 4], recv_key: Key, recv_prefix: [u8; 4], fp: [u8; 32]) -> Self {
         Session {
             send: ChaCha20Poly1305::new(&send_key),
             recv: ChaCha20Poly1305::new(&recv_key),
@@ -198,7 +200,20 @@ impl Session {
             send_ctr: 0,
             recv_max: 0,
             recv_window: 0,
+            fp,
         }
+    }
+
+    /// Human-readable rendering of the handshake transcript hash (first 10
+    /// bytes, five groups of four hex chars). Both peers compute the same
+    /// value, so comparing it out of band detects a man in the middle.
+    pub fn fingerprint(&self) -> String {
+        let hex: String = self.fp[..10].iter().map(|b| format!("{b:02X}")).collect();
+        hex.as_bytes()
+            .chunks(4)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn nonce(prefix: [u8; 4], ctr: u64) -> Nonce {
@@ -330,6 +345,11 @@ impl PeerCrypto {
             }
         }
         false
+    }
+
+    /// Fingerprint of the live session with `peer`, if any.
+    pub fn fingerprint(&self, peer: &str) -> Option<String> {
+        self.sessions.lock().unwrap().get(peer).map(|s| s.fingerprint())
     }
 
     pub fn is_secure(&self, peer: &str) -> bool {
@@ -601,6 +621,16 @@ impl RoomAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_sides_derive_the_same_fingerprint() {
+        let (init, hello) = Initiator::start("a", "b");
+        let (reply, s_b) = respond("a", "b", &hello).unwrap();
+        let s_a = init.finish(&reply).unwrap();
+        assert_eq!(s_a.fingerprint(), s_b.fingerprint());
+        assert_eq!(s_a.fingerprint().len(), 24); // 20 hex + 4 spaces
+        assert!(s_a.fingerprint().chars().all(|c| c.is_ascii_hexdigit() || c == ' '));
+    }
 
     #[test]
     fn room_key_round_trip() {

@@ -203,6 +203,7 @@ section { background: var(--bg); padding: 14px 16px; display: flex; flex-directi
 /* Both badges carry their word (DIRECT / RELAY); the colour repeats it. */
 .badge.direct { color: var(--ok); border: 1px solid var(--ok); }
 .badge.relay { color: var(--warn); border: 1px solid var(--warn); }
+.badge.pqc { font-family: var(--mono, monospace); color: var(--dim); border: 1px solid var(--line); margin-left: 6px; }
 /* Channel (frequency) badge on each peer. The chan badge takes the margin-auto
    so it right-aligns; a following connection badge trails it. */
 .badge.chan { margin-left: auto; }

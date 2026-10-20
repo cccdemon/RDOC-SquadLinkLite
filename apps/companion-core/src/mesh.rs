@@ -247,14 +247,16 @@ fn wire_ctrl(
                     if let Some(hello) = parse_hello(&kem_pk, &x_pk) {
                         if let Some(reply) = crypto.on_hello(&p, &hello) {
                             send_ctrl(&dc, &reply_ctrl(&reply));
-                            let _ = events.send(MeshEvent::Secure { peer: p });
+                            let fingerprint = crypto.fingerprint(&p).unwrap_or_default();
+                            let _ = events.send(MeshEvent::Secure { peer: p, fingerprint });
                         }
                     }
                 }
                 Ok(CtrlMsg::KemReply { x_pk, kem_ct }) => {
                     if let Some(reply) = parse_reply(&x_pk, &kem_ct) {
                         if crypto.on_reply(&p, &reply) {
-                            let _ = events.send(MeshEvent::Secure { peer: p });
+                            let fingerprint = crypto.fingerprint(&p).unwrap_or_default();
+                            let _ = events.send(MeshEvent::Secure { peer: p, fingerprint });
                         }
                     }
                 }
