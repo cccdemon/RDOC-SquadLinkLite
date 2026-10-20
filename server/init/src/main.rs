@@ -64,6 +64,7 @@ const MAX_REST_BODY: usize = 4 * 1024; // REST JSON body
 const MAX_ID: usize = 64; // room / user_id
 const MAX_NAME: usize = 64;
 const MAX_TOKEN: usize = 128;
+const MAX_SECRET: usize = 64;
 const MAX_SDP: usize = 16 * 1024;
 const MAX_ICE: usize = 4 * 1024;
 const MAX_CODE: usize = 32;
@@ -188,6 +189,8 @@ fn flag_on(v: &str) -> bool {
 struct PeerHandle {
     name: String,
     tx: mpsc::Sender<ServerMsg>,
+    /// Join secret of this connection; None for pre-secret clients.
+    secret: Option<String>,
 }
 
 type Room = HashMap<String, PeerHandle>; // user_id -> handle
@@ -1077,7 +1080,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         };
 
         match cmsg {
-            ClientMsg::Join { room, user_id, name, token } => {
+            ClientMsg::Join { room, user_id, name, token, secret } => {
                 if me.is_some() {
                     let _ = tx.try_send(ServerMsg::Error {
                         code: "already_joined".into(),
@@ -1090,6 +1093,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     || !len_ok(&user_id, MAX_ID)
                     || !len_ok(&name, MAX_NAME)
                     || token.as_deref().map(|t| t.len() > MAX_TOKEN).unwrap_or(false)
+                    || secret.as_deref().map(|t| t.len() > MAX_SECRET).unwrap_or(false)
                 {
                     let _ = tx.try_send(ServerMsg::Error {
                         code: "bad_input".into(),
@@ -1114,6 +1118,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         drop(rooms);
                         break;
                     }
+                    // Supersede only a connection that is ours (same secret) or a
+                    // pre-secret client (no secret stored); anyone else holding
+                    // the id is refused.
+                    let takeover_ok = match r.get(&user_id) {
+                        None => true,
+                        Some(old) => old.secret.is_none() || old.secret == secret,
+                    };
+                    if !takeover_ok {
+                        let _ = tx.try_send(ServerMsg::Error {
+                            code: "id-in-use".into(),
+                            message: "user_id already taken in this room".into(),
+                        });
+                        drop(rooms);
+                        break;
+                    }
                     // Supersede a stale connection with the same user_id.
                     if let Some(old) = r.remove(&user_id) {
                         let _ = old.tx.try_send(ServerMsg::Error {
@@ -1125,7 +1144,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         .iter()
                         .map(|(id, h)| PeerInfo { user_id: id.clone(), name: h.name.clone() })
                         .collect();
-                    r.insert(user_id.clone(), PeerHandle { name: name.clone(), tx: tx.clone() });
+                    r.insert(user_id.clone(), PeerHandle { name: name.clone(), tx: tx.clone(), secret: secret.clone() });
                     // Tell existing peers about the newcomer.
                     for (id, h) in r.iter() {
                         if id != &user_id {
@@ -1235,7 +1254,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
-    writer.abort();
+    // Let the writer flush a final error frame (e.g. id-in-use) before the
+    // socket goes away: with our sender dropped it ends once the queue is
+    // empty. Bounded, so a stuck peer cannot hold the task open.
+    drop(tx);
+    let mut writer = writer;
+    if tokio::time::timeout(Duration::from_millis(500), &mut writer).await.is_err() {
+        writer.abort();
+    }
 }
 
 /// Relay a built message to a single peer (by user_id) in the sender's room,
@@ -1299,12 +1325,17 @@ mod ws_tests {
 
     /// Connect and join; returns once the Roster has arrived.
     async fn join(url: &str, room: &str, user_id: &str) -> Client {
+        join_with(url, room, user_id, None).await
+    }
+
+    async fn join_with(url: &str, room: &str, user_id: &str, secret: Option<&str>) -> Client {
         let (mut c, _) = connect_async(url).await.unwrap();
         let j = serde_json::to_string(&ClientMsg::Join {
             room: room.into(),
             user_id: user_id.into(),
             name: user_id.into(),
             token: None,
+            secret: secret.map(str::to_string),
         })
         .unwrap();
         c.send(WsMsg::Text(j)).await.unwrap();
@@ -1316,6 +1347,54 @@ mod ws_tests {
 
     fn member_present(state: &AppState, room: &str, user_id: &str) -> bool {
         state.rooms.lock().unwrap().get(room).map(|r| r.contains_key(user_id)).unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn second_join_with_wrong_secret_is_rejected_with_id_in_use() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join_with(&url, "r", "u", Some("s1")).await;
+        let (mut b, _) = connect_async(&url).await.unwrap();
+        b.send(WsMsg::Text(serde_json::to_string(&ClientMsg::Join {
+            room: "r".into(), user_id: "u".into(), name: "u".into(), token: None, secret: Some("s2".into()),
+        }).unwrap())).await.unwrap();
+        match next_msg(&mut b).await {
+            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "id-in-use"),
+            other => panic!("expected id-in-use, got {other:?}"),
+        }
+        assert!(next_msg(&mut b).await.is_none(), "socket must be closed after id-in-use");
+        assert!(member_present(&state, "r", "u"));
+        // a never heard a thing
+        assert!(tokio::time::timeout(Duration::from_millis(300), a.next()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn second_join_with_matching_secret_supersedes() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join_with(&url, "r", "u", Some("s1")).await;
+        let _b = join_with(&url, "r", "u", Some("s1")).await;
+        match next_msg(&mut a).await {
+            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "superseded"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_holder_without_secret_is_still_superseded() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "u").await; // 0.3.4 client, no secret
+        let _b = join_with(&url, "r", "u", Some("s1")).await; // new client takes over
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::Error { code, .. }) if code == "superseded"));
+    }
+
+    #[tokio::test]
+    async fn legacy_joiner_without_secret_cannot_take_a_secured_id() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let _a = join_with(&url, "r", "u", Some("s1")).await;
+        let (mut b, _) = connect_async(&url).await.unwrap();
+        b.send(WsMsg::Text(serde_json::to_string(&ClientMsg::Join {
+            room: "r".into(), user_id: "u".into(), name: "u".into(), token: None, secret: None,
+        }).unwrap())).await.unwrap();
+        assert!(matches!(next_msg(&mut b).await, Some(ServerMsg::Error { code, .. }) if code == "id-in-use"));
     }
 
     /// A client reconnects while its old socket is still half-open. The old

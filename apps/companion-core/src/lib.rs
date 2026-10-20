@@ -821,11 +821,20 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let sig = signaling::connect(&cfg.server, cfg.cert_sha256.as_deref()).await?;
     let out = sig.out.clone();
     let incoming = sig.incoming;
+    // Random per-connection secret: binds our user_id on the server so a
+    // room-token holder cannot take it over. Reused on signaling reconnect.
+    let join_secret = {
+        use rand_core::RngCore;
+        let mut b = [0u8; 16];
+        rand_core::OsRng.fill_bytes(&mut b);
+        hex::encode(b)
+    };
     out.send(ClientMsg::Join {
         room: cfg.room.clone(),
         user_id: cfg.user_id.clone(),
         name: cfg.name.clone(),
         token: cfg.token.clone(),
+        secret: Some(join_secret.clone()),
     })?;
     sink(UiEvent::Status { connected: true, transmitting: false });
 
@@ -854,6 +863,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
     let rc_cert = cfg.cert_sha256.clone();
     let rc_room = cfg.room.clone();
     let rc_token = cfg.token.clone();
+    let rc_secret = join_secret.clone();
     let rc_user = cfg.user_id.clone();
     let rc_name = cfg.name.clone();
     tokio::spawn(async move {
@@ -983,6 +993,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                 user_id: rc_user.clone(),
                                 name: rc_name.clone(),
                                 token: rc_token.clone(),
+                                secret: Some(rc_secret.clone()),
                             });
                             cur_out = Some(o2);
                             cur_in = Some(sig2.incoming);
@@ -1132,7 +1143,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             sink(UiEvent::Status { connected: false, transmitting: false });
                             break;
                         }
-                        ServerMsg::Error { code, message } => { sink(UiEvent::Log { text: format!("{code}: {message}") }); }
+                        ServerMsg::Error { code, message } => {
+                            if code == "id-in-use" {
+                                sink(UiEvent::Log { text: "Dieser Name ist in der Sitzung bereits vergeben - bitte mit anderem Namen neu beitreten.".into() });
+                            }
+                            sink(UiEvent::Log { text: format!("{code}: {message}") });
+                        }
                     }
                 }
                 ev = mesh_rx.recv() => {

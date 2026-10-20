@@ -98,6 +98,10 @@ pub enum ClientMsg {
         name: String,
         #[serde(default)]
         token: Option<String>,
+        /// Random per-connection value. The server lets a later connection
+        /// supersede this user_id only when it presents the same secret.
+        #[serde(default)]
+        secret: Option<String>,
     },
     Offer { to: String, sdp: String },
     Answer { to: String, sdp: String },
@@ -175,5 +179,17 @@ mod tests {
         assert!(serde_json::from_str::<CtrlMsg>(&legacy).is_err());
         let c: ChatMsg = serde_json::from_str(&legacy).unwrap();
         assert_eq!(c.text, "old");
+    }
+
+    #[test]
+    fn join_without_secret_deserializes_for_old_clients() {
+        let j = r#"{"t":"join","room":"r","user_id":"u","name":"n"}"#;
+        match serde_json::from_str::<ClientMsg>(j).unwrap() {
+            ClientMsg::Join { secret, token, .. } => {
+                assert!(secret.is_none());
+                assert!(token.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
