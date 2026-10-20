@@ -1350,6 +1350,13 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         None => {
                             // Engine dropped: close every PC now so peers see us
                             // leave instead of a ghost that fades with ICE.
+                            // Tell the server too, so the roster drops us now and
+                            // not at the idle timeout; the short sleep lets the
+                            // frame leave the socket before the loop exits.
+                            if let Some(o) = &cur_out {
+                                let _ = o.send(ClientMsg::Leave);
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
                             mesh.close_all().await;
                             sink(UiEvent::Status { connected: false, transmitting: false });
                             break;

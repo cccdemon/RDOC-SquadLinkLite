@@ -1451,6 +1451,17 @@ mod ws_tests {
         assert!(!member_present(&state, "r", "u"), "idle member still in the roster");
     }
 
+    /// The engine sends `Leave` on shutdown; the server must drop the member at
+    /// once instead of waiting for the idle timeout.
+    #[tokio::test]
+    async fn leave_removes_the_member_at_once() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "u").await;
+        a.send(WsMsg::Text(serde_json::to_string(&ClientMsg::Leave).unwrap())).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!member_present(&state, "r", "u"));
+    }
+
     /// One member must not be able to tear down every link in the room
     /// repeatedly by opening a second socket: the cooldown belongs to the room.
     #[tokio::test]
