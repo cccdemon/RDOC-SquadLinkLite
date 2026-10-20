@@ -28,6 +28,7 @@ use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey};
+use std::collections::VecDeque;
 
 type Ek = <MlKem768 as KemCore>::EncapsulationKey;
 type Dk = <MlKem768 as KemCore>::DecapsulationKey;
@@ -439,11 +440,16 @@ fn room_aad(sender: &str) -> Vec<u8> {
 const AUDIO_RAW: u8 = 0; // plaintext Opus (pre-key fallback so audio isn't lost)
 const AUDIO_SEALED: u8 = 1; // AUDIO_SEALED ‖ gen(4) ‖ nonce(12) ‖ ct+tag
 
+/// How many superseded room-key generations stay open-capable besides the
+/// newest one. Two, so a rekey burst (join + leave back to back) does not drop
+/// frames still in flight under the generation before last.
+pub const ROOM_KEY_PREV_SLOTS: usize = 2;
+
 /// Live group-audio keying, shared (behind an `Arc`) between the outbound writer
 /// (`seal_outbound`), the inbound read-track tasks (`open_inbound`), and the
 /// engine loop, which `install`s keys received from the authority. Keeps the
-/// current key plus the immediately-previous one so frames still sealed under
-/// the old key during a rekey keep decoding through the transition.
+/// current key plus a ring of the `ROOM_KEY_PREV_SLOTS` previous ones so frames
+/// still sealed under an older key during a rekey burst keep decoding.
 pub struct RoomAudio {
     /// The key we currently SEAL outbound audio with. On a rekey this lags the
     /// newest staged key by a short grace so every peer has staged the new key
@@ -452,9 +458,9 @@ pub struct RoomAudio {
     send: std::sync::Mutex<Option<RoomKey>>,
     /// Newest open-capable key (staged the moment it arrives).
     cur: std::sync::Mutex<Option<RoomKey>>,
-    /// Previous open-capable key — bridges a rekey so frames still in flight
-    /// under the old key keep decoding.
-    prev: std::sync::Mutex<Option<RoomKey>>,
+    /// Previous open-capable keys, newest first, at most `ROOM_KEY_PREV_SLOTS`
+    /// — bridges rekeys so frames still in flight under an old key keep decoding.
+    prev: std::sync::Mutex<VecDeque<RoomKey>>,
 }
 
 impl Default for RoomAudio {
@@ -468,7 +474,7 @@ impl RoomAudio {
         RoomAudio {
             send: std::sync::Mutex::new(None),
             cur: std::sync::Mutex::new(None),
-            prev: std::sync::Mutex::new(None),
+            prev: std::sync::Mutex::new(VecDeque::new()),
         }
     }
 
@@ -504,7 +510,11 @@ impl RoomAudio {
             if !better {
                 return false;
             }
-            *self.prev.lock().unwrap() = cur.take();
+            let mut prev = self.prev.lock().unwrap();
+            if let Some(old) = cur.take() {
+                prev.push_front(old);
+            }
+            prev.truncate(ROOM_KEY_PREV_SLOTS);
         }
         *cur = Some(k);
         true
@@ -513,13 +523,13 @@ impl RoomAudio {
     /// Activate the staged key of generation `gen` for SEALING outbound audio.
     /// No-op if that generation isn't currently staged (superseded meanwhile).
     pub fn promote(&self, gen: u32) {
-        for slot in [&self.cur, &self.prev] {
-            if let Some(k) = slot.lock().unwrap().as_ref() {
-                if k.generation() == gen {
-                    *self.send.lock().unwrap() = Some(k.clone());
-                    return;
-                }
-            }
+        let found = {
+            let cur = self.cur.lock().unwrap();
+            let prev = self.prev.lock().unwrap();
+            cur.iter().chain(prev.iter()).find(|k| k.generation() == gen).cloned()
+        };
+        if let Some(k) = found {
+            *self.send.lock().unwrap() = Some(k);
         }
     }
 
@@ -564,16 +574,12 @@ impl RoomAudio {
             Some((&AUDIO_SEALED, rest)) if rest.len() >= 4 => {
                 let gen = u32::from_be_bytes(rest[..4].try_into().ok()?);
                 let body = &rest[4..];
-                for slot in [&self.cur, &self.prev] {
-                    if let Some(k) = slot.lock().unwrap().as_ref() {
-                        if k.generation() == gen {
-                            if let Some(pt) = k.open_audio(sender, body) {
-                                return Some(pt);
-                            }
-                        }
-                    }
-                }
-                None
+                let cur = self.cur.lock().unwrap();
+                let prev = self.prev.lock().unwrap();
+                cur.iter()
+                    .chain(prev.iter())
+                    .filter(|k| k.generation() == gen)
+                    .find_map(|k| k.open_audio(sender, body))
             }
             _ => None,
         }
@@ -765,5 +771,38 @@ mod tests {
         assert!(b.open(Kind::Audio, &w0).is_some()); // reordered, still fresh
         assert!(b.open(Kind::Audio, &w1).is_some());
         assert!(b.open(Kind::Audio, &w1).is_none()); // now a replay
+    }
+
+    #[test]
+    fn ring_keeps_two_previous_generations_decodable() {
+        let a = RoomAudio::new();
+        let k1 = RoomKey::generate(1, "x".into());
+        let k2 = RoomKey::generate(2, "x".into());
+        let k3 = RoomKey::generate(3, "x".into());
+        let w1 = {
+            let s = RoomAudio::new();
+            s.install(k1.clone());
+            s.seal_outbound("p", b"one")
+        };
+        a.install(k1);
+        a.stage(k2);
+        a.stage(k3);
+        assert_eq!(a.open_inbound("p", &w1), Some(b"one".to_vec()));
+    }
+
+    #[test]
+    fn ring_drops_the_third_oldest_generation() {
+        let a = RoomAudio::new();
+        let k1 = RoomKey::generate(1, "x".into());
+        let w1 = {
+            let s = RoomAudio::new();
+            s.install(k1.clone());
+            s.seal_outbound("p", b"one")
+        };
+        a.install(k1);
+        for g in 2..=4 {
+            a.stage(RoomKey::generate(g, "x".into()));
+        }
+        assert!(a.open_inbound("p", &w1).is_none());
     }
 }
