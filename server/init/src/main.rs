@@ -130,21 +130,20 @@ impl RateLimiter {
     }
 }
 
-/// Best-effort client IP: first hop of X-Forwarded-For (set by our reverse
-/// proxy), else a constant bucket. Good enough for coarse abuse throttling.
 /// Real client IP for rate-limiting. X-Forwarded-For is only trusted when the
 /// direct peer is our loopback reverse proxy; otherwise the socket peer is used
 /// (so a directly-reachable client can't spoof XFF to dodge/forge limits).
+/// The LAST hop is used: it is whatever our reverse proxy saw as its peer,
+/// whether the proxy replaces the header or appends to it. The first hop is
+/// client-controlled when the proxy appends.
 fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
     if peer.ip().is_loopback() {
-        if let Some(first) = headers
+        if let Some(last) = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
+            .and_then(|s| s.split(',').map(str::trim).filter(|s| !s.is_empty()).last())
         {
-            return first.to_string();
+            return last.to_string();
         }
     }
     peer.ip().to_string()
@@ -1513,5 +1512,28 @@ mod env_flag_tests {
         for off in ["0", "", "false", "no", "yes", "2"] {
             assert!(!flag_on(off), "{off:?} should be off");
         }
+    }
+}
+
+#[cfg(test)]
+mod client_ip_tests {
+    use super::*;
+
+    fn hdr(v: &str) -> HeaderMap { let mut h = HeaderMap::new(); h.insert("x-forwarded-for", v.parse().unwrap()); h }
+    fn lo() -> SocketAddr { "127.0.0.1:9".parse().unwrap() }
+
+    #[test]
+    fn xff_uses_the_last_hop() {
+        assert_eq!(client_ip(&hdr("6.6.6.6, 1.2.3.4"), lo()), "1.2.3.4");
+    }
+    #[test]
+    fn xff_ignores_trailing_empty_hop() {
+        assert_eq!(client_ip(&hdr("1.2.3.4, "), lo()), "1.2.3.4");
+        assert_eq!(client_ip(&hdr("  "), lo()), "127.0.0.1");
+    }
+    #[test]
+    fn xff_from_a_non_loopback_peer_is_ignored() {
+        let peer: SocketAddr = "9.9.9.9:1".parse().unwrap();
+        assert_eq!(client_ip(&hdr("1.2.3.4"), peer), "9.9.9.9");
     }
 }
