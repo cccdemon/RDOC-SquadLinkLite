@@ -39,7 +39,9 @@ cargo build --release            # headless engine binary
 
 `apps/companion/src-tauri` is **excluded from the workspace** — build/test it from
 its own directory (`cd apps/companion/src-tauri && cargo check`). `spikes/*` are
-standalone throwaway crates, also excluded.
+standalone throwaway crates, also excluded — a new spike must either be added to
+`exclude` in the root `Cargo.toml` or carry its own empty `[workspace]` table
+(as `spikes/apm-build` does), or cargo refuses to build it.
 
 Local compilates and CI-downloaded installers go in `test-build/<version>/`
 (gitignored) — never loose in the repo root. `screenshots/` and `store-art/`
@@ -167,7 +169,10 @@ Push a `subraum-v*` tag. Before tagging:
    `package.version` is *not* part of this — nothing reads it, and it has
    trailed the app version since 0.3.0.)
 2. Add the release section to `CHANGELOG.md` (German, user-facing; older releases
-   are tagged `squadlink-lite-v*`).
+   are tagged `squadlink-lite-v*`). Fixes accumulate under `## Unveröffentlicht`
+   between releases; cutting one means renaming that heading to
+   `## vX.Y.Z — YYYY-MM-DD`, not writing a second section. The commit is
+   `release: prepare X.Y.Z` and touches only those three files.
 
 `apps/companion/msix/AppxManifest.xml` carries a hardcoded `Identity/@Version`
 that is **deliberately stale** (0.1.35.0, far behind the app version) — the MSIX job
