@@ -1159,7 +1159,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         }
                         ServerMsg::Error { code, message } => {
                             if code == "id-in-use" {
+                                // Terminal like RoomFull: the server closes the socket,
+                                // and a backoff reconnect would be refused forever.
                                 sink(UiEvent::Log { text: "Dieser Name ist in der Sitzung bereits vergeben - bitte mit anderem Namen neu beitreten.".into() });
+                                mesh.close_all().await;
+                                sink(UiEvent::Status { connected: false, transmitting: false });
+                                break;
                             }
                             sink(UiEvent::Log { text: format!("{code}: {message}") });
                         }
