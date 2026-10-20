@@ -70,8 +70,9 @@ Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
   wurde das zweite abgelehnt; der Konflikt wird jetzt aufgelöst.
 - **Wer die Sitzung verlässt, meldet das sofort** statt erst nach dem
   Zeitlimit des Servers; die anderen sehen den Abgang ohne Verzögerung.
-- **Verbindungs-URLs mit großgeschriebenem Schema (`WSS://`)** werden wie
-  kleingeschriebene behandelt und umgingen nicht mehr das Zertifikats-Pinning.
+- **Großgeschriebene Schemata (`WSS://`) umgingen das Zertifikats-Pinning.**
+  Solche Adressen wurden ohne Pin verbunden; sie werden jetzt mit „ungültige
+  Server-Adresse" abgelehnt.
 - **Serverless-Modus:** Eingaben werden geprüft, und umgebrochene Codes
   (mit Zeilenumbrüchen oder Leerzeichen) werden jetzt akzeptiert.
 - **Windows:** Die Absenkung anderer Programme (Ducking) bleibt nicht mehr
