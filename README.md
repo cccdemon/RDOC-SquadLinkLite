@@ -78,6 +78,10 @@ Schlüssel-Generation steht in der Verschlüsselungs-Fußzeile.
 Protokoll: `ClientMsg::Rekey` → Server-Broadcast `ServerMsg::Rekey` → `mesh.rekey()`
 (glare-aware: pro Paar offert die kleinere user_id neu).
 
+**Fingerabdruck pro Teilnehmer:** Für jeden Peer zeigt die Oberfläche einen Fingerabdruck des
+PQC-Handshakes. Wer ihn mit dem Gegenüber über einen anderen Kanal vergleicht (Signal-„Safety
+Number"-Stil), erkennt einen Mann-in-der-Mitte, auch wenn der Server feindlich wäre.
+
 ## Sicherheit / Härtung
 
 - **Loopback-Erkennung** parst den URL-Host (kein Substring): `ws://` nur zu

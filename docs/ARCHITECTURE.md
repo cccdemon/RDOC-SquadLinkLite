@@ -324,7 +324,10 @@ self-signed via `rcgen`/openssl, als PEM ausgeliefert; Rotation später.
   laufen über Init. Ein bösartiger/kompromittierter Init könnte Fingerprints tauschen → MITM
   auf den Medienpfad. „Kein Server hört Audio" gilt nur solange Init nicht feindlich ist. Härtung:
   `wss://` (TLS zum Init), optional Fingerprint-Pinning/Out-of-band-Verifikation später. Also
-  **nicht** als „zero-trust" verkaufen — Init ist Trusted Component.
+  **nicht** als „zero-trust" verkaufen — Init ist Trusted Component. Der pro Teilnehmer angezeigte
+  PQC-Fingerabdruck erlaubt den Out-of-band-Vergleich, mit dem Mitglieder einen solchen MITM
+  erkennen können; der Server bleibt dennoch Vertrauensanker. Klartext-Audio wird nur vor dem
+  ersten Raumschlüssel akzeptiert, danach nicht mehr.
 - Keine Aufnahme, kein Speichern (Projektprinzip).
 - TURN-Secret nur Init+coturn; Creds zeitlimitiert.
 - **Room-Auth ab Phase 1 (nicht optional):** signierter Invite-Token / Room-Key. Offene

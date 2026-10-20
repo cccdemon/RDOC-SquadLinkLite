@@ -7,6 +7,19 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
 Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
 
+### Neu
+- **Fingerabdruck pro Teilnehmer.** Für jeden Mitspieler zeigt subraum einen
+  Fingerabdruck der verschlüsselten Verbindung. Vergleicht ihn über einen
+  anderen Kanal (z. B. am Telefon), um sicherzugehen, dass niemand dazwischen
+  sitzt. Der Server bleibt trotzdem die Vertrauensgrenze.
+- **Rückfrage bei Direktlinks zu fremden Servern.** Ein `subraum://`-Link, der
+  auf einen anderen Server als `subraum.cc` oder `squadlink.raumdock.org`
+  zeigt, verbindet erst nach Bestätigung.
+- **Join-Geheimnis pro Verbindung.** Niemand kann mehr mit dem Namen eines
+  anderen Mitglieds beitreten und dessen Verbindung übernehmen; der Server
+  meldet dann „Name bereits vergeben". Ältere Versionen ohne Geheimnis
+  funktionieren weiter.
+
 ### Behoben
 - **Nach einem fehlgeschlagenen Verbindungsversuch blieb das Mikrofon offen.**
   Bei falscher Adresse, nicht erreichbarem Server oder falscher PIN lief die
@@ -43,6 +56,30 @@ Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
   Stunden; die Sperre läuft jetzt nach zehn Minuten ab. `TLS_DISABLE=0`
   schaltete TLS **ab**; nur `1`/`true` zählt noch. Der private Schlüssel wird
   nur noch für den Eigentümer lesbar abgelegt.
+- **Server:** Die Begrenzung pro IP wertet jetzt den letzten Eintrag von
+  `X-Forwarded-For` aus, den der vorgeschaltete Proxy selbst anhängt, statt
+  den ersten, den ein Angreifer frei wählen konnte.
+- **Klartext-Audio wird nur noch vor dem ersten Schlüssel akzeptiert.**
+  Danach werden unverschlüsselte Frames verworfen und auch nicht mehr
+  gesendet.
+- **Schlüsselwechsel in schneller Folge ließen Audio aussetzen.** Mehrere
+  Rotationen kurz hintereinander verwarfen Frames der Zwischengenerationen;
+  jetzt werden zwei vorherige Schlüssel-Generationen weiter akzeptiert.
+- **Zwei gleichzeitige Verbindungsangebote ließen den Aufbau scheitern.**
+  Schickten sich zwei Mitspieler beim Neuaufbau gleichzeitig ein Angebot,
+  wurde das zweite abgelehnt; der Konflikt wird jetzt aufgelöst.
+- **Wer die Sitzung verlässt, meldet das sofort** statt erst nach dem
+  Zeitlimit des Servers; die anderen sehen den Abgang ohne Verzögerung.
+- **Verbindungs-URLs mit großgeschriebenem Schema (`WSS://`)** werden wie
+  kleingeschriebene behandelt und umgingen nicht mehr das Zertifikats-Pinning.
+- **Serverless-Modus:** Eingaben werden geprüft, und umgebrochene Codes
+  (mit Zeilenumbrüchen oder Leerzeichen) werden jetzt akzeptiert.
+- **Windows:** Die Absenkung anderer Programme (Ducking) bleibt nicht mehr
+  hängen, wenn Sprechen und Loslassen schnell wechseln. Ungetestet auf
+  Windows, Rückmeldung erwünscht.
+- **Windows:** Stream-Deck-Sprechtaste und Tastatur-Sprechtaste arbeiten
+  jetzt zusammen: Loslassen der einen beendet das Senden nicht, solange die
+  andere gehalten wird. Ungetestet auf Windows, Rückmeldung erwünscht.
 
 ## v0.3.4 — 2026-08-11
 
