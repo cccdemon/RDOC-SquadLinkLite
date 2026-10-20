@@ -558,6 +558,7 @@ mod raw_input {
 mod ducking {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::mpsc::Sender;
     use std::sync::{Mutex, OnceLock};
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
@@ -595,16 +596,32 @@ mod ducking {
     }
 
     /// Lower (active) or restore (inactive) every OTHER app's audio session.
-    /// Runs on a short-lived MTA thread so it never disturbs Tauri's apartment.
+    /// Edges go to ONE long-lived worker thread (MTA, so it never disturbs
+    /// Tauri's apartment) and are applied strictly in order — a release can
+    /// never be overtaken by an earlier press, as separate threads could.
     pub fn set(active: bool) {
         ACTIVE.store(active, Ordering::Relaxed);
-        std::thread::spawn(move || unsafe {
-            let _ = run(active);
-        });
+        let _ = sender().lock().unwrap().send(active);
     }
 
+    /// Queue into the worker; spawns it (once) on first use.
+    fn sender() -> &'static Mutex<Sender<bool>> {
+        static TX: OnceLock<Mutex<Sender<bool>>> = OnceLock::new();
+        TX.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<bool>();
+            std::thread::spawn(move || unsafe {
+                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                for active in rx {
+                    let _ = run(active);
+                }
+            });
+            Mutex::new(tx)
+        })
+    }
+
+    /// Apply one ducking edge. Must run on the worker thread (COM is
+    /// initialised there once, not per call).
     unsafe fn run(active: bool) -> windows::core::Result<()> {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let enumr: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let dev = enumr.GetDefaultAudioEndpoint(eRender, eMultimedia)?;
         let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None)?;
