@@ -770,7 +770,7 @@ fn emit_roster(
             speaking: m.speaking,
             channel: m.channel.clone(),
             secure: m.secure,
-            fingerprint: m.fingerprint.clone(),
+            fingerprint: m.fingerprint.clone().filter(|_| m.secure),
             linked: m.linked,
         })
         .collect();
@@ -1059,6 +1059,9 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                     Some(mut old) => {
                                         old.name = p.name.clone();
                                         old.secure = crypto.is_secure(&p.user_id);
+                                        if !old.secure {
+                                            old.fingerprint = None;
+                                        }
                                         old
                                     }
                                     None => Member::new(
@@ -1192,6 +1195,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                                     m.linked = false;
                                     m.badge = None;
                                     m.secure = false;
+                                    m.fingerprint = None;
                                     m.down_since = Some(std::time::Instant::now());
                                 }
                                 emit_roster(&sink, &members, &me_id, &me_name, &my_channel, transmit.load(Ordering::SeqCst));
@@ -1809,5 +1813,33 @@ mod tombstone_tests {
             removed.insert(format!("x{i}"));
         }
         assert!(!tombstone_allowed("alpha", &known, &removed), "cap not enforced");
+    }
+}
+
+#[cfg(test)]
+mod roster_fingerprint_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// A dead pairwise session must not keep advertising its fingerprint: the
+    /// UI would show a lock badge for a peer we can no longer vouch for.
+    #[test]
+    fn roster_hides_the_fingerprint_of_an_insecure_member() {
+        let mut m = Member::new("peer".to_string(), DEFAULT_CHANNEL.to_string(), false);
+        m.fingerprint = Some("AAAA BBBB CCCC".into());
+        let members: HashMap<String, Member> = [("p".to_string(), m)].into_iter().collect();
+
+        let seen: Arc<Mutex<Option<Vec<Participant>>>> = Arc::new(Mutex::new(None));
+        let cap = seen.clone();
+        let sink: Sink = Arc::new(move |ev| {
+            if let UiEvent::Roster { participants } = ev {
+                *cap.lock().unwrap() = Some(participants);
+            }
+        });
+        emit_roster(&sink, &members, "me", "Me", DEFAULT_CHANNEL, false);
+
+        let got = seen.lock().unwrap().take().expect("roster emitted");
+        let peer = got.iter().find(|p| p.user_id == "p").expect("peer row");
+        assert!(peer.fingerprint.is_none(), "stale fingerprint leaked: {:?}", peer.fingerprint);
     }
 }
