@@ -726,13 +726,18 @@ fn set_duck_amount(percent: u32) {
     ducking::set_amount(percent);
 }
 
+/// A binding code as the webview sends it ("F8", "Mouse:Left", "Pad:3",
+/// "Ctrl+Shift+KeyT"): kept only when non-empty and bounded, else unbound.
+fn binding_code(code: Option<String>) -> Option<String> {
+    code.filter(|c| !c.is_empty() && c.len() <= 64)
+}
+
 #[tauri::command]
 fn set_ptt_binding(slot: usize, code: Option<String>) {
     if slot >= 2 {
         return;
     }
-    // Codes like "F8" / "Mouse:Left" / "Pad:3"; bound length.
-    let code = code.filter(|c| !c.is_empty() && c.len() <= 64);
+    let code = binding_code(code);
     PTT_SLOT_DOWN[slot].store(false, Ordering::SeqCst); // clear any stuck state on rebind
     ptt_bindings().lock().unwrap()[slot] = code;
 }
@@ -750,7 +755,7 @@ fn set_chan_binding(slot: usize, code: Option<String>) {
     if slot >= 2 {
         return;
     }
-    let code = code.filter(|c| !c.is_empty() && c.len() <= 64);
+    let code = binding_code(code);
     CHAN_SLOT_DOWN[slot].store(false, Ordering::SeqCst);
     chan_bindings().lock().unwrap()[slot] = code;
     refresh_chan_bound();
@@ -798,6 +803,84 @@ fn valid_code(s: &str) -> bool {
 fn valid_hex(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_hexdigit())
 }
+/// Channel (frequency) name rule shared by `set_channel` / `remove_channel`:
+/// 1–MAX_CHANNEL_LEN chars after trimming, no control chars.
+fn valid_channel(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= companion_core::MAX_CHANNEL_LEN && !name.chars().any(|c| c.is_control())
+}
+/// Room token from the webview: trimmed; empty → none; otherwise ≤128 hex chars.
+fn clean_token(token: Option<String>) -> Result<Option<String>, String> {
+    match token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        Some(t) if valid_hex(&t, 128) => Ok(Some(t)),
+        Some(_) => Err("invalid token".into()),
+        None => Ok(None),
+    }
+}
+/// Pinned server cert: trimmed; empty → none; otherwise exactly 64 hex chars (SHA-256).
+fn clean_cert(cert: Option<String>) -> Result<Option<String>, String> {
+    match cert.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+        Some(c) if c.len() == 64 && valid_hex(&c, 64) => Ok(Some(c)),
+        Some(_) => Err("invalid cert_sha256 (64 hex chars)".into()),
+        None => Ok(None),
+    }
+}
+/// Audio device name at connect time: trimmed; empty → default device;
+/// anything over 256 bytes is refused (cpal names are far shorter).
+fn clean_device(d: Option<String>) -> Result<Option<String>, String> {
+    match d.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        Some(s) if s.len() <= 256 => Ok(Some(s)),
+        Some(_) => Err("invalid device name".into()),
+        None => Ok(None),
+    }
+}
+/// Live device switch: same trim/empty rule, but an overlong name simply falls
+/// back to the default device instead of erroring (nothing to report back to).
+fn live_device(name: Option<String>) -> Option<String> {
+    name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 256)
+}
+/// Chat text as sent on the wire: capped at MAX_CHAT_LEN chars; whitespace-only → nothing.
+fn bounded_chat(text: &str) -> Option<String> {
+    let text: String = text.chars().take(MAX_CHAT_LEN).collect();
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+/// A finite value clamped to [lo, hi]; NaN/±inf fall back to `dflt`.
+fn norm_f32(v: f32, lo: f32, hi: f32, dflt: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(lo, hi)
+    } else {
+        dflt
+    }
+}
+/// Normalize a DSP config at the IPC boundary: reject NaN/inf, clamp to sane ranges.
+fn normalize_dsp(mut cfg: companion_core::audio::DspConfig) -> companion_core::audio::DspConfig {
+    cfg.gate_threshold = norm_f32(cfg.gate_threshold, 0.0, 0.5, 0.015);
+    cfg.comp_threshold = norm_f32(cfg.comp_threshold, 0.01, 1.0, 0.15);
+    cfg.comp_ratio = norm_f32(cfg.comp_ratio, 1.0, 20.0, 3.0);
+    cfg.comp_makeup = norm_f32(cfg.comp_makeup, 0.1, 4.0, 1.4);
+    cfg.limiter_ceiling = norm_f32(cfg.limiter_ceiling, 0.05, 1.0, 0.97);
+    cfg
+}
+/// Normalize the radio-effect config like `normalize_dsp`. The clamp ranges
+/// alone keep a real passband (low cut ≤ 1 kHz < 1.2 kHz ≤ high cut), so the
+/// cascade can never collapse into a near-mute band.
+fn normalize_radio(mut cfg: companion_core::audio::RadioCfg) -> companion_core::audio::RadioCfg {
+    cfg.low_cut = norm_f32(cfg.low_cut, 50.0, 1000.0, 300.0);
+    cfg.high_cut = norm_f32(cfg.high_cut, 1200.0, 12000.0, 3400.0);
+    cfg.saturation = norm_f32(cfg.saturation, 0.0, 1.0, 0.35);
+    cfg.destruction = norm_f32(cfg.destruction, 0.0, 1.0, 0.15);
+    cfg
+}
+/// Upper bound for the webview's control-state snapshot (a status blob, not a
+/// channel for bulk data).
+const MAX_CONTROL_STATE: usize = 16 * 1024;
+/// True when a snapshot is small enough to cache and fan out to controllers.
+fn control_state_ok(snapshot: &serde_json::Value) -> bool {
+    serde_json::to_string(snapshot).map(|s| s.len() <= MAX_CONTROL_STATE).unwrap_or(false)
+}
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // one IPC call = one connect form; splitting it would only move the fields into a struct
@@ -830,25 +913,10 @@ async fn connect(
     if !valid_name(&name) {
         return Err("invalid name (1–64 chars, no control chars)".into());
     }
-    let token = match token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
-        Some(t) if valid_hex(&t, 128) => Some(t),
-        Some(_) => return Err("invalid token".into()),
-        None => None,
-    };
-    let cert_sha256 = match cert_sha256.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
-        Some(c) if c.len() == 64 && valid_hex(&c, 64) => Some(c),
-        Some(_) => return Err("invalid cert_sha256 (64 hex chars)".into()),
-        None => None,
-    };
-    let clean_dev = |d: Option<String>| -> Result<Option<String>, String> {
-        match d.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
-            Some(s) if s.len() <= 256 => Ok(Some(s)),
-            Some(_) => Err("invalid device name".into()),
-            None => Ok(None),
-        }
-    };
-    let input_device = clean_dev(input_device)?;
-    let output_device = clean_dev(output_device)?;
+    let token = clean_token(token)?;
+    let cert_sha256 = clean_cert(cert_sha256)?;
+    let input_device = clean_device(input_device)?;
+    let output_device = clean_device(output_device)?;
 
     // One engine at a time. A deep link arriving mid-session would otherwise
     // stack a second engine, and the first one's teardown Status knocks the UI
@@ -932,10 +1000,7 @@ fn set_transmit(state: State<AppState>, on: bool) {
 #[tauri::command]
 fn send_chat(state: State<AppState>, text: String) {
     // Bound the message length (defense against oversized webview input).
-    let text: String = text.chars().take(MAX_CHAT_LEN).collect();
-    if text.trim().is_empty() {
-        return;
-    }
+    let Some(text) = bounded_chat(&text) else { return };
     if let Some(s) = state.serverless.lock().unwrap().as_ref() {
         s.send_chat(text);
         return;
@@ -996,10 +1061,7 @@ fn reconnect_session(state: State<AppState>) {
 #[tauri::command]
 fn set_channel(state: State<AppState>, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
-    if name.is_empty()
-        || name.chars().count() > companion_core::MAX_CHANNEL_LEN
-        || name.chars().any(|c| c.is_control())
-    {
+    if !valid_channel(&name) {
         return Err("invalid channel (1–32 chars, no control chars)".into());
     }
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -1013,10 +1075,7 @@ fn set_channel(state: State<AppState>, name: String) -> Result<(), String> {
 #[tauri::command]
 fn remove_channel(state: State<AppState>, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
-    if name.is_empty()
-        || name.chars().count() > companion_core::MAX_CHANNEL_LEN
-        || name.chars().any(|c| c.is_control())
-    {
+    if !valid_channel(&name) {
         return Err("invalid channel (1–32 chars, no control chars)".into());
     }
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
@@ -1026,14 +1085,8 @@ fn remove_channel(state: State<AppState>, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_dsp(state: State<AppState>, mut cfg: companion_core::audio::DspConfig) {
-    // Normalize at the IPC boundary: reject NaN/inf, clamp to sane ranges.
-    let norm = |v: f32, lo: f32, hi: f32, dflt: f32| if v.is_finite() { v.clamp(lo, hi) } else { dflt };
-    cfg.gate_threshold = norm(cfg.gate_threshold, 0.0, 0.5, 0.015);
-    cfg.comp_threshold = norm(cfg.comp_threshold, 0.01, 1.0, 0.15);
-    cfg.comp_ratio = norm(cfg.comp_ratio, 1.0, 20.0, 3.0);
-    cfg.comp_makeup = norm(cfg.comp_makeup, 0.1, 4.0, 1.4);
-    cfg.limiter_ceiling = norm(cfg.limiter_ceiling, 0.05, 1.0, 0.97);
+fn set_dsp(state: State<AppState>, cfg: companion_core::audio::DspConfig) {
+    let cfg = normalize_dsp(cfg);
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
         e.set_dsp(cfg);
     }
@@ -1042,18 +1095,8 @@ fn set_dsp(state: State<AppState>, mut cfg: companion_core::audio::DspConfig) {
 /// Receive-bus radio effect ("Funk-Effekt"): band-limit + saturation +
 /// degradation on incoming voice. Normalized at the IPC boundary like set_dsp.
 #[tauri::command]
-fn set_radio_fx(state: State<AppState>, mut cfg: companion_core::audio::RadioCfg) {
-    let norm = |v: f32, lo: f32, hi: f32, dflt: f32| if v.is_finite() { v.clamp(lo, hi) } else { dflt };
-    cfg.low_cut = norm(cfg.low_cut, 50.0, 1000.0, 300.0);
-    cfg.high_cut = norm(cfg.high_cut, 1200.0, 12000.0, 3400.0);
-    // Keep a real passband: the low cut must stay under the high cut, or the
-    // cascade turns into a near-mute band.
-    if cfg.low_cut >= cfg.high_cut {
-        cfg.low_cut = 300.0;
-        cfg.high_cut = 3400.0;
-    }
-    cfg.saturation = norm(cfg.saturation, 0.0, 1.0, 0.35);
-    cfg.destruction = norm(cfg.destruction, 0.0, 1.0, 0.15);
+fn set_radio_fx(state: State<AppState>, cfg: companion_core::audio::RadioCfg) {
+    let cfg = normalize_radio(cfg);
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
         e.set_radio(cfg);
     }
@@ -1065,7 +1108,7 @@ fn set_radio_fx(state: State<AppState>, mut cfg: companion_core::audio::RadioCfg
 /// for bulk data.
 #[tauri::command]
 fn control_state(state: State<AppState>, snapshot: serde_json::Value) {
-    if serde_json::to_string(&snapshot).map(|s| s.len() > 16 * 1024).unwrap_or(true) {
+    if !control_state_ok(&snapshot) {
         return;
     }
     if let Some(srv) = state.control.lock().unwrap().as_ref() {
@@ -1115,7 +1158,7 @@ fn set_low_bandwidth(state: State<AppState>, on: bool) {
 /// When not connected it's a no-op — the saved choice is applied on next connect.
 #[tauri::command]
 fn set_input_device(state: State<AppState>, name: Option<String>) {
-    let name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 256);
+    let name = live_device(name);
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
         e.set_input_device(name);
     }
@@ -1123,7 +1166,7 @@ fn set_input_device(state: State<AppState>, name: Option<String>) {
 
 #[tauri::command]
 fn set_output_device(state: State<AppState>, name: Option<String>) {
-    let name = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 256);
+    let name = live_device(name);
     if let Some(e) = state.engine.lock().unwrap().as_ref() {
         e.set_output_device(name);
     }
@@ -1515,5 +1558,436 @@ mod ipc_validation_tests {
         assert_eq!(clamp_vol(f32::NAN), 1.0, "NaN falls back to unity gain");
         assert_eq!(clamp_vol(f32::INFINITY), 1.0);
         assert_eq!(clamp_vol(f32::NEG_INFINITY), 1.0);
+    }
+}
+
+/// Modifier-chord helpers: platform-neutral pure functions that the Windows
+/// Raw Input thread feeds. A wrong parse here means a binding like
+/// "Ctrl+Shift+KeyT" either never fires or fires on the bare key.
+#[cfg(test)]
+mod chord_tests {
+    use super::*;
+
+    const ALL: Mods = Mods { shift: true, ctrl: true, alt: true, meta: true };
+
+    #[test]
+    fn mod_of_label_knows_both_sides_of_every_modifier() {
+        assert_eq!(mod_of_label("ShiftLeft"), Some("Shift"));
+        assert_eq!(mod_of_label("ShiftRight"), Some("Shift"));
+        assert_eq!(mod_of_label("ControlLeft"), Some("Ctrl"));
+        assert_eq!(mod_of_label("ControlRight"), Some("Ctrl"));
+        assert_eq!(mod_of_label("Alt"), Some("Alt"));
+        assert_eq!(mod_of_label("AltGr"), Some("Alt"));
+        assert_eq!(mod_of_label("MetaLeft"), Some("Meta"));
+        assert_eq!(mod_of_label("MetaRight"), Some("Meta"));
+        for plain in ["F8", "KeyT", "Mouse:Left", "Pad:3", "Shift", "Ctrl", ""] {
+            assert_eq!(mod_of_label(plain), None, "{plain:?} is not a modifier label");
+        }
+    }
+
+    #[test]
+    fn mods_ok_requires_every_required_modifier_and_tolerates_extras() {
+        let none = Mods::default();
+        let shift = Mods { shift: true, ..none };
+        let ctrl_shift = Mods { ctrl: true, shift: true, ..none };
+        // No requirement: always satisfied, whatever is held.
+        assert!(mods_ok(none, none));
+        assert!(mods_ok(none, ALL));
+        // Exact match and extras.
+        assert!(mods_ok(shift, shift));
+        assert!(mods_ok(shift, ctrl_shift), "an extra held Ctrl must not block a Shift chord");
+        assert!(mods_ok(ctrl_shift, ALL));
+        // A missing required modifier fails, even with others held.
+        assert!(!mods_ok(shift, none));
+        assert!(!mods_ok(ctrl_shift, shift));
+        assert!(!mods_ok(ALL, ctrl_shift));
+    }
+
+    #[test]
+    fn parse_binding_splits_modifiers_from_the_base_key() {
+        assert_eq!(parse_binding("F8"), (Mods::default(), "F8".to_string()));
+        assert_eq!(parse_binding("Mouse:Left"), (Mods::default(), "Mouse:Left".to_string()));
+        assert_eq!(parse_binding("Shift+KeyT"), (Mods { shift: true, ..Mods::default() }, "KeyT".to_string()));
+        assert_eq!(
+            parse_binding("Ctrl+Shift+Mouse:Left"),
+            (Mods { ctrl: true, shift: true, ..Mods::default() }, "Mouse:Left".to_string())
+        );
+        // Order of the modifier tokens does not matter.
+        assert_eq!(parse_binding("Meta+Alt+F1"), (Mods { alt: true, meta: true, ..Mods::default() }, "F1".to_string()));
+        assert_eq!(parse_binding("Alt+Meta+F1"), parse_binding("Meta+Alt+F1"));
+        // Every modifier at once.
+        assert_eq!(parse_binding("Ctrl+Alt+Shift+Meta+KeyZ"), (ALL, "KeyZ".to_string()));
+    }
+
+    #[test]
+    fn parse_binding_stops_at_the_first_non_modifier_token() {
+        // "KeyA+Shift" is not a chord: the base key comes first, so the rest is the base.
+        assert_eq!(parse_binding("KeyA+Shift"), (Mods::default(), "KeyA+Shift".to_string()));
+        // A gamepad/mouse label containing '+' in a strange place is kept verbatim.
+        assert_eq!(parse_binding("Pad:1+2"), (Mods::default(), "Pad:1+2".to_string()));
+        // Unknown modifier spelling is not a modifier.
+        assert_eq!(parse_binding("Control+KeyA"), (Mods::default(), "Control+KeyA".to_string()));
+    }
+
+    #[test]
+    fn parse_binding_edge_cases_never_panic() {
+        assert_eq!(parse_binding(""), (Mods::default(), String::new()));
+        // Trailing '+' with no base key: modifiers parsed, empty base (never
+        // matches a real key edge, so such a binding is inert).
+        assert_eq!(parse_binding("Shift+"), (Mods { shift: true, ..Mods::default() }, String::new()));
+        assert_eq!(parse_binding("+"), (Mods::default(), "+".to_string()));
+        // A duplicated modifier is idempotent.
+        assert_eq!(parse_binding("Shift+Shift+F2"), (Mods { shift: true, ..Mods::default() }, "F2".to_string()));
+    }
+
+    #[test]
+    fn build_combo_uses_the_canonical_ctrl_alt_shift_meta_order() {
+        assert_eq!(build_combo("F8", Mods::default()), "F8");
+        assert_eq!(build_combo("KeyT", Mods { shift: true, ..Mods::default() }), "Shift+KeyT");
+        assert_eq!(build_combo("KeyT", ALL), "Ctrl+Alt+Shift+Meta+KeyT");
+        assert_eq!(
+            build_combo("Mouse:Left", Mods { meta: true, ctrl: true, ..Mods::default() }),
+            "Ctrl+Meta+Mouse:Left"
+        );
+    }
+
+    #[test]
+    fn build_combo_and_parse_binding_round_trip_for_every_modifier_set() {
+        for bits in 0u8..16 {
+            let m = Mods { ctrl: bits & 1 != 0, alt: bits & 2 != 0, shift: bits & 4 != 0, meta: bits & 8 != 0 };
+            for base in ["F8", "KeyT", "Mouse:Left", "Mouse:WheelUp", "Pad:12"] {
+                let combo = build_combo(base, m);
+                assert_eq!(parse_binding(&combo), (m, base.to_string()), "round trip of {combo:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_saved_chord_label_reparses_to_the_same_chord() {
+        // What `handle_raw` stores on capture is `build_combo(...)`; what it
+        // later compares against is `parse_binding(...)` of that string. The
+        // two must agree or a captured chord can never fire.
+        let held = Mods { ctrl: true, shift: true, ..Mods::default() };
+        let stored = build_combo("KeyR", held);
+        let (req, base) = parse_binding(&stored);
+        assert_eq!(base, "KeyR");
+        assert!(mods_ok(req, held));
+        assert!(!mods_ok(req, Mods { shift: true, ..Mods::default() }), "releasing Ctrl must stop the chord");
+    }
+}
+
+/// Deep-link recognition on argv / single-instance forwarding.
+#[cfg(test)]
+mod deeplink_tests {
+    use super::*;
+
+    #[test]
+    fn both_schemes_are_recognized_current_one_first() {
+        assert_eq!(DEEPLINK_SCHEMES, ["subraum://", "squadlink://"]);
+        assert!(is_deeplink("subraum://join?code=abc&pin=123456"));
+        assert!(is_deeplink("squadlink://join?code=abc&pin=123456"));
+        assert!(is_deeplink("subraum://"), "a bare scheme still counts as ours (webview rejects the payload)");
+    }
+
+    #[test]
+    fn anything_else_on_argv_is_not_a_deep_link() {
+        for arg in [
+            "",
+            "subraum",
+            "subraum:",
+            "subraum:/join",
+            "https://subraum.cc/j/abc",
+            "wss://subraum.cc/ws",
+            "--flag",
+            "C:\\Program Files\\subraum\\subraum.exe",
+            " subraum://join", // leading space: not what a launcher hands us
+            "xsubraum://join",
+        ] {
+            assert!(!is_deeplink(arg), "{arg:?} must not be treated as a deep link");
+        }
+    }
+
+    #[test]
+    fn scheme_match_is_case_sensitive() {
+        // Launchers hand the scheme over as registered (lowercase). An
+        // uppercase spelling is refused rather than normalized, consistent
+        // with the WSS:// pinning fix on the engine side.
+        assert!(!is_deeplink("SUBRAUM://join?code=abc"));
+        assert!(!is_deeplink("Subraum://join?code=abc"));
+        assert!(!is_deeplink("SQUADLINK://join?code=abc"));
+    }
+
+    #[test]
+    fn pending_deeplink_is_drained_exactly_once() {
+        // Only this test touches PENDING_DEEPLINK.
+        assert_eq!(take_pending_deeplink(), None, "normal launch: nothing pending");
+        *pending_deeplink().lock().unwrap() = Some("subraum://join?code=x".into());
+        assert_eq!(take_pending_deeplink().as_deref(), Some("subraum://join?code=x"));
+        assert_eq!(take_pending_deeplink(), None, "a second drain finds nothing");
+    }
+}
+
+/// Global binding state behind the `set_*_binding` / `start_*_capture`
+/// commands. Each test owns one set of statics (PTT vs channel) so the
+/// parallel test runner cannot interleave them.
+#[cfg(test)]
+mod binding_state_tests {
+    use super::*;
+
+    #[test]
+    fn binding_code_keeps_only_non_empty_bounded_codes() {
+        assert_eq!(binding_code(None), None);
+        assert_eq!(binding_code(Some(String::new())), None);
+        assert_eq!(binding_code(Some("F8".into())).as_deref(), Some("F8"));
+        assert_eq!(binding_code(Some("Ctrl+Shift+Mouse:Left".into())).as_deref(), Some("Ctrl+Shift+Mouse:Left"));
+        assert_eq!(binding_code(Some("x".repeat(64))).map(|s| s.len()), Some(64), "64 bytes is still fine");
+        assert_eq!(binding_code(Some("x".repeat(65))), None, "65 bytes is unbound, not truncated");
+    }
+
+    #[test]
+    fn ptt_bindings_default_rebind_clear_and_capture_arming() {
+        // Only this test touches PTT_BINDINGS / PTT_SLOT_DOWN / PTT_CAPTURE_SLOT.
+        assert_eq!(*ptt_bindings().lock().unwrap(), [Some("F8".to_string()), None], "slot 0 defaults to F8");
+
+        set_ptt_binding(1, Some("Mouse:Left".into()));
+        assert_eq!(ptt_bindings().lock().unwrap()[1].as_deref(), Some("Mouse:Left"));
+
+        // A stuck "held" flag is cleared when the slot is rebound.
+        PTT_SLOT_DOWN[0].store(true, Ordering::SeqCst);
+        set_ptt_binding(0, Some("KeyR".into()));
+        assert!(!PTT_SLOT_DOWN[0].load(Ordering::SeqCst));
+        assert_eq!(ptt_bindings().lock().unwrap()[0].as_deref(), Some("KeyR"));
+
+        // Empty / overlong / None all unbind.
+        set_ptt_binding(0, Some(String::new()));
+        assert_eq!(ptt_bindings().lock().unwrap()[0], None);
+        set_ptt_binding(1, Some("y".repeat(65)));
+        assert_eq!(ptt_bindings().lock().unwrap()[1], None);
+        set_ptt_binding(1, Some("F9".into()));
+        set_ptt_binding(1, None);
+        assert_eq!(ptt_bindings().lock().unwrap()[1], None);
+
+        // Out-of-range slot: ignored, no panic, nothing changes.
+        set_ptt_binding(2, Some("F10".into()));
+        set_ptt_binding(usize::MAX, Some("F10".into()));
+        assert_eq!(*ptt_bindings().lock().unwrap(), [None, None]);
+
+        // Capture arming: valid slots arm, invalid ones leave the state alone.
+        assert_eq!(PTT_CAPTURE_SLOT.load(Ordering::SeqCst), -1, "idle by default");
+        start_ptt_capture(1);
+        assert_eq!(PTT_CAPTURE_SLOT.load(Ordering::SeqCst), 1);
+        start_ptt_capture(2);
+        start_ptt_capture(usize::MAX);
+        assert_eq!(PTT_CAPTURE_SLOT.load(Ordering::SeqCst), 1, "bad slot does not disturb an armed capture");
+        start_ptt_capture(0);
+        assert_eq!(PTT_CAPTURE_SLOT.load(Ordering::SeqCst), 0);
+        PTT_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn channel_bindings_track_the_any_bound_fast_path_flag() {
+        // Only this test touches CHAN_BINDINGS / CHAN_SLOT_DOWN / CHAN_ANY_BOUND / CHAN_CAPTURE_SLOT.
+        assert_eq!(*chan_bindings().lock().unwrap(), [None, None], "channel keys are unbound by default");
+        refresh_chan_bound();
+        assert!(!CHAN_ANY_BOUND.load(Ordering::Relaxed));
+
+        set_chan_binding(1, Some("F7".into()));
+        assert!(CHAN_ANY_BOUND.load(Ordering::Relaxed), "binding next-channel sets the flag");
+        set_chan_binding(0, Some("F6".into()));
+        assert!(CHAN_ANY_BOUND.load(Ordering::Relaxed));
+        set_chan_binding(1, None);
+        assert!(CHAN_ANY_BOUND.load(Ordering::Relaxed), "one key still bound");
+        set_chan_binding(0, Some(String::new()));
+        assert!(!CHAN_ANY_BOUND.load(Ordering::Relaxed), "last key unbound clears the flag");
+        assert_eq!(*chan_bindings().lock().unwrap(), [None, None]);
+
+        CHAN_SLOT_DOWN[1].store(true, Ordering::SeqCst);
+        set_chan_binding(1, Some("F7".into()));
+        assert!(!CHAN_SLOT_DOWN[1].load(Ordering::SeqCst), "rebind clears a stuck held flag");
+        set_chan_binding(1, None);
+
+        set_chan_binding(2, Some("F5".into()));
+        assert_eq!(*chan_bindings().lock().unwrap(), [None, None], "slot 2 is ignored");
+        assert!(!CHAN_ANY_BOUND.load(Ordering::Relaxed));
+
+        assert_eq!(CHAN_CAPTURE_SLOT.load(Ordering::SeqCst), -1);
+        start_chan_capture(0);
+        assert_eq!(CHAN_CAPTURE_SLOT.load(Ordering::SeqCst), 0);
+        start_chan_capture(7);
+        assert_eq!(CHAN_CAPTURE_SLOT.load(Ordering::SeqCst), 0);
+        CHAN_CAPTURE_SLOT.store(-1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn publish_ptt_merges_keyboard_and_control_sources_into_one_global_state() {
+        // Only this test touches PTT_SOURCES. APP_HANDLE is unset in tests, so
+        // nothing is emitted; the merged state is what we check.
+        let emitted = || PTT_SOURCES.lock().unwrap().emitted;
+        assert!(!emitted());
+        publish_ptt(Some(true), None);
+        assert!(emitted(), "keyboard press transmits");
+        publish_ptt(None, Some(true));
+        assert!(emitted());
+        publish_ptt(Some(false), None);
+        assert!(emitted(), "keyboard release while the Stream Deck still holds keeps transmitting");
+        publish_ptt(None, Some(false));
+        assert!(!emitted(), "last source released stops transmitting");
+        publish_ptt(None, None);
+        assert!(!emitted(), "a no-op update changes nothing");
+    }
+
+    #[test]
+    fn ptt_sources_only_report_edges() {
+        let mut s = PttSources::default();
+        assert_eq!(s.update(None, None), None, "nothing changed, nothing to emit");
+        assert_eq!(s.update(Some(true), None), Some(true));
+        assert_eq!(s.update(Some(true), None), None, "key auto-repeat is not a new edge");
+        assert_eq!(s.update(Some(true), Some(true)), None);
+        assert_eq!(s.update(Some(false), Some(false)), Some(false), "both released in one update is one edge");
+        assert_eq!(s.update(Some(false), None), None);
+    }
+}
+
+/// Pure normalizers behind the remaining IPC commands.
+#[cfg(test)]
+mod ipc_normalizer_tests {
+    use super::*;
+    use companion_core::audio::{DspConfig, RadioCfg};
+
+    #[test]
+    fn valid_channel_counts_chars_not_bytes_and_bans_control_chars() {
+        assert!(valid_channel("Funk 1"));
+        assert!(valid_channel(&"a".repeat(companion_core::MAX_CHANNEL_LEN)));
+        assert!(!valid_channel(&"a".repeat(companion_core::MAX_CHANNEL_LEN + 1)));
+        assert!(valid_channel(&"\u{e4}".repeat(companion_core::MAX_CHANNEL_LEN)), "32 umlauts are 32 chars");
+        assert!(!valid_channel(""));
+        assert!(!valid_channel("Funk\u{0}1"));
+        assert!(!valid_channel("Funk\n1"));
+    }
+
+    #[test]
+    fn clean_token_trims_and_requires_hex_up_to_128() {
+        assert_eq!(clean_token(None), Ok(None));
+        assert_eq!(clean_token(Some(String::new())), Ok(None));
+        assert_eq!(clean_token(Some("   ".into())), Ok(None), "whitespace-only means no token");
+        assert_eq!(clean_token(Some("  ab12  ".into())), Ok(Some("ab12".into())));
+        assert_eq!(clean_token(Some("f".repeat(128))), Ok(Some("f".repeat(128))));
+        assert!(clean_token(Some("f".repeat(129))).is_err());
+        assert!(clean_token(Some("not-hex".into())).is_err());
+        assert!(clean_token(Some("ab 12".into())).is_err(), "inner whitespace is not trimmed away");
+    }
+
+    #[test]
+    fn clean_cert_requires_exactly_a_sha256_hex_digest() {
+        assert_eq!(clean_cert(None), Ok(None));
+        assert_eq!(clean_cert(Some("  ".into())), Ok(None));
+        let d = "0123456789abcdef".repeat(4);
+        assert_eq!(clean_cert(Some(format!(" {d} "))), Ok(Some(d.clone())));
+        assert_eq!(clean_cert(Some(d.to_uppercase())), Ok(Some(d.to_uppercase())), "case is left to the pinning code");
+        assert!(clean_cert(Some(d[..63].to_string())).is_err(), "63 chars");
+        assert!(clean_cert(Some(format!("{d}0"))).is_err(), "65 chars");
+        assert!(clean_cert(Some("g".repeat(64))).is_err(), "non-hex");
+        assert!(clean_cert(Some(format!("{}:{}", &d[..31], &d[32..]))).is_err(), "colon-separated fingerprints are not accepted");
+    }
+
+    #[test]
+    fn device_names_are_trimmed_and_bounded() {
+        assert_eq!(clean_device(None), Ok(None));
+        assert_eq!(clean_device(Some("".into())), Ok(None));
+        assert_eq!(clean_device(Some("  Mic (USB)  ".into())), Ok(Some("Mic (USB)".into())));
+        assert_eq!(clean_device(Some("m".repeat(256))), Ok(Some("m".repeat(256))));
+        assert!(clean_device(Some("m".repeat(257))).is_err(), "connect refuses an absurd name");
+
+        // The live switch has nobody to report an error to: it falls back to default.
+        assert_eq!(live_device(None), None);
+        assert_eq!(live_device(Some("   ".into())), None);
+        assert_eq!(live_device(Some(" Speakers ".into())).as_deref(), Some("Speakers"));
+        assert_eq!(live_device(Some("m".repeat(256))).map(|s| s.len()), Some(256));
+        assert_eq!(live_device(Some("m".repeat(257))), None);
+    }
+
+    #[test]
+    fn bounded_chat_drops_blank_lines_and_caps_at_max_chars() {
+        assert_eq!(bounded_chat(""), None);
+        assert_eq!(bounded_chat("   \n\t"), None);
+        assert_eq!(bounded_chat("hi").as_deref(), Some("hi"));
+        assert_eq!(bounded_chat("  hi  ").as_deref(), Some("  hi  "), "surrounding whitespace is kept, only blank-only is dropped");
+        let long = "\u{e4}".repeat(MAX_CHAT_LEN + 1);
+        let capped = bounded_chat(&long).unwrap();
+        assert_eq!(capped.chars().count(), MAX_CHAT_LEN, "cap counts chars, so a multibyte text is not cut mid-codepoint");
+        // Whitespace padding past the cap that would leave an empty message
+        // after truncation still yields nothing.
+        let padded = format!("{}x", " ".repeat(MAX_CHAT_LEN));
+        assert_eq!(bounded_chat(&padded), None);
+    }
+
+    #[test]
+    fn norm_f32_clamps_finite_values_and_defaults_the_rest() {
+        assert_eq!(norm_f32(0.5, 0.0, 1.0, 0.3), 0.5);
+        assert_eq!(norm_f32(-1.0, 0.0, 1.0, 0.3), 0.0);
+        assert_eq!(norm_f32(7.0, 0.0, 1.0, 0.3), 1.0);
+        assert_eq!(norm_f32(f32::NAN, 0.0, 1.0, 0.3), 0.3);
+        assert_eq!(norm_f32(f32::INFINITY, 0.0, 1.0, 0.3), 0.3);
+        assert_eq!(norm_f32(f32::NEG_INFINITY, 0.0, 1.0, 0.3), 0.3);
+    }
+
+    #[test]
+    fn normalize_dsp_leaves_defaults_alone_and_repairs_bad_floats() {
+        let d = DspConfig::default();
+        let n = normalize_dsp(d);
+        assert_eq!(
+            (n.gate_threshold, n.comp_threshold, n.comp_ratio, n.comp_makeup, n.limiter_ceiling),
+            (d.gate_threshold, d.comp_threshold, d.comp_ratio, d.comp_makeup, d.limiter_ceiling)
+        );
+        assert_eq!((n.gate, n.compressor, n.limiter), (d.gate, d.compressor, d.limiter));
+
+        let bad = DspConfig {
+            gate: false,
+            gate_threshold: f32::NAN,
+            compressor: false,
+            comp_threshold: f32::INFINITY,
+            comp_ratio: -3.0,
+            comp_makeup: 100.0,
+            limiter: true,
+            limiter_ceiling: 0.0,
+        };
+        let n = normalize_dsp(bad);
+        assert_eq!(n.gate_threshold, 0.015, "NaN -> default");
+        assert_eq!(n.comp_threshold, 0.15, "inf -> default");
+        assert_eq!(n.comp_ratio, 1.0, "clamped to the floor");
+        assert_eq!(n.comp_makeup, 4.0, "clamped to the ceiling");
+        assert_eq!(n.limiter_ceiling, 0.05, "clamped to the floor");
+        assert!(!n.gate && !n.compressor && n.limiter, "switches pass through untouched");
+    }
+
+    #[test]
+    fn normalize_radio_keeps_a_real_passband_for_any_input() {
+        let d = RadioCfg::default();
+        let n = normalize_radio(d);
+        assert_eq!((n.low_cut, n.high_cut, n.saturation, n.destruction), (300.0, 3400.0, 0.35, 0.15));
+        assert_eq!(n.enabled, d.enabled);
+
+        let n = normalize_radio(RadioCfg { enabled: true, low_cut: f32::NAN, high_cut: f32::NAN, saturation: 5.0, destruction: -1.0 });
+        assert_eq!((n.low_cut, n.high_cut, n.saturation, n.destruction), (300.0, 3400.0, 1.0, 0.0));
+        assert!(n.enabled);
+
+        // A user cannot invert the band: low is capped at 1 kHz, high floors at 1.2 kHz.
+        for (lo, hi) in [(5000.0, 100.0), (1000.0, 1200.0), (f32::INFINITY, f32::NEG_INFINITY), (0.0, 1e9)] {
+            let n = normalize_radio(RadioCfg { low_cut: lo, high_cut: hi, ..RadioCfg::default() });
+            assert!(n.low_cut < n.high_cut, "({lo}, {hi}) -> ({}, {})", n.low_cut, n.high_cut);
+            assert!((50.0..=1000.0).contains(&n.low_cut));
+            assert!((1200.0..=12000.0).contains(&n.high_cut));
+        }
+    }
+
+    #[test]
+    fn control_state_is_capped_at_16_kib_serialized() {
+        assert!(control_state_ok(&serde_json::json!({ "connected": true, "channel": "Funk 1" })));
+        assert!(control_state_ok(&serde_json::Value::Null));
+        // A JSON string serializes with two quotes: 16382 chars -> exactly 16384 bytes.
+        let at_cap = serde_json::Value::String("x".repeat(MAX_CONTROL_STATE - 2));
+        assert!(control_state_ok(&at_cap), "exactly at the cap is accepted");
+        let over = serde_json::Value::String("x".repeat(MAX_CONTROL_STATE - 1));
+        assert!(!control_state_ok(&over), "one byte over is dropped");
     }
 }

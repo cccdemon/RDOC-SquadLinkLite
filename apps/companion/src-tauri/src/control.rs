@@ -346,4 +346,197 @@ mod tests {
         assert_eq!(v["token"], "cafe");
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn discovery_file_creates_nested_dirs_and_is_rewritten_on_every_start() {
+        let root = std::env::temp_dir().join(format!("subraum-ctl-nested-{}", std::process::id()));
+        let dir = root.join("a").join("b");
+        write_discovery(&dir, 1, "first").unwrap();
+        write_discovery(&dir, 2, "second").unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("control.json")).unwrap()).unwrap();
+        assert_eq!(v["port"], 2, "a controller must find the LIVE port, not a stale one");
+        assert_eq!(v["token"], "second");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn route_maps_each_command_shape_and_rejects_the_rest() {
+        let j = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        assert_eq!(route(&j(r#"{"t":"ptt","on":true}"#)), Some(CtlOut::Ptt(true)));
+        assert_eq!(route(&j(r#"{"t":"ptt","on":false}"#)), Some(CtlOut::Ptt(false)));
+        assert_eq!(route(&j(r#"{"t":"ptt"}"#)), None, "ptt without `on` is not a command");
+        assert_eq!(route(&j(r#"{"t":"ptt","on":"yes"}"#)), None, "`on` must be a bool");
+        assert_eq!(route(&j(r#"{"t":"chan-cycle","dir":1}"#)), Some(CtlOut::ChanCycle(1)));
+        assert_eq!(route(&j(r#"{"t":"chan-cycle","dir":-1}"#)), Some(CtlOut::ChanCycle(-1)));
+        for bad in [r#"{"t":"chan-cycle","dir":0}"#, r#"{"t":"chan-cycle","dir":2}"#, r#"{"t":"chan-cycle"}"#, r#"{"t":"chan-cycle","dir":"1"}"#] {
+            assert_eq!(route(&j(bad)), None, "{bad}");
+        }
+        // Webview-owned commands are forwarded verbatim, payload included.
+        for t in ["mic-toggle", "deafen-toggle", "channel", "rekey", "disconnect", "volume", "volume-delta"] {
+            let v = j(&format!(r#"{{"t":"{t}","name":"Funk 2","value":0.5}}"#));
+            assert_eq!(route(&v), Some(CtlOut::Ctl(v.clone())), "{t}");
+        }
+        // Nothing else gets through: unknown names, missing / non-string tags, non-objects.
+        for bad in [r#"{"t":"auth","token":"x"}"#, r#"{"t":"state"}"#, r#"{"on":true}"#, r#"{"t":7}"#, r#"[1,2]"#, r#""ptt""#, "null"] {
+            assert_eq!(route(&j(bad)), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_compares_bytes_and_lengths() {
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(!constant_time_eq(b"", b"a"));
+        assert!(!constant_time_eq(b"Abc", b"abc"), "case matters");
+    }
+
+    #[tokio::test]
+    async fn token_is_64_hex_chars_and_rotates_per_start() {
+        let (tx1, _k1) = chan();
+        let (tx2, _k2) = chan();
+        let a = ControlServer::start(tx1).await.unwrap();
+        let b = ControlServer::start(tx2).await.unwrap();
+        for t in [&a.token, &b.token] {
+            assert_eq!(t.len(), 64);
+            assert!(t.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        }
+        assert_ne!(a.token, b.token, "two starts must never share a token");
+        assert_ne!(a.port, b.port, "each start binds its own ephemeral port");
+        assert_ne!(a.port, 0);
+    }
+
+    #[tokio::test]
+    async fn non_auth_frames_before_auth_are_ignored_and_do_not_count_as_strikes() {
+        let (out_tx, mut out_rx) = chan();
+        let srv = ControlServer::start(out_tx).await.unwrap();
+        let mut ws = client(srv.port).await;
+        // Plenty of noise: commands, garbage, non-text — none is a strike.
+        for noise in [r#"{"t":"ptt","on":true}"#, "not json", r#"{"hello":1}"#, r#"[]"#, r#"{"t":"disconnect"}"#] {
+            ws.send(Message::text(noise.to_string())).await.unwrap();
+        }
+        ws.send(Message::binary(vec![1, 2, 3])).await.unwrap();
+        ws.send(Message::Ping(vec![])).await.unwrap();
+        // Two real strikes, then the right token: still lets us in (3 would not).
+        for _ in 0..(MAX_AUTH_TRIES - 1) {
+            ws.send(Message::text(r#"{"t":"auth","token":"nope"}"#.to_string())).await.unwrap();
+            assert_eq!(recv_json(&mut ws).await["t"], "auth-failed");
+        }
+        ws.send(Message::text(format!(r#"{{"t":"auth","token":"{}"}}"#, srv.token))).await.unwrap();
+        let hello = recv_json(&mut ws).await;
+        assert_eq!(hello["t"], "hello");
+        assert_eq!(hello["state"]["connected"], false, "default snapshot before the webview reported anything");
+        assert_eq!(out_rx.recv().await, Some(CtlOut::Refresh));
+        assert!(out_rx.try_recv().is_err(), "none of the pre-auth commands leaked through");
+    }
+
+    #[tokio::test]
+    async fn auth_without_a_token_field_is_a_strike() {
+        let (out_tx, _k) = chan();
+        let srv = ControlServer::start(out_tx).await.unwrap();
+        let mut ws = client(srv.port).await;
+        ws.send(Message::text(r#"{"t":"auth"}"#.to_string())).await.unwrap();
+        assert_eq!(recv_json(&mut ws).await["t"], "auth-failed");
+        ws.send(Message::text(r#"{"t":"auth","token":null}"#.to_string())).await.unwrap();
+        assert_eq!(recv_json(&mut ws).await["t"], "auth-failed");
+        // A token with the right length but one wrong char is still wrong.
+        let mut near = srv.token.clone();
+        near.replace_range(0..1, if srv.token.starts_with('0') { "1" } else { "0" });
+        ws.send(Message::text(format!(r#"{{"t":"auth","token":"{near}"}}"#))).await.unwrap();
+        assert_eq!(recv_json(&mut ws).await["t"], "auth-failed");
+    }
+
+    async fn stream_ends(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> bool {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    None | Some(Err(_)) => break,
+                    Some(Ok(m)) if m.is_close() => break,
+                    Some(Ok(_)) => continue,
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn oversized_frame_before_auth_drops_the_connection() {
+        let (out_tx, mut out_rx) = chan();
+        let srv = ControlServer::start(out_tx).await.unwrap();
+        let mut ws = client(srv.port).await;
+        let big = format!(r#"{{"t":"auth","token":"{}"}}"#, "a".repeat(MAX_MSG));
+        ws.send(Message::text(big)).await.unwrap();
+        assert!(stream_ends(&mut ws).await, "a frame over MAX_MSG is not a controller");
+        assert!(out_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn oversized_frame_after_auth_closes_and_the_client_is_pruned_on_next_broadcast() {
+        let (out_tx, mut out_rx) = chan();
+        let srv = ControlServer::start(out_tx).await.unwrap();
+        let mut ws = client(srv.port).await;
+        ws.send(Message::text(format!(r#"{{"t":"auth","token":"{}"}}"#, srv.token))).await.unwrap();
+        let _ = recv_json(&mut ws).await;
+        assert_eq!(out_rx.recv().await, Some(CtlOut::Refresh));
+        assert_eq!(srv.clients.lock().unwrap().len(), 1);
+
+        ws.send(Message::text(format!(r#"{{"t":"channel","name":"{}"}}"#, "x".repeat(MAX_MSG)))).await.unwrap();
+        assert!(stream_ends(&mut ws).await, "server closes on an oversized post-auth frame");
+        assert!(out_rx.try_recv().is_err(), "the oversized command is not forwarded");
+
+        // The dead client's sender is dropped once its task ends; the next
+        // publish notices and prunes it. Give the task a moment to unwind.
+        for _ in 0..50 {
+            srv.publish_state(serde_json::json!({ "connected": true }));
+            if srv.clients.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(srv.clients.lock().unwrap().is_empty(), "dead clients must not accumulate");
+    }
+
+    #[tokio::test]
+    async fn ping_frames_after_auth_keep_the_session_alive() {
+        let (out_tx, mut out_rx) = chan();
+        let srv = ControlServer::start(out_tx).await.unwrap();
+        let mut ws = client(srv.port).await;
+        ws.send(Message::text(format!(r#"{{"t":"auth","token":"{}"}}"#, srv.token))).await.unwrap();
+        let _ = recv_json(&mut ws).await;
+        assert_eq!(out_rx.recv().await, Some(CtlOut::Refresh));
+        ws.send(Message::Ping(b"hb".to_vec())).await.unwrap();
+        ws.send(Message::binary(vec![0u8; 16])).await.unwrap(); // not text: ignored, not fatal
+        ws.send(Message::text(r#"{"t":"rekey"}"#.to_string())).await.unwrap();
+        match out_rx.recv().await {
+            Some(CtlOut::Ctl(v)) => assert_eq!(v["t"], "rekey"),
+            other => panic!("expected the rekey command after a ping, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn every_authenticated_client_receives_each_state_broadcast() {
+        let (out_tx, _k) = chan();
+        let srv = ControlServer::start(out_tx).await.unwrap();
+        let mut a = client(srv.port).await;
+        let mut b = client(srv.port).await;
+        for ws in [&mut a, &mut b] {
+            ws.send(Message::text(format!(r#"{{"t":"auth","token":"{}"}}"#, srv.token))).await.unwrap();
+            assert_eq!(recv_json(ws).await["t"], "hello");
+        }
+        assert_eq!(srv.clients.lock().unwrap().len(), 2);
+        srv.publish_state(serde_json::json!({ "connected": true, "muted": true }));
+        for ws in [&mut a, &mut b] {
+            let m = recv_json(ws).await;
+            assert_eq!(m["t"], "state");
+            assert_eq!(m["state"]["muted"], true);
+        }
+        // Closing one client does not disturb the other.
+        a.close(None).await.unwrap();
+        srv.publish_state(serde_json::json!({ "connected": false }));
+        let m = recv_json(&mut b).await;
+        assert_eq!(m["state"]["connected"], false);
+    }
 }
