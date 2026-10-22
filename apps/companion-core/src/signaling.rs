@@ -162,9 +162,8 @@ async fn connect_inner(url: &str, cert_sha256: Option<&str>) -> Result<Signaling
             ws
         }
     } else {
-        if url.starts_with("ws://") && !is_loopback(url) {
-            bail!("ws:// nur für Loopback erlaubt — nutze wss:// (Nichts verlässt unverschlüsselt den Rechner)");
-        }
+        // `server_url_ok` above already guarantees this is ws:// to a loopback
+        // host, so no pin is needed: the frames never leave the machine.
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         ws
     };
@@ -315,5 +314,174 @@ mod scheme_gate_tests {
     fn server_url_ok_rejects_uppercase_schemes() {
         assert!(!server_url_ok("WSS://subraum.cc/ws"));
         assert!(!server_url_ok("WS://127.0.0.1/ws"));
+    }
+
+    #[tokio::test]
+    async fn connect_refuses_plain_ws_to_a_remote_host_before_dialing() {
+        // No socket is opened: the policy gate fires first, whatever the host.
+        let err = connect_inner("ws://evil.example:1/ws", None).await.err().unwrap().to_string();
+        assert!(err.contains("ungültige Server-Adresse"), "{err}");
+        let err = connect_inner("http://127.0.0.1:1/ws", None).await.err().unwrap().to_string();
+        assert!(err.contains("ungültige Server-Adresse"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod url_and_pin_tests {
+    use super::*;
+
+    #[test]
+    fn url_host_rejects_malformed_input() {
+        assert_eq!(url_host("no-scheme-here"), None);
+        assert_eq!(url_host("wss://"), None);
+        assert_eq!(url_host("wss://:443/ws"), None);
+        assert_eq!(url_host("wss://@/ws"), None);
+        // Query and fragment terminate the authority like a path does.
+        assert_eq!(url_host("wss://Host.Example?x=1").as_deref(), Some("host.example"));
+        assert_eq!(url_host("wss://host.example#frag").as_deref(), Some("host.example"));
+        assert_eq!(url_host("ws://[::1]").as_deref(), Some("::1"));
+        assert_eq!(url_host("wss://a@b@host:1").as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn server_url_ok_trims_surrounding_whitespace() {
+        assert!(server_url_ok("  wss://subraum.cc/ws\n"));
+        assert!(server_url_ok("\tws://localhost:1420 "));
+        assert!(!server_url_ok("   "));
+    }
+
+    #[test]
+    fn pinned_connector_validates_the_fingerprint_format() {
+        let err = |s: &str| pinned_connector(s).err().expect("must fail").to_string();
+        assert!(err("zz").contains("Hex"));
+        assert!(err(&"ab".repeat(31)).contains("32 Byte"));
+        assert!(err(&"ab".repeat(33)).contains("32 Byte"));
+        assert!(pinned_connector(&format!("  {}  ", "ab".repeat(32))).is_ok()); // trimmed
+        assert!(matches!(pinned_connector(&"AB".repeat(32)).unwrap(), Connector::Rustls(_)));
+    }
+
+    #[test]
+    fn pinned_cert_accepts_only_the_pinned_certificate() {
+        let cert = CertificateDer::from(b"any DER bytes stand in for a cert".to_vec());
+        let mut h = Sha256::new();
+        h.update(cert.as_ref());
+        let mut sha256 = [0u8; 32];
+        sha256.copy_from_slice(&h.finalize());
+        let pin = PinnedCert { sha256 };
+        let name = ServerName::try_from("subraum.cc").unwrap();
+        assert!(pin.verify_server_cert(&cert, &[], &name, &[], UnixTime::now()).is_ok());
+        let other = CertificateDer::from(b"a different certificate".to_vec());
+        let err = pin.verify_server_cert(&other, &[], &name, &[], UnixTime::now()).unwrap_err();
+        assert!(err.to_string().contains("pin mismatch"), "{err}");
+        // Intermediates and the server name play no part: the leaf hash is everything.
+        assert!(pin.verify_server_cert(&cert, std::slice::from_ref(&other), &ServerName::try_from("evil.example").unwrap(), &[], UnixTime::now()).is_ok());
+        assert!(!pin.supported_verify_schemes().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    /// A fake InitConnection on loopback: hands back the accepted socket.
+    async fn fake_server() -> (String, TcpListener) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", l.local_addr().unwrap());
+        (url, l)
+    }
+
+    /// Outbound `ClientMsg`s reach the server as JSON text; inbound text frames
+    /// come back as `ServerMsg`s; anything that is not a `ServerMsg` is dropped
+    /// without killing the link.
+    #[tokio::test]
+    async fn frames_are_relayed_both_ways_and_garbage_is_ignored() {
+        let (url, l) = fake_server().await;
+        let server = tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let mut ws = accept_async(s).await.unwrap();
+            // Garbage first, then a binary frame, then a real message.
+            ws.send(Message::Text("{\"t\":\"nope\"}".into())).await.unwrap();
+            ws.send(Message::Binary(vec![1, 2, 3])).await.unwrap();
+            ws.send(Message::Text(serde_json::to_string(&ServerMsg::Warn { size: 12, cap: 12 }).unwrap())).await.unwrap();
+            // Then read what the client sent.
+            let got = loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(t))) => break t,
+                    Some(Ok(_)) => continue,
+                    other => panic!("{other:?}"),
+                }
+            };
+            got
+        });
+
+        let sig = connect(&url, None).await.unwrap();
+        let mut incoming = sig.incoming;
+        match tokio::time::timeout(Duration::from_secs(3), incoming.recv()).await.unwrap() {
+            Some(ServerMsg::Warn { size, cap }) => assert_eq!((size, cap), (12, 12)),
+            other => panic!("{other:?}"),
+        }
+        sig.out.send(ClientMsg::Ptt { active: true }).unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(3), server).await.unwrap().unwrap();
+        assert!(matches!(serde_json::from_str::<ClientMsg>(&got).unwrap(), ClientMsg::Ptt { active: true }), "{got}");
+    }
+
+    /// A pin given for a plain loopback `ws://` URL is irrelevant and must not
+    /// break the connection (the engine passes the configured pin through).
+    #[tokio::test]
+    async fn pin_is_ignored_for_loopback_ws() {
+        let (url, l) = fake_server().await;
+        tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let mut ws = accept_async(s).await.unwrap();
+            while let Some(Ok(_)) = ws.next().await {}
+        });
+        assert!(connect(&url, Some("deadbeef")).await.is_ok());
+    }
+
+    /// Dropping the handle closes the socket, so the server sees us leave
+    /// instead of waiting for its idle reaper.
+    #[tokio::test]
+    async fn dropping_the_handle_closes_the_socket() {
+        let (url, l) = fake_server().await;
+        let server = tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let mut ws = accept_async(s).await.unwrap();
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Close(_))) | None => return true,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => return true,
+                }
+            }
+        });
+        let sig = connect(&url, None).await.unwrap();
+        drop(sig);
+        assert!(tokio::time::timeout(Duration::from_secs(3), server).await.expect("server never saw the close").unwrap());
+    }
+
+    /// When the server closes, `incoming` ends — the engine's cue to reconnect.
+    #[tokio::test]
+    async fn server_close_ends_the_incoming_stream() {
+        let (url, l) = fake_server().await;
+        tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let mut ws = accept_async(s).await.unwrap();
+            ws.close(None).await.unwrap();
+        });
+        let sig = connect(&url, None).await.unwrap();
+        let mut incoming = sig.incoming;
+        let end = tokio::time::timeout(Duration::from_secs(3), incoming.recv()).await.unwrap();
+        assert!(end.is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_fails_fast_when_nothing_listens() {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/ws", l.local_addr().unwrap());
+        drop(l); // port is now closed
+        let r = tokio::time::timeout(Duration::from_secs(5), connect(&url, None)).await.unwrap();
+        assert!(r.is_err());
     }
 }

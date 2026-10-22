@@ -57,8 +57,12 @@ struct LinkDiag {
 /// arrive as raw SDP or wrapped in an RTCIceCandidateInit JSON; both contain it.
 fn candidate_type(line: &str) -> Option<String> {
     let rest = line.split(" typ ").nth(1)?;
-    let t = rest.split_whitespace().next()?;
-    Some(t.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string())
+    // The type is the alphanumeric run right after "typ ". In a JSON-wrapped
+    // candidate it may be glued to the closing quote and the next field
+    // (`host","sdpMid":"0"…`), so stop at the first non-alphanumeric char
+    // instead of trimming only the ends.
+    let t: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    if t.is_empty() { None } else { Some(t) }
 }
 
 impl LinkDiag {
@@ -824,6 +828,298 @@ mod diag_tests {
         d.remote_desc.store(true, Ordering::SeqCst);
         d.paired.store(true, Ordering::SeqCst);
         assert!(d.summary().contains("abgebrochen"));
+    }
+
+    #[test]
+    fn candidate_type_reads_a_json_wrapped_candidate_too() {
+        let json = r#"{"candidate":"candidate:3 1 udp 1 10.0.0.1 1 typ relay raddr 1.2.3.4","sdpMid":"0"}"#;
+        assert_eq!(candidate_type(json).as_deref(), Some("relay"));
+        // Trailing punctuation from a JSON-quoted type is stripped.
+        assert_eq!(candidate_type(r#"{"candidate":"… typ host"}"#).as_deref(), Some("host"));
+        // A UDP host candidate ends right after its type, so in the JSON wrapper
+        // the type is glued to the next field. This is what every remote host
+        // candidate looks like on the wire; it used to read as `host","sdpMid…`.
+        let glued = r#"{"candidate":"candidate:1 1 udp 2130706431 10.0.0.1 5000 typ host","sdpMid":"0","sdpMLineIndex":0}"#;
+        assert_eq!(candidate_type(glued).as_deref(), Some("host"));
+        assert_eq!(candidate_type("x typ "), None);
+        assert_eq!(candidate_type("x typ \"\""), None);
+        assert_eq!(candidate_type(""), None);
+    }
+
+    #[test]
+    fn empty_candidate_sets_read_as_keine() {
+        let d = LinkDiag::default();
+        assert_eq!(LinkDiag::types(&d.local), "keine");
+        d.note_local(SRFLX);
+        d.note_local(SRFLX); // a set: no duplicates
+        d.note_local(HOST);
+        assert_eq!(LinkDiag::types(&d.local), "host,srflx");
+        d.note_remote("not a candidate line");
+        assert_eq!(LinkDiag::types(&d.remote), "keine");
+    }
+}
+
+#[cfg(test)]
+mod ctrl_tests {
+    use super::*;
+    use crate::crypto::Initiator;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn hello() -> Hello {
+        Initiator::start("a", "b").1
+    }
+
+    #[test]
+    fn hello_and_reply_round_trip_through_their_ctrl_frames() {
+        let h = hello();
+        match hello_ctrl(&h) {
+            CtrlMsg::KemHello { kem_pk, x_pk } => {
+                let back = parse_hello(&kem_pk, &x_pk).unwrap();
+                assert_eq!(back.kem_pk, h.kem_pk);
+                assert_eq!(back.x_pk, h.x_pk);
+            }
+            other => panic!("{other:?}"),
+        }
+        let (r, _) = crate::crypto::respond("a", "b", &h).unwrap();
+        match reply_ctrl(&r) {
+            CtrlMsg::KemReply { x_pk, kem_ct } => {
+                let back = parse_reply(&x_pk, &kem_ct).unwrap();
+                assert_eq!(back.kem_ct, r.kem_ct);
+                assert_eq!(back.x_pk, r.x_pk);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_handshake_frames_are_rejected() {
+        let h = hello();
+        let kem_b64 = STANDARD.encode(&h.kem_pk);
+        assert!(parse_hello("not base64!", &STANDARD.encode(h.x_pk)).is_none());
+        assert!(parse_hello(&kem_b64, "###").is_none());
+        // X25519 key must be exactly 32 bytes.
+        assert!(parse_hello(&kem_b64, &STANDARD.encode([0u8; 31])).is_none());
+        assert!(parse_hello(&kem_b64, &STANDARD.encode([0u8; 33])).is_none());
+        assert!(parse_reply(&STANDARD.encode([0u8; 16]), &STANDARD.encode([0u8; 8])).is_none());
+        assert!(parse_reply(&STANDARD.encode([0u8; 32]), "***").is_none());
+        // Length is all parse_reply checks; the KEM layer validates the ciphertext.
+        assert!(parse_reply(&STANDARD.encode([0u8; 32]), &STANDARD.encode([0u8; 8])).is_some());
+    }
+
+    fn chan_and_events() -> (Arc<ChanState>, UnboundedSender<MeshEvent>, tokio::sync::mpsc::UnboundedReceiver<MeshEvent>) {
+        let (tx, rx) = unbounded_channel();
+        (Arc::new(ChanState::new()), tx, rx)
+    }
+
+    #[test]
+    fn chat_text_is_clamped_to_the_character_limit() {
+        let (chan, tx, mut rx) = chan_and_events();
+        let long: String = "ä".repeat(crate::MAX_CHAT_CHARS + 50);
+        dispatch_inner("p", CtrlMsg::Chat(ChatMsg { text: long, ts: 0 }), &tx, &chan);
+        match rx.try_recv().unwrap() {
+            MeshEvent::Chat { from, text } => {
+                assert_eq!(from, "p");
+                assert_eq!(text.chars().count(), crate::MAX_CHAT_CHARS);
+            }
+            _ => panic!("expected Chat"),
+        }
+    }
+
+    #[test]
+    fn channel_announce_updates_the_gate_state_and_is_clamped() {
+        let (chan, tx, mut rx) = chan_and_events();
+        let long: String = "x".repeat(crate::MAX_CHANNEL_LEN + 10);
+        dispatch_inner("p", CtrlMsg::Channel { name: long }, &tx, &chan);
+        let clamped: String = "x".repeat(crate::MAX_CHANNEL_LEN);
+        assert_eq!(chan.peer("p").as_deref(), Some(clamped.as_str()));
+        assert!(!chan.hears("p"), "peer moved off my channel");
+        match rx.try_recv().unwrap() {
+            MeshEvent::PeerChannel { peer, name } => {
+                assert_eq!(peer, "p");
+                assert_eq!(name, clamped);
+            }
+            _ => panic!("expected PeerChannel"),
+        }
+    }
+
+    #[test]
+    fn channel_directory_is_bounded_in_count_and_name_length() {
+        let (chan, tx, mut rx) = chan_and_events();
+        let names: Vec<String> = (0..crate::MAX_CHANNELS + 20)
+            .map(|i| format!("{i}-{}", "y".repeat(crate::MAX_CHANNEL_LEN)))
+            .collect();
+        dispatch_inner("p", CtrlMsg::Channels { names }, &tx, &chan);
+        match rx.try_recv().unwrap() {
+            MeshEvent::PeerChannels { names } => {
+                assert_eq!(names.len(), crate::MAX_CHANNELS);
+                assert!(names.iter().all(|n| n.chars().count() == crate::MAX_CHANNEL_LEN));
+            }
+            _ => panic!("expected PeerChannels"),
+        }
+        dispatch_inner("p", CtrlMsg::ChannelRemoved { name: "z".repeat(99) }, &tx, &chan);
+        match rx.try_recv().unwrap() {
+            MeshEvent::PeerChannelRemoved { name } => assert_eq!(name.len(), crate::MAX_CHANNEL_LEN),
+            _ => panic!("expected PeerChannelRemoved"),
+        }
+    }
+
+    #[test]
+    fn room_key_needs_exactly_32_bytes_and_names_the_channel_owner() {
+        let (chan, tx, mut rx) = chan_and_events();
+        dispatch_inner("auth", CtrlMsg::RoomKey { gen: 4, key: STANDARD.encode([9u8; 32]) }, &tx, &chan);
+        match rx.try_recv().unwrap() {
+            MeshEvent::RoomKey { from, gen, key } => {
+                assert_eq!(from, "auth"); // the authenticated sender, never a body field
+                assert_eq!(gen, 4);
+                assert_eq!(key, [9u8; 32]);
+            }
+            _ => panic!("expected RoomKey"),
+        }
+        dispatch_inner("auth", CtrlMsg::RoomKey { gen: 4, key: STANDARD.encode([9u8; 31]) }, &tx, &chan);
+        dispatch_inner("auth", CtrlMsg::RoomKey { gen: 4, key: "not-base64!".into() }, &tx, &chan);
+        assert!(rx.try_recv().is_err(), "malformed keys must not surface");
+        dispatch_inner("m", CtrlMsg::RoomGen { gen: 7 }, &tx, &chan);
+        match rx.try_recv().unwrap() {
+            MeshEvent::RoomGen { from, gen } => assert_eq!((from.as_str(), gen), ("m", 7)),
+            _ => panic!("expected RoomGen"),
+        }
+    }
+
+    #[test]
+    fn handshake_and_envelope_variants_are_not_dispatched_as_inner_messages() {
+        let (chan, tx, mut rx) = chan_and_events();
+        dispatch_inner("p", hello_ctrl(&hello()), &tx, &chan);
+        dispatch_inner("p", CtrlMsg::Enc { data: "AAAA".into() }, &tx, &chan);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[cfg(test)]
+mod peer_conn_tests {
+    use super::*;
+    use crate::build_api;
+    use tokio::sync::mpsc::unbounded_channel;
+    use webrtc::api::media_engine::MIME_TYPE_OPUS;
+    use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+
+    fn track() -> Arc<TrackLocalStaticSample> {
+        Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability { mime_type: MIME_TYPE_OPUS.to_owned(), clock_rate: 48000, channels: 2, ..Default::default() },
+            "audio".to_owned(),
+            "t".to_owned(),
+        ))
+    }
+
+    fn mesh(id: &str) -> (Mesh, tokio::sync::mpsc::UnboundedReceiver<ClientMsg>) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (out_tx, out_rx) = unbounded_channel::<ClientMsg>();
+        let (dec, mut dec_rx) = unbounded_channel::<(String, Bytes)>();
+        let (ev, mut ev_rx) = unbounded_channel::<MeshEvent>();
+        tokio::spawn(async move { while dec_rx.recv().await.is_some() {} });
+        tokio::spawn(async move { while ev_rx.recv().await.is_some() {} });
+        let m = Mesh::new(
+            Arc::new(build_api().unwrap()), track(), id.into(), out_tx, dec, ev,
+            Arc::new(ChanState::new()), Arc::new(PeerCrypto::new(id.into())), Arc::new(RoomAudio::new()),
+        );
+        (m, out_rx)
+    }
+
+    /// ICE frames that arrive before the remote description are queued — but
+    /// only up to a cap, so a flood from one member cannot grow memory.
+    #[tokio::test]
+    async fn ice_queue_is_capped_until_the_remote_description_lands() {
+        let (mut m, _out) = mesh("b");
+        m.ensure("a").await.unwrap();
+        let cand = r#"{"candidate":"candidate:1 1 udp 1 10.0.0.1 1 typ host","sdpMid":"0","sdpMLineIndex":0}"#;
+        for _ in 0..(MAX_PENDING_ICE + 40) {
+            m.on_ice("a", cand.to_string()).await;
+        }
+        let p = m.peers.get("a").unwrap();
+        assert_eq!(p.pending_ice.lock().unwrap().len(), MAX_PENDING_ICE);
+        assert!(!p.remote_set.load(Ordering::SeqCst));
+        assert_eq!(LinkDiag::types(&p.diag.remote), "host");
+        // Flushing marks the remote description as seen and drains the queue
+        // (the PC has no remote description, so the adds fail silently).
+        p.flush_ice().await;
+        assert!(p.remote_set.load(Ordering::SeqCst));
+        assert!(p.diag.remote_desc.load(Ordering::SeqCst));
+        assert!(p.pending_ice.lock().unwrap().is_empty());
+        // Garbage after the flush is ignored rather than queued.
+        m.on_ice("a", "garbage".into()).await;
+        assert!(m.peers.get("a").unwrap().pending_ice.lock().unwrap().is_empty());
+    }
+
+    /// The larger id never offers on its own: it builds a PC and waits.
+    #[tokio::test]
+    async fn answerer_side_builds_a_pc_but_sends_no_offer() {
+        let (mut m, mut out) = mesh("b");
+        m.on_peer("a").await.unwrap();
+        assert!(m.peer_pc("a").is_some());
+        assert!(out.try_recv().is_err(), "answerer sent something unprompted");
+        // The offerer side does offer, and creates the chat channel first.
+        let (mut o, mut out_o) = mesh("a");
+        o.on_peer("b").await.unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(ClientMsg::Offer { to, .. }) = out_o.recv().await {
+                    return to;
+                }
+            }
+        })
+        .await
+        .expect("no offer");
+        assert_eq!(first, "b");
+        assert!(o.peers.get("b").unwrap().chat.lock().unwrap().is_some(), "offerer must own the chat DC");
+    }
+
+    #[tokio::test]
+    async fn unknown_peers_are_harmless_everywhere() {
+        let (mut m, mut out) = mesh("a");
+        assert_eq!(m.link_why("ghost"), "keine Verbindung aufgebaut");
+        m.on_ice("ghost", "x".into()).await;
+        m.on_answer("ghost", "v=0".into()).await.unwrap();
+        m.on_left("ghost").await;
+        m.broadcast_channel("c").await;
+        m.broadcast_channels(&["c".into()]).await;
+        m.broadcast_channel_removed("c").await;
+        m.broadcast_chat("hi").await;
+        m.send_room_key("ghost", 1, &[0u8; 32]).await;
+        m.send_room_gen("ghost", 1).await;
+        assert_eq!(m.stats_bytes().await, (0, 0));
+        assert!(out.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn add_turn_extends_the_ice_server_list() {
+        let (mut m, _out) = mesh("a");
+        assert_eq!(m.config().ice_servers.len(), 1);
+        m.add_turn(vec!["turn:relay.example:3478".into()], "u".into(), "c".into());
+        let cfg = m.config();
+        assert_eq!(cfg.ice_servers.len(), 2);
+        assert_eq!(cfg.ice_servers[1].username, "u");
+        assert_eq!(cfg.ice_servers[1].urls, vec!["turn:relay.example:3478".to_string()]);
+    }
+
+    /// After `on_left` the peer's PC is closed and its PQC session forgotten.
+    #[tokio::test]
+    async fn on_left_closes_the_pc_and_forgets_the_session() {
+        let (mut m, _out) = mesh("a");
+        m.on_peer("b").await.unwrap();
+        let pc = m.peer_pc("b").unwrap();
+        m.on_left("b").await;
+        assert!(m.peer_pc("b").is_none());
+        assert_eq!(pc.connection_state(), RTCPeerConnectionState::Closed);
+        assert!(!m.crypto.is_secure("b"));
+        assert_eq!(m.link_why("b"), "keine Verbindung aufgebaut");
+    }
+
+    /// An invalid SDP in an offer is an error, not a panic, and leaves a PC
+    /// behind that a later valid offer can replace.
+    #[tokio::test]
+    async fn garbage_offer_is_an_error_not_a_panic() {
+        let (mut m, _out) = mesh("b");
+        assert!(m.on_offer("a", "this is not sdp".into()).await.is_err());
+        assert!(m.peer_pc("a").is_some());
     }
 }
 

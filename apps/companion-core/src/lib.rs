@@ -377,13 +377,45 @@ pub(crate) fn merge_channels(dir: &mut Vec<String>, add: &[String]) -> bool {
     grew
 }
 
-/// Remove the channel whose canonical form is `canon` from the directory `dir`.
-/// Returns true if it was present (and dropped).
 /// Members we knew that a fresh roster no longer lists. They left while
 /// signaling was down, so no PeerLeft ever arrived; the roster is the only
 /// notice, and without acting on it their PC, key and channel state linger.
 fn departed(known: &HashMap<String, Member>, roster: &[protocol::PeerInfo]) -> Vec<String> {
     known.keys().filter(|id| !roster.iter().any(|p| &p.user_id == *id)).cloned().collect()
+}
+
+/// User-facing text for a server error that ends the session for good. These
+/// codes mean a backoff reconnect would be refused forever, so the engine tears
+/// down like RoomFull instead of retrying. `None` → ordinary, non-fatal error.
+fn terminal_error_text(code: &str) -> Option<&'static str> {
+    match code {
+        ERR_ID_IN_USE => Some("Dieser Name ist in der Sitzung bereits vergeben - bitte mit anderem Namen neu beitreten."),
+        ERR_PROTOCOL_MISMATCH => Some("Diese subraum-Version passt nicht zum Server - bitte subraum aktualisieren."),
+        _ => None,
+    }
+}
+
+/// Group-audio watchdog bookkeeping. `keyless` is "a PQC link is up but no room
+/// key was ever staged". Tracks since when that has been true and returns
+/// `true` exactly once per stuck episode, after `KEYLESS_WARN_AFTER` — a healthy
+/// tick resets the episode so the next outage warns again.
+fn keyless_warn_due(
+    keyless: bool,
+    since: &mut Option<std::time::Instant>,
+    warned: &mut bool,
+    now: std::time::Instant,
+) -> bool {
+    if !keyless {
+        *since = None;
+        *warned = false;
+        return false;
+    }
+    let start = *since.get_or_insert(now);
+    if !*warned && now.duration_since(start) >= KEYLESS_WARN_AFTER {
+        *warned = true;
+        return true;
+    }
+    false
 }
 
 /// Upper bound on channel tombstones. The directory itself is capped at
@@ -397,6 +429,8 @@ fn tombstone_allowed(canon: &str, known: &[String], removed: &HashSet<String>) -
     known.iter().any(|d| canon_channel(d) == canon) && removed.len() < MAX_TOMBSTONES
 }
 
+/// Remove the channel whose canonical form is `canon` from the directory `dir`.
+/// Returns true if it was present (and dropped).
 fn remove_from_dir(dir: &mut Vec<String>, canon: &str) -> bool {
     let before = dir.len();
     dir.retain(|d| canon_channel(d) != canon);
@@ -627,10 +661,6 @@ pub(crate) fn build_api() -> Result<API> {
     Ok(APIBuilder::new().with_media_engine(m).with_interceptor_registry(registry).build())
 }
 
-/// Spin up the audio rig (device + encode/decode/mix threads) shared by both
-/// the server-signaled mesh and the serverless 1:1 mode. Returns the transmit
-/// flag, the encoded-Opus receiver (feed to the local track writer), and the
-/// decode sender (feed remote RTP payloads in).
 /// Everything `setup_audio` hands back, in order: transmit flag, encoded-frame
 /// receiver, decoded-frame sender, gains, DSP config, radio effect
 /// ("Funk-Effekt"), mic self-check toggle, shutdown flag for the audio threads,
@@ -651,6 +681,9 @@ pub(crate) type AudioHandles = (
     Arc<audio::Earcon>,
 );
 
+/// Spin up the audio rig (device + encode/decode/mix threads) shared by both
+/// the server-signaled mesh and the serverless 1:1 mode. Blocks until the
+/// devices are open or the device thread reports why they could not be.
 pub(crate) fn setup_audio(in_name: Option<String>, out_name: Option<String>) -> Result<AudioHandles> {
     let cap: Buf = Arc::new(Mutex::new(VecDeque::new()));
     let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
@@ -940,16 +973,10 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                     // Group-audio watchdog (see `keyless_since`): a secure link but
                     // no room key means the authority is unreachable, not that the
                     // handshake is still running. Warn once per stuck episode.
-                    if room.generation().is_none() && members.values().any(|m| m.secure) {
-                        let since = *keyless_since.get_or_insert_with(std::time::Instant::now);
-                        if !keyless_warned && since.elapsed() >= KEYLESS_WARN_AFTER {
-                            keyless_warned = true;
-                            sink(UiEvent::Log { text:
-                                "Sprach-Schluessel nicht erhalten - keine direkte Verbindung zum Schluessel-Verwalter. Du hoerst die anderen nicht und wirst nicht gehoert. Abhilfe: \"Session neu verschluesseln\" druecken - das baut jede Verbindung neu auf und verteilt den Schluessel erneut. Hilft das nicht, sollte der Teilnehmer mit dem Stern in seiner Verschluesselungs-Zeile die Session neu betreten.".into() });
-                        }
-                    } else {
-                        keyless_since = None;
-                        keyless_warned = false;
+                    let keyless = room.generation().is_none() && members.values().any(|m| m.secure);
+                    if keyless_warn_due(keyless, &mut keyless_since, &mut keyless_warned, std::time::Instant::now()) {
+                        sink(UiEvent::Log { text:
+                            "Sprach-Schluessel nicht erhalten - keine direkte Verbindung zum Schluessel-Verwalter. Du hoerst die anderen nicht und wirst nicht gehoert. Abhilfe: \"Session neu verschluesseln\" druecken - das baut jede Verbindung neu auf und verteilt den Schluessel erneut. Hilft das nicht, sollte der Teilnehmer mit dem Stern in seiner Verschluesselungs-Zeile die Session neu betreten.".into() });
                     }
                     // Link watchdog: a member whose peer connection never came up
                     // (or died) is silently mute — no audio, no chat, no channel
@@ -1166,12 +1193,7 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         ServerMsg::Error { code, message } => {
                             // Terminal like RoomFull: the server closes the socket,
                             // and a backoff reconnect would be refused forever.
-                            let terminal = match code.as_str() {
-                                ERR_ID_IN_USE => Some("Dieser Name ist in der Sitzung bereits vergeben - bitte mit anderem Namen neu beitreten."),
-                                ERR_PROTOCOL_MISMATCH => Some("Diese subraum-Version passt nicht zum Server - bitte subraum aktualisieren."),
-                                _ => None,
-                            };
-                            if let Some(text) = terminal {
+                            if let Some(text) = terminal_error_text(&code) {
                                 sink(UiEvent::Log { text: format!("{text} ({code}: {message})") });
                                 mesh.close_all().await;
                                 sink(UiEvent::Status { connected: false, transmitting: false });
@@ -1857,5 +1879,431 @@ mod roster_fingerprint_tests {
         let got = seen.lock().unwrap().take().expect("roster emitted");
         let peer = got.iter().find(|p| p.user_id == "p").expect("peer row");
         assert!(peer.fingerprint.is_none(), "stale fingerprint leaked: {:?}", peer.fingerprint);
+    }
+
+    /// Me first, then the others sorted by display name; my `speaking` mirrors
+    /// the transmit flag and a secure member's fingerprint is shown.
+    #[test]
+    fn roster_puts_me_first_and_sorts_the_rest_by_name() {
+        let mut members: HashMap<String, Member> = HashMap::new();
+        let mut zed = Member::new("Zed".into(), "Bravo".into(), true);
+        zed.fingerprint = Some("FFFF".into());
+        zed.linked = true;
+        zed.badge = Some("DIREKT".into());
+        members.insert("id-z".into(), zed);
+        members.insert("id-a".into(), Member::new("Anna".into(), DEFAULT_CHANNEL.into(), false));
+
+        let seen: Arc<Mutex<Option<Vec<Participant>>>> = Arc::new(Mutex::new(None));
+        let cap = seen.clone();
+        let sink: Sink = Arc::new(move |ev| {
+            if let UiEvent::Roster { participants } = ev {
+                *cap.lock().unwrap() = Some(participants);
+            }
+        });
+        emit_roster(&sink, &members, "me", "Me", "Funk 2", true);
+        let got = seen.lock().unwrap().take().unwrap();
+        let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["Me", "Anna", "Zed"]);
+        assert!(got[0].you && got[0].speaking && got[0].secure && got[0].linked);
+        assert_eq!(got[0].channel, "Funk 2");
+        assert!(got[0].fingerprint.is_none());
+        let zed = &got[2];
+        assert_eq!(zed.fingerprint.as_deref(), Some("FFFF"));
+        assert_eq!(zed.badge.as_deref(), Some("DIREKT"));
+        assert!(zed.linked && zed.secure && !zed.you);
+        assert!(!got[1].linked, "a fresh member starts unlinked");
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+
+    #[test]
+    fn canon_channel_trims_and_lowercases() {
+        assert_eq!(canon_channel("  Funk 1 "), "funk 1");
+        assert_eq!(canon_channel("ALPHA"), "alpha");
+        assert_eq!(canon_channel("   "), "");
+    }
+
+    #[test]
+    fn merge_channels_dedupes_by_canonical_form_and_skips_blanks() {
+        let mut dir = vec!["Funk 1".to_string()];
+        assert!(merge_channels(&mut dir, &["Alpha".into(), "  alpha ".into(), "FUNK 1".into(), "   ".into()]));
+        assert_eq!(dir, vec!["Funk 1".to_string(), "Alpha".to_string()]);
+        // Nothing new → no growth signal.
+        assert!(!merge_channels(&mut dir, &["ALPHA".into()]));
+        assert!(!merge_channels(&mut dir, &[]));
+    }
+
+    #[test]
+    fn merge_channels_stops_at_the_directory_cap() {
+        let mut dir: Vec<String> = Vec::new();
+        let many: Vec<String> = (0..MAX_CHANNELS + 10).map(|i| format!("c{i}")).collect();
+        assert!(merge_channels(&mut dir, &many));
+        assert_eq!(dir.len(), MAX_CHANNELS);
+        assert!(!merge_channels(&mut dir, &["one more".into()]));
+        assert_eq!(dir.len(), MAX_CHANNELS);
+    }
+
+    #[test]
+    fn chan_state_starts_on_the_default_channel_with_a_one_entry_directory() {
+        let c = ChanState::new();
+        assert_eq!(c.mine(), DEFAULT_CHANNEL);
+        assert_eq!(c.dir(), vec![DEFAULT_CHANNEL.to_string()]);
+        assert_eq!(c.peer("p"), None);
+        // An unannounced peer is assumed to be on the default channel.
+        assert!(c.hears("p"));
+    }
+
+    #[test]
+    fn chan_state_gates_by_canonical_channel_match() {
+        let c = ChanState::new();
+        c.set_peer("p", "  FUNK 1".into());
+        assert!(c.hears("p"));
+        c.set_peer("p", "Bravo".into());
+        assert!(!c.hears("p"));
+        c.set_mine("bravo ".into());
+        assert!(c.hears("p"));
+        assert_eq!(c.mine(), "bravo ");
+        assert_eq!(c.peer("p").as_deref(), Some("Bravo"));
+        // Forgetting a peer puts it back on the default assumption.
+        c.remove_peer("p");
+        assert_eq!(c.peer("p"), None);
+        assert!(!c.hears("p"), "I am on bravo, an unknown peer counts as default");
+        c.set_mine(DEFAULT_CHANNEL.into());
+        assert!(c.hears("p"));
+    }
+
+    #[test]
+    fn chan_state_directory_is_replaced_wholesale() {
+        let c = ChanState::new();
+        c.set_dir(vec!["A".into(), "B".into()]);
+        assert_eq!(c.dir(), vec!["A".to_string(), "B".to_string()]);
+        c.set_dir(Vec::new());
+        assert!(c.dir().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod engine_state_tests {
+    use super::*;
+
+    #[test]
+    fn member_starts_unlinked_and_down_since_now() {
+        let m = Member::new("n".into(), "Bravo".into(), true);
+        assert!(!m.linked && !m.speaking && !m.link_warned);
+        assert!(m.badge.is_none() && m.fingerprint.is_none() && m.last_relink.is_none());
+        assert!(m.down_since.is_some());
+        assert!(m.secure);
+        assert_eq!(m.channel, "Bravo");
+    }
+
+    #[test]
+    fn terminal_errors_are_exactly_the_two_refusals() {
+        assert!(terminal_error_text(ERR_ID_IN_USE).unwrap().contains("Name"));
+        assert!(terminal_error_text(ERR_PROTOCOL_MISMATCH).unwrap().contains("aktualisieren"));
+        assert_eq!(terminal_error_text("bad_token"), None);
+        assert_eq!(terminal_error_text("superseded"), None);
+        assert_eq!(terminal_error_text(""), None);
+    }
+
+    #[test]
+    fn keyless_watchdog_warns_once_per_episode_after_the_grace() {
+        let t0 = std::time::Instant::now();
+        let mut since = None;
+        let mut warned = false;
+        // Healthy ticks keep everything reset.
+        assert!(!keyless_warn_due(false, &mut since, &mut warned, t0));
+        assert!(since.is_none() && !warned);
+        // Keyless starts the clock but does not warn yet.
+        assert!(!keyless_warn_due(true, &mut since, &mut warned, t0));
+        assert_eq!(since, Some(t0));
+        assert!(!keyless_warn_due(true, &mut since, &mut warned, t0 + KEYLESS_WARN_AFTER / 2));
+        // Past the grace: warn exactly once.
+        assert!(keyless_warn_due(true, &mut since, &mut warned, t0 + KEYLESS_WARN_AFTER));
+        assert!(!keyless_warn_due(true, &mut since, &mut warned, t0 + KEYLESS_WARN_AFTER * 3));
+        // A key arrives → episode over; the next outage warns again.
+        assert!(!keyless_warn_due(false, &mut since, &mut warned, t0 + KEYLESS_WARN_AFTER * 3));
+        assert!(since.is_none() && !warned);
+        let t1 = t0 + KEYLESS_WARN_AFTER * 4;
+        assert!(!keyless_warn_due(true, &mut since, &mut warned, t1));
+        assert!(keyless_warn_due(true, &mut since, &mut warned, t1 + KEYLESS_WARN_AFTER));
+    }
+
+    #[test]
+    fn watchdog_timings_are_ordered_offerer_then_warning_then_answerer() {
+        // The offerer must have tried before the user is told, and the
+        // answerer must step in only after that.
+        assert!(LINK_RETRY_OFFERER < LINK_WARN_AFTER);
+        assert!(LINK_WARN_AFTER < LINK_RETRY_ANSWERER);
+        assert!(ROOM_KEY_GRACE < KEYLESS_WARN_AFTER);
+    }
+
+    #[test]
+    fn ui_events_serialize_with_a_snake_case_type_tag() {
+        let j = serde_json::to_value(UiEvent::RoomAudio { gen: Some(3), authority: true }).unwrap();
+        assert_eq!(j["type"], "room_audio");
+        assert_eq!(j["gen"], 3);
+        let j = serde_json::to_value(UiEvent::ChannelRemoved { name: "x".into() }).unwrap();
+        assert_eq!(j["type"], "channel_removed");
+        let j = serde_json::to_value(UiEvent::Status { connected: true, transmitting: false }).unwrap();
+        assert_eq!(j, serde_json::json!({"type": "status", "connected": true, "transmitting": false}));
+        let j = serde_json::to_value(UiEvent::Net { peers: 2, up_kbps: 30, down_kbps: 60 }).unwrap();
+        assert_eq!(j["type"], "net");
+    }
+
+    #[test]
+    fn secure_peer_ids_lists_only_members_with_a_live_session() {
+        let me = crypto::PeerCrypto::new("a".into());
+        let b = crypto::PeerCrypto::new("b".into());
+        let hello = me.begin("b").unwrap();
+        let reply = b.on_hello("a", &hello).unwrap();
+        assert!(me.on_reply("b", &reply));
+        let members: HashMap<String, Member> = ["b", "c"]
+            .into_iter()
+            .map(|id| (id.to_string(), Member::new(id.into(), DEFAULT_CHANNEL.into(), false)))
+            .collect();
+        assert_eq!(secure_peer_ids(&members, &me), vec!["b".to_string()]);
+        me.remove("b");
+        assert!(secure_peer_ids(&members, &me).is_empty());
+    }
+
+    /// The handle is plain plumbing: every method either queues a command for
+    /// the loop or flips a shared flag the audio threads read live.
+    #[test]
+    fn engine_handle_forwards_commands_and_flags() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Cmd>();
+        let (dev_tx, dev_rx) = std::sync::mpsc::channel::<audio::DevCmd>();
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let earcon_on = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let e = Engine {
+            cmd_tx,
+            gains: Arc::new(audio::Gains::new()),
+            dsp: Arc::new(Mutex::new(audio::DspConfig::default())),
+            radio: Arc::new(Mutex::new(audio::RadioCfg::default())),
+            monitor: Arc::new(AtomicBool::new(false)),
+            stop: stop.clone(),
+            bitrate: Arc::new(AtomicU32::new(0)),
+            dtx: Arc::new(AtomicBool::new(false)),
+            dev_tx,
+            earcon: Arc::new(audio::Earcon::new(mix.clone(), earcon_on.clone())),
+        };
+
+        e.toggle_transmit();
+        e.set_transmit(true);
+        e.send_chat("hi".into());
+        e.rotate_key();
+        e.reconnect();
+        e.set_channel("Bravo".into());
+        e.remove_channel("Bravo".into());
+        let mut kinds = Vec::new();
+        while let Ok(c) = cmd_rx.try_recv() {
+            kinds.push(match c {
+                Cmd::ToggleTx => "toggle",
+                Cmd::SetTx(true) => "tx-on",
+                Cmd::SetTx(false) => "tx-off",
+                Cmd::Chat(t) if t == "hi" => "chat",
+                Cmd::Chat(_) => "chat?",
+                Cmd::Rekey => "rekey",
+                Cmd::Reconnect => "reconnect",
+                Cmd::SetChannel(n) if n == "Bravo" => "set-chan",
+                Cmd::SetChannel(_) => "set-chan?",
+                Cmd::RemoveChannel(n) if n == "Bravo" => "rm-chan",
+                Cmd::RemoveChannel(_) => "rm-chan?",
+            });
+        }
+        assert_eq!(kinds, vec!["toggle", "tx-on", "chat", "rekey", "reconnect", "set-chan", "rm-chan"]);
+
+        e.set_low_bandwidth(true);
+        assert_eq!(e.bitrate.load(Ordering::SeqCst), 14_000);
+        assert!(e.dtx.load(Ordering::SeqCst));
+        e.set_low_bandwidth(false);
+        assert_eq!(e.bitrate.load(Ordering::SeqCst), 0);
+        assert!(!e.dtx.load(Ordering::SeqCst));
+
+        e.set_monitor(true);
+        assert!(e.monitor.load(Ordering::SeqCst));
+        e.set_dsp(audio::DspConfig { gate: false, ..audio::DspConfig::default() });
+        assert!(!e.dsp.lock().unwrap().gate);
+        e.set_radio(audio::RadioCfg { enabled: true, ..audio::RadioCfg::default() });
+        assert!(e.radio.lock().unwrap().enabled);
+
+        e.set_input_device(Some("USB Mic".into()));
+        e.set_output_device(None);
+        assert!(matches!(dev_rx.try_recv().unwrap(), audio::DevCmd::SetInput(Some(n)) if n == "USB Mic"));
+        assert!(matches!(dev_rx.try_recv().unwrap(), audio::DevCmd::SetOutput(None)));
+
+        e.set_earcon(false);
+        assert!(!earcon_on.load(Ordering::SeqCst));
+        e.set_earcon_volume(0.0);
+        e.ptt_latch_cue(true);
+        assert!(mix.lock().unwrap().get(audio::EARCON_KEY).is_none(), "muted cue must queue nothing");
+        e.set_earcon_volume(1.0);
+        e.ptt_latch_cue(true);
+        assert!(!mix.lock().unwrap().get(audio::EARCON_KEY).unwrap().is_empty());
+
+        // Dropping the handle stops the audio threads.
+        drop(e);
+        assert!(stop.load(Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod coordinator_tests {
+    use super::*;
+
+    fn members(ids: &[&str]) -> HashMap<String, Member> {
+        ids.iter().map(|id| (id.to_string(), Member::new(id.to_string(), DEFAULT_CHANNEL.into(), true))).collect()
+    }
+
+    fn coordinator(id: &str) -> (RoomKeyCoordinator, Arc<crypto::RoomAudio>, mpsc::UnboundedReceiver<u32>) {
+        let room = Arc::new(crypto::RoomAudio::new());
+        let (tx, rx) = mpsc::unbounded_channel();
+        (RoomKeyCoordinator::new(id.into(), room.clone(), tx), room, rx)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn first_key_seals_at_once_later_keys_wait_for_the_grace() {
+        let (mut c, room, mut promote) = coordinator("a");
+        assert_eq!(c.generation(), None);
+        assert!(c.adopt(crypto::RoomKey::generate(1, "a".into())));
+        assert_eq!(room.sending_generation(), Some(1), "first key needs no grace");
+        assert!(promote.try_recv().is_err());
+
+        assert!(c.adopt(crypto::RoomKey::generate(2, "a".into())));
+        assert_eq!(c.generation(), Some(2));
+        assert_eq!(room.sending_generation(), Some(1), "still sealing with the old key");
+        tokio::time::sleep(ROOM_KEY_GRACE + Duration::from_millis(10)).await;
+        assert_eq!(promote.recv().await, Some(2), "grace timer must fire the new generation");
+        assert_eq!(c.room_gen, 2);
+    }
+
+    #[test]
+    fn adopt_rejects_stale_keys_and_keeps_the_monotonic_counter() {
+        let (mut c, _room, _p) = coordinator("a");
+        assert!(c.adopt(crypto::RoomKey::generate(5, "a".into())));
+        assert!(!c.adopt(crypto::RoomKey::generate(4, "a".into())));
+        assert!(!c.adopt(crypto::RoomKey::generate(5, "a".into())));
+        assert_eq!(c.generation(), Some(5));
+        assert_eq!(c.room_gen, 5);
+    }
+
+    #[tokio::test]
+    async fn rotate_mints_above_everything_seen_and_addresses_every_secure_peer() {
+        let (mut c, _room, _p) = coordinator("a");
+        c.room_gen = 7; // learned from a RoomGen report, no key held yet
+        let acts = c.rotate(&["b".into(), "c".into()]);
+        assert_eq!(acts.len(), 2);
+        let key = c.room.current().unwrap();
+        assert_eq!(key.generation(), 8);
+        assert_eq!(key.authority(), "a");
+        for a in &acts {
+            match a {
+                KeyAction::SendKey { peer, gen, key: k } => {
+                    assert!(peer == "b" || peer == "c");
+                    assert_eq!(*gen, 8);
+                    assert_eq!(*k, key.key_bytes());
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // No secure peer → the key is minted but goes nowhere yet.
+        assert!(c.rotate(&[]).is_empty());
+        assert_eq!(c.generation(), Some(9));
+    }
+
+    #[test]
+    fn on_secure_as_authority_mints_once_and_hands_the_key_to_each_peer() {
+        let (mut c, _room, _p) = coordinator("a");
+        let m = members(&["b", "c"]);
+        let first = c.on_secure("b", &m);
+        assert_eq!(c.generation(), Some(1));
+        assert!(matches!(first.as_slice(), [KeyAction::SendKey { peer, gen: 1, .. }] if peer == "b"));
+        // The second session reuses the same key: no re-mint.
+        let second = c.on_secure("c", &m);
+        assert!(matches!(second.as_slice(), [KeyAction::SendKey { peer, gen: 1, .. }] if peer == "c"));
+        assert_eq!(c.generation(), Some(1));
+    }
+
+    #[test]
+    fn on_secure_as_member_reports_the_generation_only_to_the_authority() {
+        let (mut c, _room, _p) = coordinator("m");
+        let m = members(&["a", "z"]);
+        // No key yet → nothing to report.
+        assert!(c.on_secure("a", &m).is_empty());
+        assert!(c.adopt(crypto::RoomKey::generate(3, "a".into())));
+        assert_eq!(c.on_secure("a", &m), vec![KeyAction::SendGen { peer: "a".into(), gen: 3 }]);
+        // "z" is not the authority: nothing is sent to it.
+        assert!(c.on_secure("z", &m).is_empty());
+    }
+
+    #[test]
+    fn on_room_key_accepts_only_the_authority_within_the_generation_bound() {
+        let (mut c, _room, _p) = coordinator("m");
+        let m = members(&["a", "z"]);
+        let key = [1u8; 32];
+        assert!(!c.on_room_key("z", 1, key, &m), "larger id is never the authority");
+        assert!(!c.on_room_key("m", 1, key, &m), "my own id cannot be a peer");
+        assert!(!c.on_room_key("ghost", 1, key, &m), "unknown ids are rejected");
+        assert!(!c.on_room_key("a", ROOM_GEN_BOUND + 1, key, &m), "generation jump too large");
+        assert!(c.on_room_key("a", ROOM_GEN_BOUND, key, &m));
+        assert_eq!(c.generation(), Some(ROOM_GEN_BOUND));
+        assert_eq!(c.room.current().unwrap().key_bytes(), key);
+        assert!(!c.on_room_key("a", ROOM_GEN_BOUND, key, &m), "duplicate is a no-op");
+    }
+
+    #[test]
+    fn on_room_gen_is_acted_on_only_by_the_authority_for_a_plausible_member_report() {
+        // Not the authority → ignored even from a member.
+        let (mut c, _room, _p) = coordinator("m");
+        assert!(c.on_room_gen("a", 5, &members(&["a"]), &["a".into()]).is_empty());
+
+        let (mut a, _room, _p) = coordinator("a");
+        let m = members(&["m", "t"]);
+        assert!(a.on_room_gen("ghost", 5, &m, &["m".into()]).is_empty(), "unknown reporter");
+        assert!(a.on_room_gen("m", 0, &m, &["m".into()]).is_empty(), "not above what we hold");
+        assert!(a.on_room_gen("m", ROOM_GEN_BOUND + 1, &m, &["m".into()]).is_empty(), "beyond the bound");
+        let acts = a.on_room_gen("m", 5, &m, &["m".into(), "t".into()]);
+        assert_eq!(acts.len(), 2);
+        assert_eq!(a.generation(), Some(6), "mint strictly above the reported generation");
+        // A stale repeat of the same report changes nothing.
+        assert!(a.on_room_gen("m", 5, &m, &["m".into()]).is_empty());
+    }
+
+    #[test]
+    fn rotate_saturates_instead_of_wrapping() {
+        let (mut c, _room, _p) = coordinator("a");
+        c.room_gen = u32::MAX;
+        let acts = c.rotate(&["b".into()]);
+        assert_eq!(c.generation(), Some(u32::MAX));
+        assert_eq!(acts.len(), 1);
+        // A second rotation cannot go higher and must not panic.
+        let again = c.rotate(&["b".into()]);
+        assert_eq!(c.generation(), Some(u32::MAX));
+        assert_eq!(again.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn perform_key_actions_without_sessions_is_a_silent_noop() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (out_tx, _out_rx) = mpsc::unbounded_channel::<ClientMsg>();
+        let (dec, _dec_rx) = mpsc::unbounded_channel::<(String, Bytes)>();
+        let (ev, _ev_rx) = mpsc::unbounded_channel::<MeshEvent>();
+        let local = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability { mime_type: MIME_TYPE_OPUS.to_owned(), clock_rate: 48000, channels: 2, ..Default::default() },
+            "audio".to_owned(),
+            "t".to_owned(),
+        ));
+        let mesh = Mesh::new(
+            Arc::new(build_api().unwrap()), local, "a".into(), out_tx, dec, ev,
+            Arc::new(ChanState::new()), Arc::new(crypto::PeerCrypto::new("a".into())), Arc::new(crypto::RoomAudio::new()),
+        );
+        perform_key_actions(&mesh, vec![
+            KeyAction::SendKey { peer: "b".into(), gen: 1, key: [0u8; 32] },
+            KeyAction::SendGen { peer: "b".into(), gen: 1 },
+        ])
+        .await;
     }
 }

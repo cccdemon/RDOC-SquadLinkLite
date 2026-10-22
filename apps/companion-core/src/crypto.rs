@@ -870,4 +870,310 @@ mod tests {
         assert!(a.stage(RoomKey::generate(1, "x".into()))); // staged, not promoted
         assert!(a.seal_outbound("p", b"hi").is_none());
     }
+
+    // ── Session framing, counters and the anti-replay window ────────────────
+
+    #[test]
+    fn kind_tags_are_distinct_so_aad_separates_audio_from_chat() {
+        assert_ne!(Kind::Audio.tag(), Kind::Chat.tag());
+    }
+
+    #[test]
+    fn seal_prefixes_a_big_endian_counter_that_increments_per_frame() {
+        let (mut a, _) = pair();
+        for expect in 0u64..3 {
+            let w = a.seal(Kind::Chat, b"x");
+            assert_eq!(u64::from_be_bytes(w[..8].try_into().unwrap()), expect);
+            // 8-byte counter + 16-byte Poly1305 tag + plaintext.
+            assert_eq!(w.len(), 8 + 16 + 1);
+        }
+    }
+
+    #[test]
+    fn open_rejects_a_frame_shorter_than_the_counter() {
+        let (_, mut b) = pair();
+        assert!(b.open(Kind::Chat, &[]).is_none());
+        assert!(b.open(Kind::Chat, &[0u8; 7]).is_none());
+    }
+
+    #[test]
+    fn frames_older_than_the_64_wide_window_are_rejected() {
+        let (mut a, mut b) = pair();
+        let frames: Vec<Vec<u8>> = (0..70).map(|_| a.seal(Kind::Audio, b"f")).collect();
+        // Deliver the newest first: recv_max jumps to 69.
+        assert!(b.open(Kind::Audio, &frames[69]).is_some());
+        // 69 - 6 = 63 is still inside the window …
+        assert!(b.open(Kind::Audio, &frames[6]).is_some());
+        // … 69 - 5 = 64 is not.
+        assert!(b.open(Kind::Audio, &frames[5]).is_none());
+        assert!(b.open(Kind::Audio, &frames[0]).is_none());
+    }
+
+    #[test]
+    fn a_jump_past_the_window_resets_it_without_losing_fresh_frames() {
+        let (mut a, mut b) = pair();
+        let frames: Vec<Vec<u8>> = (0..200).map(|_| a.seal(Kind::Audio, b"f")).collect();
+        assert!(b.open(Kind::Audio, &frames[0]).is_some());
+        // Jump by more than 64: the bitmap is cleared, not shifted into garbage.
+        assert!(b.open(Kind::Audio, &frames[150]).is_some());
+        // Counters inside the new window that were never seen still open …
+        assert!(b.open(Kind::Audio, &frames[120]).is_some());
+        // … and a replay of one of them is caught.
+        assert!(b.open(Kind::Audio, &frames[120]).is_none());
+        // The old frame 0 is now far outside the window.
+        assert!(b.open(Kind::Audio, &frames[1]).is_none());
+    }
+
+    #[test]
+    fn a_failed_decrypt_does_not_mark_the_counter_as_seen() {
+        let (mut a, mut b) = pair();
+        let good = a.seal(Kind::Chat, b"keep");
+        let mut bad = good.clone();
+        let n = bad.len() - 1;
+        bad[n] ^= 0xFF;
+        assert!(b.open(Kind::Chat, &bad).is_none());
+        // The genuine frame with the same counter must still be accepted.
+        assert_eq!(b.open(Kind::Chat, &good).unwrap(), b"keep");
+    }
+
+    // ── Handshake binding and malformed inputs ──────────────────────────────
+
+    #[test]
+    fn transcript_binds_the_peer_ids() {
+        // Initiator believes it talks to "b", responder believes it is "c":
+        // the transcripts differ, so the derived keys differ and nothing opens.
+        let (init, hello) = Initiator::start("a", "b");
+        let (reply, mut sess_c) = respond("a", "c", &hello).unwrap();
+        let mut sess_a = init.finish(&reply).unwrap();
+        assert_ne!(sess_a.fingerprint(), sess_c.fingerprint());
+        let w = sess_a.seal(Kind::Chat, b"x");
+        assert!(sess_c.open(Kind::Chat, &w).is_none());
+    }
+
+    #[test]
+    fn two_handshakes_never_share_keys_or_fingerprints() {
+        let (mut a1, _b1) = pair();
+        let (_a2, mut b2) = pair();
+        assert_ne!(a1.fingerprint(), b2.fingerprint());
+        let w = a1.seal(Kind::Chat, b"x");
+        assert!(b2.open(Kind::Chat, &w).is_none());
+    }
+
+    #[test]
+    fn responder_rejects_a_malformed_kem_key() {
+        let (_, hello) = Initiator::start("a", "b");
+        let short = Hello { kem_pk: hello.kem_pk[..hello.kem_pk.len() - 1].to_vec(), x_pk: hello.x_pk };
+        assert!(respond("a", "b", &short).is_err());
+        let empty = Hello { kem_pk: Vec::new(), x_pk: hello.x_pk };
+        assert!(respond("a", "b", &empty).is_err());
+    }
+
+    #[test]
+    fn initiator_rejects_a_malformed_ciphertext() {
+        let (init, hello) = Initiator::start("a", "b");
+        let (reply, _) = respond("a", "b", &hello).unwrap();
+        let short = Reply { x_pk: reply.x_pk, kem_ct: reply.kem_ct[..reply.kem_ct.len() - 1].to_vec() };
+        assert!(init.finish(&short).is_err());
+    }
+
+    #[test]
+    fn a_tampered_ciphertext_yields_mismatched_sessions() {
+        // Implicit rejection: ML-KEM decapsulates a garbage secret instead of
+        // failing, so the two sides simply cannot talk — nothing opens.
+        let (init, hello) = Initiator::start("a", "b");
+        let (mut reply, mut sess_b) = respond("a", "b", &hello).unwrap();
+        reply.kem_ct[0] ^= 0x01;
+        let mut sess_a = init.finish(&reply).unwrap();
+        let w = sess_a.seal(Kind::Chat, b"x");
+        assert!(sess_b.open(Kind::Chat, &w).is_none());
+    }
+
+    // ── PeerCrypto role rules and lifecycle ─────────────────────────────────
+
+    #[test]
+    fn initiator_rule_is_lexicographic_on_user_id() {
+        let m = PeerCrypto::new("m".into());
+        assert!(m.is_initiator("z"));
+        assert!(!m.is_initiator("a"));
+        assert!(!m.is_initiator("m")); // equal ids: nobody initiates
+    }
+
+    #[test]
+    fn roles_are_enforced_on_both_hello_and_reply() {
+        let a = PeerCrypto::new("a".into());
+        let b = PeerCrypto::new("b".into());
+        let hello = a.begin("b").unwrap();
+        // The initiator must not answer a hello (there should never be one).
+        assert!(a.on_hello("b", &hello).is_none());
+        let reply = b.on_hello("a", &hello).unwrap();
+        // The responder has no pending handshake, so a reply means nothing.
+        assert!(!b.on_reply("a", &reply));
+        assert!(b.is_secure("a")); // b's session came from on_hello, not the stray reply
+        assert!(a.on_reply("b", &reply));
+        // A second reply finds no pending state.
+        assert!(!a.on_reply("b", &reply));
+    }
+
+    #[test]
+    fn no_session_means_no_seal_open_or_fingerprint() {
+        let a = PeerCrypto::new("a".into());
+        assert!(!a.is_secure("b"));
+        assert!(a.seal("b", Kind::Chat, b"x").is_none());
+        assert!(a.open("b", Kind::Chat, &[0u8; 40]).is_none());
+        assert!(a.fingerprint("b").is_none());
+    }
+
+    #[test]
+    fn remove_drops_the_session_and_any_pending_handshake() {
+        let a = PeerCrypto::new("a".into());
+        let b = PeerCrypto::new("b".into());
+        let hello = a.begin("b").unwrap();
+        let reply = b.on_hello("a", &hello).unwrap();
+        // Pending handshake removed → the reply has nothing to finish.
+        a.remove("b");
+        assert!(!a.on_reply("b", &reply));
+        // Live session removed → no longer secure, nothing to seal with.
+        assert!(b.is_secure("a"));
+        b.remove("a");
+        assert!(!b.is_secure("a"));
+        assert!(b.seal("a", Kind::Chat, b"x").is_none());
+    }
+
+    #[test]
+    fn a_new_handshake_supersedes_the_live_session() {
+        let a = PeerCrypto::new("a".into());
+        let b = PeerCrypto::new("b".into());
+        let hello = a.begin("b").unwrap();
+        let reply = b.on_hello("a", &hello).unwrap();
+        assert!(a.on_reply("b", &reply));
+        assert!(a.is_secure("b"));
+        // Re-keying: begin() forgets the old session until the peer replies.
+        let hello2 = a.begin("b").unwrap();
+        assert!(!a.is_secure("b"));
+        let reply2 = b.on_hello("a", &hello2).unwrap();
+        assert!(a.on_reply("b", &reply2));
+        let w = a.seal("b", Kind::Chat, b"fresh").unwrap();
+        assert_eq!(b.open("a", Kind::Chat, &w).unwrap(), b"fresh");
+        // The fingerprint moved with the new transcript.
+        assert_eq!(a.fingerprint("b"), b.fingerprint("a"));
+    }
+
+    #[test]
+    fn peer_crypto_fingerprints_match_on_both_sides() {
+        let a = PeerCrypto::new("a".into());
+        let b = PeerCrypto::new("b".into());
+        let hello = a.begin("b").unwrap();
+        let reply = b.on_hello("a", &hello).unwrap();
+        assert!(a.on_reply("b", &reply));
+        assert_eq!(a.fingerprint("b"), b.fingerprint("a"));
+        assert_eq!(a.fingerprint("b").unwrap().len(), 24);
+    }
+
+    // ── RoomKey / RoomAudio edge cases ──────────────────────────────────────
+
+    #[test]
+    fn room_key_accessors_round_trip_through_from_bytes() {
+        let rk = RoomKey::generate(42, "zed".into());
+        let copy = RoomKey::from_bytes(rk.generation(), rk.authority().into(), rk.key_bytes());
+        assert_eq!(copy.generation(), 42);
+        assert_eq!(copy.authority(), "zed");
+        assert_eq!(copy.key_bytes(), rk.key_bytes());
+        // Two generated keys never collide.
+        assert_ne!(RoomKey::generate(1, "a".into()).key_bytes(), RoomKey::generate(1, "a".into()).key_bytes());
+    }
+
+    #[test]
+    fn room_key_open_rejects_a_frame_shorter_than_the_nonce() {
+        let rk = RoomKey::generate(1, "a".into());
+        assert!(rk.open_audio("p", &[]).is_none());
+        assert!(rk.open_audio("p", &[0u8; 11]).is_none());
+        // Nonce present but no tag: still an auth failure, no panic.
+        assert!(rk.open_audio("p", &[0u8; 12]).is_none());
+    }
+
+    #[test]
+    fn room_aad_is_the_audio_tag_followed_by_the_sender() {
+        assert_eq!(room_aad("al"), vec![Kind::Audio.tag(), b'a', b'l']);
+        assert_eq!(room_aad(""), vec![Kind::Audio.tag()]);
+    }
+
+    #[test]
+    fn sealed_room_frame_is_tag_generation_nonce_and_body() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(0x0102_0304, "a".into()));
+        let wire = ra.seal_outbound("p", b"opus").unwrap();
+        assert_eq!(wire[0], AUDIO_SEALED);
+        assert_eq!(&wire[1..5], &[1, 2, 3, 4]);
+        // 12-byte nonce + 4-byte plaintext + 16-byte tag.
+        assert_eq!(wire.len(), 1 + 4 + 12 + 4 + 16);
+    }
+
+    #[test]
+    fn open_inbound_drops_unknown_tags_and_truncated_sealed_frames() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(1, "a".into()));
+        assert!(ra.open_inbound("p", &[]).is_none());
+        assert!(ra.open_inbound("p", &[7, 1, 2, 3]).is_none()); // unknown tag
+        assert!(ra.open_inbound("p", &[AUDIO_SEALED]).is_none()); // no generation
+        assert!(ra.open_inbound("p", &[AUDIO_SEALED, 0, 0, 0]).is_none()); // 3-byte gen
+        assert!(ra.open_inbound("p", &[AUDIO_SEALED, 0, 0, 0, 1]).is_none()); // gen only
+    }
+
+    #[test]
+    fn room_audio_starts_empty() {
+        let ra = RoomAudio::default();
+        assert_eq!(ra.generation(), None);
+        assert_eq!(ra.sending_generation(), None);
+        assert!(!ra.has_send());
+        assert!(ra.current().is_none());
+    }
+
+    #[test]
+    fn stage_rejects_a_duplicate_of_the_current_generation() {
+        let ra = RoomAudio::new();
+        let k = RoomKey::generate(3, "a".into());
+        assert!(ra.stage(k.clone()));
+        assert!(!ra.stage(k.clone())); // same gen, same authority
+        assert!(!ra.stage(RoomKey::generate(3, "b".into()))); // same gen, larger authority
+        assert!(ra.stage(RoomKey::generate(3, "0".into()))); // same gen, smaller authority wins
+        assert_eq!(ra.current().unwrap().authority(), "0");
+        // The losing key moved to the previous ring, so its frames still open.
+        let w = {
+            let s = RoomAudio::new();
+            s.install(k);
+            s.seal_outbound("p", b"old").unwrap()
+        };
+        assert_eq!(ra.open_inbound("p", &w).unwrap(), b"old");
+    }
+
+    #[test]
+    fn promote_of_an_unstaged_generation_is_a_noop() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(1, "a".into()));
+        ra.promote(9);
+        assert_eq!(ra.sending_generation(), Some(1));
+        // A generation that only lives in the previous ring is still promotable.
+        ra.stage(RoomKey::generate(2, "a".into()));
+        ra.stage(RoomKey::generate(3, "a".into()));
+        ra.promote(2);
+        assert_eq!(ra.sending_generation(), Some(2));
+    }
+
+    #[test]
+    fn install_of_a_stale_key_leaves_the_send_key_alone() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(5, "a".into()));
+        ra.install(RoomKey::generate(4, "a".into()));
+        assert_eq!(ra.sending_generation(), Some(5));
+        assert_eq!(ra.generation(), Some(5));
+    }
+
+    #[test]
+    fn sealed_frame_from_another_sender_id_does_not_open() {
+        let ra = RoomAudio::new();
+        ra.install(RoomKey::generate(1, "a".into()));
+        let wire = ra.seal_outbound("alice", b"x").unwrap();
+        assert!(ra.open_inbound("bob", &wire).is_none());
+        assert_eq!(ra.open_inbound("alice", &wire).unwrap(), b"x");
+    }
 }

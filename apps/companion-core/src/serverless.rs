@@ -359,4 +359,183 @@ mod tests {
         }
         panic!("peer connection still open 1 s after drop");
     }
+
+    #[test]
+    fn decode_code_names_the_failure() {
+        assert!(decode_code("not base64 at all!!").unwrap_err().to_string().contains("kein base64"));
+        // Valid base64, invalid UTF-8.
+        let bad_utf8 = STANDARD.encode([0xff, 0xfe, 0xfd]);
+        assert!(decode_code(&bad_utf8).unwrap_err().to_string().contains("kein UTF-8"));
+        assert_eq!(decode_code("").unwrap(), "");
+    }
+
+    /// Captures every UiEvent the session emits.
+    fn recording_sink() -> (Sink, Arc<Mutex<Vec<UiEvent>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let l2 = log.clone();
+        let sink: Sink = Arc::new(move |ev| l2.lock().unwrap().push(ev));
+        (sink, log)
+    }
+
+    async fn bare_session(sink: Sink) -> (Serverless, Arc<RTCPeerConnection>) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let api = build_api().unwrap();
+        let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let s = Serverless {
+            pc: pc.clone(),
+            stop: Arc::new(AtomicBool::new(false)),
+            transmit: Arc::new(AtomicBool::new(false)),
+            chat: Arc::new(Mutex::new(None)),
+            sink,
+            me: "me".into(),
+        };
+        (s, pc)
+    }
+
+    fn statuses(log: &Mutex<Vec<UiEvent>>) -> Vec<bool> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                UiEvent::Status { transmitting, .. } => Some(*transmitting),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn transmit_toggles_are_idempotent_and_reported() {
+        let (sink, log) = recording_sink();
+        let (s, _pc) = bare_session(sink).await;
+        s.toggle_transmit();
+        assert!(s.transmit.load(Ordering::SeqCst));
+        s.set_transmit(true); // already on: no second event
+        s.set_transmit(false);
+        s.set_transmit(false); // already off: no event
+        s.toggle_transmit();
+        assert_eq!(statuses(&log), vec![true, false, true]);
+    }
+
+    #[tokio::test]
+    async fn accept_answer_rejects_a_bad_code() {
+        let (sink, _) = recording_sink();
+        let (s, _pc) = bare_session(sink).await;
+        let err = s.accept_answer("%%%".into()).await.unwrap_err().to_string();
+        assert!(err.contains("ungültiger Code"), "{err}");
+        // Valid base64 that is not SDP fails in the SDP parser, still an error.
+        assert!(s.accept_answer(STANDARD.encode("hello")).await.is_err());
+    }
+
+    fn logs(log: &Mutex<Vec<UiEvent>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                UiEvent::Log { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    /// A chat line is echoed locally only once it really left; otherwise the
+    /// user gets a log line saying why.
+    #[tokio::test]
+    async fn send_chat_reports_instead_of_pretending() {
+        let (sink, log) = recording_sink();
+        let (s, pc) = bare_session(sink).await;
+        s.send_chat("hello".into());
+        settle().await;
+        assert_eq!(logs(&log), vec!["Chat: noch nicht verbunden".to_string()]);
+
+        // A channel exists but is not open: the send fails and says so.
+        let dc = pc.create_data_channel("chat", None).await.unwrap();
+        *s.chat.lock().unwrap() = Some(dc);
+        s.send_chat("hello".into());
+        settle().await;
+        assert_eq!(logs(&log).last().unwrap(), "Chat: Senden fehlgeschlagen");
+
+        // Oversized text is refused before any send attempt.
+        s.send_chat("x".repeat(crate::MAX_CHAT_BYTES + 1));
+        settle().await;
+        assert_eq!(logs(&log).last().unwrap(), "Chat: Nachricht zu lang");
+        // Nothing was ever echoed as sent.
+        assert!(!log.lock().unwrap().iter().any(|e| matches!(e, UiEvent::Chat { .. })));
+    }
+
+    /// Two PCs on loopback (no STUN), A's chat channel wired into B via
+    /// `wire_chat`: delivery, text clamping and the oversized-frame drop.
+    #[tokio::test]
+    async fn wire_chat_delivers_clamps_and_drops_oversized_frames() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let api = build_api().unwrap();
+        let a = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let b = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let (sink, log) = recording_sink();
+        let slot: ChatSlot = Arc::new(Mutex::new(None));
+        {
+            let (slot, sink) = (slot.clone(), sink.clone());
+            b.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+                let (slot, sink) = (slot.clone(), sink.clone());
+                Box::pin(async move { wire_chat(slot, dc, sink) })
+            }));
+        }
+        let dc = a.create_data_channel("chat", None).await.unwrap();
+        let opened = Arc::new(AtomicBool::new(false));
+        {
+            let opened = opened.clone();
+            dc.on_open(Box::new(move || {
+                let opened = opened.clone();
+                Box::pin(async move { opened.store(true, Ordering::SeqCst) })
+            }));
+        }
+        let mut ga = a.gathering_complete_promise().await;
+        let offer = a.create_offer(None).await.unwrap();
+        a.set_local_description(offer).await.unwrap();
+        let _ = ga.recv().await;
+        b.set_remote_description(a.local_description().await.unwrap()).await.unwrap();
+        let mut gb = b.gathering_complete_promise().await;
+        let answer = b.create_answer(None).await.unwrap();
+        b.set_local_description(answer).await.unwrap();
+        let _ = gb.recv().await;
+        a.set_remote_description(b.local_description().await.unwrap()).await.unwrap();
+        for _ in 0..100 {
+            if opened.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(opened.load(Ordering::SeqCst), "chat channel never opened");
+        assert!(slot.lock().unwrap().is_some(), "wire_chat did not stash the channel");
+
+        let long = "ü".repeat(crate::MAX_CHAT_CHARS + 10);
+        dc.send_text(serde_json::to_string(&ChatMsg { text: "hi".into(), ts: 1 }).unwrap()).await.unwrap();
+        dc.send_text(serde_json::to_string(&ChatMsg { text: long, ts: 2 }).unwrap()).await.unwrap();
+        dc.send_text("not json".to_string()).await.unwrap();
+        dc.send_text(serde_json::to_string(&ChatMsg { text: "y".repeat(crate::MAX_CHAT_BYTES), ts: 3 }).unwrap()).await.unwrap();
+        for _ in 0..50 {
+            if log.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let chats: Vec<(String, String)> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                UiEvent::Chat { from, text } => Some((from.clone(), text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chats.len(), 2, "{chats:?}");
+        assert_eq!(chats[0], ("Peer".to_string(), "hi".to_string()));
+        assert_eq!(chats[1].1.chars().count(), crate::MAX_CHAT_CHARS);
+        let _ = a.close().await;
+        let _ = b.close().await;
+    }
 }

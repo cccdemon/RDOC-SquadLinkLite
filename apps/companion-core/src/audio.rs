@@ -340,12 +340,11 @@ pub enum DevCmd {
 /// opens the new device, and publishes its sample rate via `in_rate`/`out_rate`
 /// so the encode/mixer resamplers retune. A new device's rate can differ (e.g.
 /// 48k vs 192k), which is why the rates are shared atomics, not constructor args.
-// `in_s` / `out_s` ARE the running streams: cpal stops capture/playback the
-// moment a `Stream` is dropped, so assigning a freshly opened one on a device
-// switch is exactly how the old device is released and the new one kept alive.
-// rustc sees the stored value is never read back and calls those assignments
-// dead — they are not; holding the value IS the effect.
-#[allow(unused_assignments)]
+///
+/// `_in_s` / `_out_s` ARE the running streams: cpal stops capture/playback the
+/// moment a `Stream` is dropped, so assigning a freshly opened one on a device
+/// switch is exactly how the old device is released and the new one kept alive.
+/// They are never read back; holding the value IS the effect.
 #[allow(clippy::too_many_arguments)]
 pub fn run_devices(
     cap: Buf,
@@ -1036,5 +1035,514 @@ mod decode_gc_tests {
         t.join().unwrap();
         assert!(keys.iter().any(|k| k == "here"), "live peer missing: {keys:?}");
         assert!(!keys.iter().any(|k| k == "gone"), "idle peer kept: {keys:?}");
+    }
+
+    /// Decoded PCM lands under the sender's id, one 20 ms frame per packet, and
+    /// the per-peer jitter queue never grows past ~400 ms however fast packets
+    /// arrive.
+    #[test]
+    fn decoded_frames_land_in_the_mix_map_and_stay_capped() {
+        let (tx, rx) = unbounded_channel::<(String, Bytes)>();
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let m2 = mix.clone();
+        let t = std::thread::spawn(move || decode_loop(rx, m2));
+
+        tx.send(("p".into(), opus_silence())).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(mix.lock().unwrap().get("p").map(|b| b.len()), Some(FRAME));
+
+        for _ in 0..40 {
+            tx.send(("p".into(), opus_silence())).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let len = mix.lock().unwrap().get("p").map(|b| b.len()).unwrap();
+        assert!(len <= 19200, "jitter queue grew past the cap: {len}");
+        assert!(len > FRAME, "queue should hold more than one frame: {len}");
+
+        // Garbage that is not Opus is ignored, not a panic.
+        tx.send(("p".into(), Bytes::from_static(b"\xff\xff\xff"))).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        drop(tx);
+        t.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod gains_and_earcon_tests {
+    use super::*;
+
+    fn mix() -> MixMap {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+    fn queued(mix: &MixMap) -> Vec<i16> {
+        mix.lock().unwrap().get(EARCON_KEY).map(|b| b.iter().copied().collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn gains_default_to_unity_and_clamp_to_the_documented_range() {
+        let g = Gains::new();
+        assert_eq!(g.master_v(), 1.0);
+        assert_eq!(g.peer_v("nobody"), 1.0);
+        g.set_master(5.0);
+        assert_eq!(g.master_v(), 2.0);
+        g.set_master(-1.0);
+        assert_eq!(g.master_v(), 0.0);
+        g.set_peer("p", 3.0);
+        assert_eq!(g.peer_v("p"), 2.0);
+        g.set_peer("p", 0.5);
+        assert_eq!(g.peer_v("p"), 0.5);
+        assert_eq!(g.peer_v("other"), 1.0);
+        // The derived Default (master None) also means unity.
+        assert_eq!(Gains::default().master_v(), 1.0);
+    }
+
+    #[test]
+    fn rendered_cues_are_short_bounded_and_audible() {
+        let click = render_click();
+        // Two ticks within ~28 ms at 48 kHz.
+        assert!(click.len() > 48000 * 20 / 1000 && click.len() < 48000 * 40 / 1000, "len {}", click.len());
+        assert!(click.iter().any(|&s| s.abs() > 1000), "click is silent");
+        let on = render_latch(true);
+        let off = render_latch(false);
+        assert_eq!(on.len(), off.len());
+        assert!(on.len() > 48000 * 90 / 1000 && on.len() < 48000 * 110 / 1000, "len {}", on.len());
+        assert_ne!(on, off, "rising and falling cues must differ");
+        assert!(on.iter().any(|&s| s.abs() > 1000));
+    }
+
+    #[test]
+    fn click_queues_the_rendered_click_once() {
+        let m = mix();
+        let e = Earcon::new(m.clone(), Arc::new(AtomicBool::new(true)));
+        e.click();
+        assert_eq!(queued(&m), render_click());
+        // A second click replaces the pending one instead of piling up.
+        e.click();
+        assert_eq!(queued(&m).len(), render_click().len());
+    }
+
+    #[test]
+    fn click_is_a_noop_when_disabled_or_muted() {
+        let m = mix();
+        let flag = Arc::new(AtomicBool::new(false));
+        let e = Earcon::new(m.clone(), flag.clone());
+        e.click();
+        assert!(queued(&m).is_empty());
+        e.set_enabled(true);
+        assert!(flag.load(Ordering::SeqCst));
+        e.set_volume(0.0);
+        e.click();
+        assert!(queued(&m).is_empty());
+        e.set_volume(1.0);
+        e.click();
+        assert!(!queued(&m).is_empty());
+    }
+
+    #[test]
+    fn click_volume_scales_the_samples_and_rejects_nan() {
+        let m = mix();
+        let e = Earcon::new(m.clone(), Arc::new(AtomicBool::new(true)));
+        let full = render_click().iter().map(|s| s.abs() as i32).max().unwrap();
+        e.set_volume(0.5);
+        e.click();
+        let half = queued(&m).iter().map(|s| s.abs() as i32).max().unwrap();
+        assert!((half - full / 2).abs() <= 1, "half {half} vs full {full}");
+        // Over-range clamps to +6 dB and never wraps i16.
+        e.set_volume(9.0);
+        e.click();
+        let loud = queued(&m);
+        assert!(loud.iter().all(|&s| s > -32768));
+        assert!(loud.iter().map(|s| s.abs() as i32).max().unwrap() > full);
+        // NaN falls back to unity.
+        e.set_volume(f32::NAN);
+        e.click();
+        assert_eq!(queued(&m), render_click());
+    }
+
+    #[test]
+    fn latch_cue_ignores_the_enable_toggle_but_honours_volume() {
+        let m = mix();
+        let e = Earcon::new(m.clone(), Arc::new(AtomicBool::new(false))); // earcon OFF
+        e.latch_cue(true);
+        assert_eq!(queued(&m), render_latch(true));
+        e.latch_cue(false);
+        assert_eq!(queued(&m), render_latch(false));
+        e.set_volume(0.0);
+        e.latch_cue(true);
+        assert_eq!(queued(&m), render_latch(false), "muted cue must not replace the queue");
+    }
+}
+
+#[cfg(test)]
+mod resampler_and_dsp_tests {
+    use super::*;
+
+    fn sine(freq: f32, amp: f32, n: usize) -> Vec<f32> {
+        (0..n).map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / OPUS_SR as f32).sin() * amp).collect()
+    }
+
+    #[test]
+    fn resampler_identity_ratio_keeps_the_signal() {
+        let mut r = Resampler::new(48000, 48000);
+        let input: Vec<f32> = (0..100).map(|i| i as f32).collect();
+        let mut out = Vec::new();
+        r.process(&input, &mut out);
+        // The first sample primes `prev`; everything after is reproduced.
+        assert_eq!(out.len(), 99);
+        for (i, v) in out.iter().enumerate() {
+            assert!((v - i as f32).abs() < 1e-4, "sample {i} = {v}");
+        }
+    }
+
+    #[test]
+    fn resampler_scales_sample_count_by_the_rate_ratio() {
+        let input = vec![0.5f32; 4801];
+        let mut down = Resampler::new(96000, 48000);
+        let mut out = Vec::new();
+        down.process(&input, &mut out);
+        assert!((out.len() as i64 - 2400).abs() <= 2, "96k→48k: {}", out.len());
+        assert!(out.iter().all(|&v| (v - 0.5).abs() < 1e-6));
+
+        let mut up = Resampler::new(24000, 48000);
+        let mut out = Vec::new();
+        up.process(&input, &mut out);
+        assert!((out.len() as i64 - 9600).abs() <= 2, "24k→48k: {}", out.len());
+    }
+
+    #[test]
+    fn resampler_phase_is_continuous_across_calls() {
+        let input = sine(440.0, 0.8, 4800);
+        let mut whole = Vec::new();
+        Resampler::new(44100, 48000).process(&input, &mut whole);
+        let mut chunked = Vec::new();
+        let mut r = Resampler::new(44100, 48000);
+        for c in input.chunks(97) {
+            r.process(c, &mut chunked);
+        }
+        assert_eq!(whole.len(), chunked.len());
+        for (a, b) in whole.iter().zip(&chunked) {
+            assert!((a - b).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn dsp_defaults_are_all_on_with_sane_values() {
+        let c = DspConfig::default();
+        assert!(c.gate && c.compressor && c.limiter);
+        assert!(c.gate_threshold > 0.0 && c.gate_threshold < c.comp_threshold);
+        assert!(c.comp_ratio >= 1.0 && c.comp_makeup >= 1.0);
+        assert!(c.limiter_ceiling > 0.5 && c.limiter_ceiling <= 1.0);
+        let json = serde_json::to_string(&c).unwrap();
+        let back: DspConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.comp_ratio, c.comp_ratio);
+    }
+
+    #[test]
+    fn disabled_chain_is_a_clamped_passthrough() {
+        let c = DspConfig { gate: false, compressor: false, limiter: false, ..DspConfig::default() };
+        let mut d = Dsp::new();
+        assert_eq!(d.process(0.25, &c), 0.25);
+        assert_eq!(d.process(-0.5, &c), -0.5);
+        assert_eq!(d.process(3.0, &c), 1.0);
+        assert_eq!(d.process(-3.0, &c), -1.0);
+    }
+
+    #[test]
+    fn gate_closes_on_noise_below_threshold_and_opens_for_speech() {
+        let c = DspConfig { compressor: false, limiter: false, ..DspConfig::default() };
+        let mut d = Dsp::new();
+        // Quiet hiss well under the threshold: after the slow close the gate mutes it.
+        let hiss = sine(1000.0, 0.005, 48000);
+        let mut tail_peak = 0.0f32;
+        for (i, &x) in hiss.iter().enumerate() {
+            let y = d.process(x, &c);
+            if i > 40000 {
+                tail_peak = tail_peak.max(y.abs());
+            }
+        }
+        assert!(tail_peak < 0.0005, "gate left noise through: {tail_peak}");
+        // Speech-level signal reopens it within a few ms.
+        let voice = sine(300.0, 0.2, 4800);
+        let mut peak = 0.0f32;
+        for (i, &x) in voice.iter().enumerate() {
+            let y = d.process(x, &c);
+            if i > 2400 {
+                peak = peak.max(y.abs());
+            }
+        }
+        assert!(peak > 0.15, "gate did not open for speech: {peak}");
+    }
+
+    #[test]
+    fn compressor_squashes_loud_input_and_leaves_quiet_input_alone() {
+        let c = DspConfig { gate: false, limiter: false, comp_makeup: 1.0, ..DspConfig::default() };
+        // Loud: well above the knee → gain < 1.
+        let mut d = Dsp::new();
+        let mut peak = 0.0f32;
+        for (i, &x) in sine(500.0, 0.9, 24000).iter().enumerate() {
+            let y = d.process(x, &c);
+            if i > 12000 {
+                peak = peak.max(y.abs());
+            }
+        }
+        assert!(peak < 0.7, "loud signal not compressed: {peak}");
+        // Quiet: under the knee → unity.
+        let mut d = Dsp::new();
+        let mut peak = 0.0f32;
+        for (i, &x) in sine(500.0, 0.05, 24000).iter().enumerate() {
+            let y = d.process(x, &c);
+            if i > 12000 {
+                peak = peak.max(y.abs());
+            }
+        }
+        assert!((peak - 0.05).abs() < 0.002, "quiet signal altered: {peak}");
+    }
+
+    #[test]
+    fn limiter_never_lets_a_peak_past_the_ceiling() {
+        let c = DspConfig { gate: false, compressor: false, limiter_ceiling: 0.6, ..DspConfig::default() };
+        let mut d = Dsp::new();
+        for &x in &sine(200.0, 1.0, 9600) {
+            let y = d.process(x, &c);
+            assert!(y.abs() <= 0.6 + 1e-5, "peak escaped: {y}");
+        }
+        // Ceiling is clamped into 0.05..1.0 so a bogus config cannot mute or disable it.
+        let silly = DspConfig { gate: false, compressor: false, limiter_ceiling: 7.0, ..DspConfig::default() };
+        let mut d = Dsp::new();
+        assert!(d.process(0.9, &silly) <= 1.0);
+    }
+
+    #[test]
+    fn default_chain_keeps_speech_audible_and_bounded() {
+        let c = DspConfig::default();
+        let mut d = Dsp::new();
+        let mut peak = 0.0f32;
+        for (i, &x) in sine(250.0, 0.3, 48000).iter().enumerate() {
+            let y = d.process(x, &c);
+            assert!(y.is_finite() && y.abs() <= 1.0);
+            if i > 24000 {
+                peak = peak.max(y.abs());
+            }
+        }
+        assert!(peak > 0.2 && peak <= c.limiter_ceiling + 1e-5, "speech level off: {peak}");
+    }
+
+    #[test]
+    fn biquad_tune_is_idempotent_and_shapes_dc_as_expected() {
+        let mut hp = Biquad::new(true);
+        hp.tune(300.0);
+        let before = (hp.b0, hp.b1, hp.b2, hp.a1, hp.a2);
+        hp.tune(300.0);
+        assert_eq!(before, (hp.b0, hp.b1, hp.b2, hp.a1, hp.a2));
+        hp.tune(600.0);
+        assert_ne!(before, (hp.b0, hp.b1, hp.b2, hp.a1, hp.a2));
+
+        // DC through a high-pass dies; through a low-pass it survives.
+        let mut hp = Biquad::new(true);
+        hp.tune(300.0);
+        let mut lp = Biquad::new(false);
+        lp.tune(3400.0);
+        let (mut y_hp, mut y_lp) = (0.0, 0.0);
+        for _ in 0..48000 {
+            y_hp = hp.process(1.0);
+            y_lp = lp.process(1.0);
+        }
+        assert!(y_hp.abs() < 1e-3, "high-pass passed DC: {y_hp}");
+        assert!((y_lp - 1.0).abs() < 1e-3, "low-pass altered DC: {y_lp}");
+    }
+
+    #[test]
+    fn radio_cfg_defaults_describe_a_narrow_band_voice_channel() {
+        let c = RadioCfg::default();
+        assert!(!c.enabled);
+        assert!(c.low_cut < c.high_cut);
+        assert!((0.0..=1.0).contains(&c.saturation) && (0.0..=1.0).contains(&c.destruction));
+        let json = serde_json::to_string(&c).unwrap();
+        let back: RadioCfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.high_cut, c.high_cut);
+    }
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn flag(v: bool) -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(v))
+    }
+
+    /// The mixer tops the playback ring up to ~60 ms and applies per-peer and
+    /// master gain on the way; a muted master yields pure silence.
+    #[test]
+    fn mixer_fills_the_ring_and_applies_gains() {
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
+        let gains = Arc::new(Gains::new());
+        let radio = Arc::new(Mutex::new(RadioCfg::default()));
+        let stop = flag(false);
+        let out_rate = Arc::new(AtomicU32::new(OPUS_SR));
+        mix.lock().unwrap().insert("p".into(), std::iter::repeat_n(8000i16, 48000).collect());
+        gains.set_peer("p", 0.5);
+
+        let (m2, p2, g2, r2, s2) = (mix.clone(), play.clone(), gains.clone(), radio.clone(), stop.clone());
+        let t = std::thread::spawn(move || mixer_loop(m2, p2, out_rate, g2, r2, s2));
+        std::thread::sleep(Duration::from_millis(150));
+        let samples: Vec<i16> = play.lock().unwrap().iter().copied().collect();
+        stop.store(true, Ordering::SeqCst);
+        t.join().unwrap();
+
+        let target = OPUS_SR as usize * 60 / 1000;
+        assert!(samples.len() >= target && samples.len() <= target + FRAME * 2, "ring len {}", samples.len());
+        // 8000 * 0.5 gain = 4000 → tanh(4000/32768) * 32767 ≈ 3980.
+        let expect = ((4000.0f32 / 32768.0).tanh() * 32767.0) as i16;
+        let got = samples[samples.len() / 2];
+        assert!((got as i32 - expect as i32).abs() <= 2, "got {got}, expected ≈{expect}");
+    }
+
+    #[test]
+    fn mixer_with_master_muted_outputs_silence() {
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
+        let gains = Arc::new(Gains::new());
+        gains.set_master(0.0);
+        let radio = Arc::new(Mutex::new(RadioCfg::default()));
+        let stop = flag(false);
+        mix.lock().unwrap().insert("p".into(), std::iter::repeat_n(20000i16, 48000).collect());
+
+        let (m2, p2, g2, r2, s2) = (mix.clone(), play.clone(), gains.clone(), radio.clone(), stop.clone());
+        let t = std::thread::spawn(move || mixer_loop(m2, p2, Arc::new(AtomicU32::new(OPUS_SR)), g2, r2, s2));
+        std::thread::sleep(Duration::from_millis(100));
+        let silent = play.lock().unwrap().iter().all(|&s| s == 0);
+        let n = play.lock().unwrap().len();
+        stop.store(true, Ordering::SeqCst);
+        t.join().unwrap();
+        assert!(n > 0 && silent, "muted master still produced audio");
+    }
+
+    /// The mixer must honour a live output-rate change: at 24 kHz the ring
+    /// target halves and the 48 kHz mix is downsampled into it.
+    #[test]
+    fn mixer_retunes_to_a_new_output_rate() {
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
+        let stop = flag(false);
+        let out_rate = Arc::new(AtomicU32::new(24000));
+        mix.lock().unwrap().insert("p".into(), std::iter::repeat_n(1000i16, 48000).collect());
+        let (m2, p2, s2, o2) = (mix.clone(), play.clone(), stop.clone(), out_rate.clone());
+        let t = std::thread::spawn(move || {
+            mixer_loop(m2, p2, o2, Arc::new(Gains::new()), Arc::new(Mutex::new(RadioCfg::default())), s2)
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let n = play.lock().unwrap().len();
+        stop.store(true, Ordering::SeqCst);
+        t.join().unwrap();
+        let target = 24000 * 60 / 1000;
+        assert!(n >= target && n < target + FRAME, "24 kHz ring len {n}");
+    }
+
+    fn loud_tone(n: usize) -> VecDeque<i16> {
+        (0..n)
+            .map(|i| ((2.0 * std::f32::consts::PI * 440.0 * i as f32 / OPUS_SR as f32).sin() * 12000.0) as i16)
+            .collect()
+    }
+
+    fn drain_count(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Bytes>) -> usize {
+        let mut n = 0;
+        while rx.try_recv().is_ok() {
+            n += 1;
+        }
+        n
+    }
+
+    /// One encoder thread, three regimes: transmitting yields Opus frames;
+    /// monitoring routes the mic to the local "self" queue and sends nothing;
+    /// DTX drops silent frames.
+    #[test]
+    fn encode_loop_sends_only_while_transmitting_and_not_monitoring() {
+        let cap: Buf = Arc::new(Mutex::new(VecDeque::new()));
+        let in_rate = Arc::new(AtomicU32::new(OPUS_SR));
+        let transmit = flag(true);
+        let (opus_tx, mut opus_rx) = unbounded_channel::<Bytes>();
+        let dsp = Arc::new(Mutex::new(DspConfig { gate: false, ..DspConfig::default() }));
+        let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
+        let monitor = flag(false);
+        let stop = flag(false);
+        let bitrate = Arc::new(AtomicU32::new(0));
+        let dtx = flag(false);
+        let (c2, r2, t2, d2, m2, mo2, s2, b2, x2) = (
+            cap.clone(), in_rate.clone(), transmit.clone(), dsp.clone(), mix.clone(),
+            monitor.clone(), stop.clone(), bitrate.clone(), dtx.clone(),
+        );
+        let t = std::thread::spawn(move || encode_loop(c2, r2, t2, opus_tx, d2, m2, mo2, s2, b2, x2));
+
+        // 1 s of tone while transmitting → ~50 frames (RNNoise eats a little lag).
+        cap.lock().unwrap().extend(loud_tone(48000));
+        std::thread::sleep(Duration::from_millis(400));
+        let sent = drain_count(&mut opus_rx);
+        assert!(sent >= 40, "expected ~50 Opus frames, got {sent}");
+        assert!(!mix.lock().unwrap().contains_key("self"), "self-monitor leaked without monitor");
+
+        // Monitoring: nothing leaves, the mic shows up locally as "self".
+        monitor.store(true, Ordering::SeqCst);
+        cap.lock().unwrap().extend(loud_tone(48000));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(drain_count(&mut opus_rx), 0, "frames sent while monitoring");
+        let self_len = mix.lock().unwrap().get("self").map(|b| b.len()).unwrap_or(0);
+        assert!(self_len > 0 && self_len <= 9600, "self queue {self_len}");
+        monitor.store(false, Ordering::SeqCst);
+
+        // Flush the tone's tail out of the denoiser/compressor state with DTX
+        // still off (those frames are sent and discarded here) …
+        cap.lock().unwrap().extend(std::iter::repeat_n(0i16, 24000));
+        std::thread::sleep(Duration::from_millis(300));
+        drain_count(&mut opus_rx);
+        // … then DTX on + silence in → no packets. Then a tone → packets again.
+        dtx.store(true, Ordering::SeqCst);
+        bitrate.store(14_000, Ordering::SeqCst);
+        cap.lock().unwrap().extend(std::iter::repeat_n(0i16, 48000));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(drain_count(&mut opus_rx), 0, "silent frames sent despite DTX");
+        cap.lock().unwrap().extend(loud_tone(48000));
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(drain_count(&mut opus_rx) >= 40, "tone not sent in low-bandwidth mode");
+
+        // Not transmitting: input is consumed but nothing is encoded.
+        transmit.store(false, Ordering::SeqCst);
+        cap.lock().unwrap().extend(loud_tone(48000));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(drain_count(&mut opus_rx), 0);
+        assert!(cap.lock().unwrap().is_empty(), "capture buffer not drained while idle");
+
+        stop.store(true, Ordering::SeqCst);
+        t.join().unwrap();
+    }
+
+    /// A device switch publishes a new capture rate; the encoder must retune
+    /// its resampler so 20 ms of input still becomes one 20 ms frame.
+    #[test]
+    fn encode_loop_follows_a_live_capture_rate_change() {
+        let cap: Buf = Arc::new(Mutex::new(VecDeque::new()));
+        let in_rate = Arc::new(AtomicU32::new(OPUS_SR));
+        let (opus_tx, mut opus_rx) = unbounded_channel::<Bytes>();
+        let stop = flag(false);
+        let (c2, r2, s2) = (cap.clone(), in_rate.clone(), stop.clone());
+        let t = std::thread::spawn(move || {
+            encode_loop(
+                c2, r2, flag(true), opus_tx,
+                Arc::new(Mutex::new(DspConfig { gate: false, ..DspConfig::default() })),
+                Arc::new(Mutex::new(HashMap::new())), flag(false), s2,
+                Arc::new(AtomicU32::new(0)), flag(false),
+            )
+        });
+        // Switch to a 96 kHz device: 2 s of 96 kHz samples is still 1 s of audio.
+        in_rate.store(96000, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(20));
+        cap.lock().unwrap().extend(loud_tone(96000));
+        std::thread::sleep(Duration::from_millis(500));
+        let n = drain_count(&mut opus_rx);
+        stop.store(true, Ordering::SeqCst);
+        t.join().unwrap();
+        assert!((40..=52).contains(&n), "96 kHz input should yield ~50 frames, got {n}");
     }
 }

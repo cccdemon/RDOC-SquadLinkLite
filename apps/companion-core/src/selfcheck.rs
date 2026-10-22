@@ -134,3 +134,71 @@ async fn loopback_probe(a: Arc<RTCPeerConnection>, b: Arc<RTCPeerConnection>) ->
 fn sdp_has_srflx(d: &RTCSessionDescription) -> bool {
     d.sdp.contains("typ srflx")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn desc(sdp: &str) -> RTCSessionDescription {
+        let mut d = RTCSessionDescription::default();
+        d.sdp = sdp.to_string();
+        d
+    }
+
+    #[test]
+    fn srflx_is_detected_only_from_a_server_reflexive_candidate_line() {
+        assert!(sdp_has_srflx(&desc("v=0\r\na=candidate:2 1 udp 1694498815 203.0.113.9 50001 typ srflx raddr 10.0.0.1 rport 1\r\n")));
+        assert!(!sdp_has_srflx(&desc("v=0\r\na=candidate:1 1 udp 2130706431 10.0.0.1 1 typ host\r\n")));
+        assert!(!sdp_has_srflx(&desc("v=0\r\na=candidate:3 1 udp 1 1.2.3.4 1 typ relay\r\n")));
+        assert!(!sdp_has_srflx(&desc("")));
+    }
+
+    #[test]
+    fn result_serializes_as_four_flat_booleans() {
+        let r = SelfCheck { signaling: true, can_send: false, can_receive: true, stun: false };
+        let v: serde_json::Value = serde_json::to_value(r).unwrap();
+        assert_eq!(v, serde_json::json!({"signaling": true, "can_send": false, "can_receive": true, "stun": false}));
+    }
+
+    #[test]
+    fn probe_config_asks_a_public_stun_server() {
+        let c = config();
+        assert_eq!(c.ice_servers.len(), 1);
+        assert!(c.ice_servers[0].urls[0].starts_with("stun:"));
+        assert!(c.ice_servers[0].username.is_empty(), "STUN needs no credentials");
+    }
+
+    /// The echo probe over two loopback PCs — host candidates only, no STUN,
+    /// no internet. Send and receive must both prove out; without a STUN
+    /// server there is no reflexive candidate, so `stun` is false.
+    #[tokio::test]
+    async fn loopback_probe_round_trips_without_any_network() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let api = crate::build_api().unwrap();
+        let a = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let b = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let r = tokio::time::timeout(Duration::from_secs(20), loopback_probe(a.clone(), b.clone()))
+            .await
+            .expect("probe hung")
+            .unwrap();
+        let _ = a.close().await;
+        let _ = b.close().await;
+        assert_eq!(r, (true, true, false), "(can_send, can_receive, stun)");
+    }
+
+    /// Both PCs are closed again even when the probe bails out early, so a
+    /// failed self-check leaks no sockets.
+    #[tokio::test]
+    async fn probe_failure_still_closes_both_peer_connections() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let api = crate::build_api().unwrap();
+        let a = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let b = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await.unwrap());
+        let _ = a.close().await; // a closed PC cannot create a data channel → early `?`
+        let r = loopback_probe(a.clone(), b.clone()).await;
+        assert!(r.is_err());
+        let _ = b.close().await;
+        assert_eq!(a.connection_state(), webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed);
+        assert_eq!(b.connection_state(), webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed);
+    }
+}
