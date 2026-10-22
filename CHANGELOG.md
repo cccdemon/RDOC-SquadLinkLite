@@ -3,9 +3,10 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
-## Unveröffentlicht
+## v0.4.0 — 2026-10-22
 
-Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
+Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`), plus
+der Bruch mit älteren Versionen.
 
 ### Breaking
 - **Alle Teilnehmer müssen auf diese Version aktualisieren.** Ab jetzt gibt es
@@ -91,6 +92,20 @@ Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
 - **Windows:** Stream-Deck-Sprechtaste und Tastatur-Sprechtaste arbeiten
   jetzt zusammen: Loslassen der einen beendet das Senden nicht, solange die
   andere gehalten wird. Ungetestet auf Windows, Rückmeldung erwünscht.
+
+### Intern
+- **Eine Testsuite für alles.** `bash e2e/test-all.sh` fährt Clippy (Warnungen
+  sind Fehler) und Unit-Tests für Protokoll, Server, Engine und Tauri-Shell,
+  dazu `tsc` + `vitest` für die Oberfläche und `node --test` + den
+  Fake-Deck-Harness für das Stream-Deck-Plugin — lokal in Docker oder auf
+  einem CI-Runner (`.github/workflows/test.yml`, `.gitlab-ci.yml`). Die
+  Oberfläche hat damit zum ersten Mal Unit-Tests; ihre reinen Hilfsfunktionen
+  liegen jetzt in `src/lib/`.
+- Toter Code und alle Clippy-Funde entfernt; der Windows-Tastenkombinations-
+  Code ist sauber auf Windows begrenzt.
+- Die blockierende `pnpm audit`-Prüfung im Windows-Build war rot (Advisories
+  in `vite` und drei transitiven Paketen) und hätte den Release-Build
+  verhindert; die Pakete sind auf bereinigte Versionen gepinnt.
 
 ## v0.3.4 — 2026-08-11
 
