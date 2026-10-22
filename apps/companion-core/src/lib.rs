@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
-use protocol::{ClientMsg, ServerMsg};
+use protocol::{ClientMsg, ServerMsg, ERR_ID_IN_USE, ERR_PROTOCOL_MISMATCH, PROTOCOL_VERSION};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use webrtc::api::interceptor_registry::register_default_interceptors;
@@ -631,23 +631,27 @@ pub(crate) fn build_api() -> Result<API> {
 /// the server-signaled mesh and the serverless 1:1 mode. Returns the transmit
 /// flag, the encoded-Opus receiver (feed to the local track writer), and the
 /// decode sender (feed remote RTP payloads in).
-pub(crate) fn setup_audio(
-    in_name: Option<String>,
-    out_name: Option<String>,
-) -> Result<(
+/// Everything `setup_audio` hands back, in order: transmit flag, encoded-frame
+/// receiver, decoded-frame sender, gains, DSP config, radio effect
+/// ("Funk-Effekt"), mic self-check toggle, shutdown flag for the audio threads,
+/// encoder bitrate (0 = auto; low-bw mode), app-level DTX toggle, live device
+/// switch, local "Funk-Klick" earcon.
+pub(crate) type AudioHandles = (
     Arc<AtomicBool>,
     mpsc::UnboundedReceiver<Bytes>,
     mpsc::UnboundedSender<(String, Bytes)>,
     Arc<audio::Gains>,
     Arc<Mutex<audio::DspConfig>>,
-    Arc<Mutex<audio::RadioCfg>>, // receive-bus radio effect ("Funk-Effekt")
-    Arc<AtomicBool>, // mic self-check (monitor) toggle
-    Arc<AtomicBool>, // shutdown flag for the audio threads
-    Arc<AtomicU32>,  // encoder bitrate (0 = auto; low-bw mode)
-    Arc<AtomicBool>, // app-level DTX toggle
-    std::sync::mpsc::Sender<audio::DevCmd>, // live input/output device switch
-    Arc<audio::Earcon>, // local "Funk-Klick" on incoming transmission start
-)> {
+    Arc<Mutex<audio::RadioCfg>>,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU32>,
+    Arc<AtomicBool>,
+    std::sync::mpsc::Sender<audio::DevCmd>,
+    Arc<audio::Earcon>,
+);
+
+pub(crate) fn setup_audio(in_name: Option<String>, out_name: Option<String>) -> Result<AudioHandles> {
     let cap: Buf = Arc::new(Mutex::new(VecDeque::new()));
     let play: Buf = Arc::new(Mutex::new(VecDeque::new()));
     let mix: MixMap = Arc::new(Mutex::new(HashMap::new()));
@@ -841,11 +845,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
         hex::encode(b)
     };
     out.send(ClientMsg::Join {
+        proto: PROTOCOL_VERSION,
         room: cfg.room.clone(),
         user_id: cfg.user_id.clone(),
         name: cfg.name.clone(),
         token: cfg.token.clone(),
-        secret: Some(join_secret.clone()),
+        secret: join_secret.clone(),
     })?;
     sink(UiEvent::Status { connected: true, transmitting: false });
 
@@ -1000,11 +1005,12 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                         Ok(sig2) => {
                             let o2 = sig2.out.clone();
                             let _ = o2.send(ClientMsg::Join {
+                                proto: PROTOCOL_VERSION,
                                 room: rc_room.clone(),
                                 user_id: rc_user.clone(),
                                 name: rc_name.clone(),
                                 token: rc_token.clone(),
-                                secret: Some(rc_secret.clone()),
+                                secret: rc_secret.clone(),
                             });
                             cur_out = Some(o2);
                             cur_in = Some(sig2.incoming);
@@ -1158,10 +1164,15 @@ pub async fn start(cfg: EngineConfig, sink: Sink) -> Result<Engine> {
                             break;
                         }
                         ServerMsg::Error { code, message } => {
-                            if code == "id-in-use" {
-                                // Terminal like RoomFull: the server closes the socket,
-                                // and a backoff reconnect would be refused forever.
-                                sink(UiEvent::Log { text: "Dieser Name ist in der Sitzung bereits vergeben - bitte mit anderem Namen neu beitreten.".into() });
+                            // Terminal like RoomFull: the server closes the socket,
+                            // and a backoff reconnect would be refused forever.
+                            let terminal = match code.as_str() {
+                                ERR_ID_IN_USE => Some("Dieser Name ist in der Sitzung bereits vergeben - bitte mit anderem Namen neu beitreten."),
+                                ERR_PROTOCOL_MISMATCH => Some("Diese subraum-Version passt nicht zum Server - bitte subraum aktualisieren."),
+                                _ => None,
+                            };
+                            if let Some(text) = terminal {
+                                sink(UiEvent::Log { text: format!("{text} ({code}: {message})") });
                                 mesh.close_all().await;
                                 sink(UiEvent::Status { connected: false, transmitting: false });
                                 break;

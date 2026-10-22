@@ -160,7 +160,8 @@ kleinere userId**; die größere wartet auf das Offer. Verhindert doppelte/kolli
 
 **Client → Server**
 ```jsonc
-{ "t": "join",       "room": "op-42", "userId": "A", "name": "Falcon" }
+{ "t": "join",       "proto": 2, "room": "op-42", "user_id": "A", "name": "Falcon", "token": "…", "secret": "…" }
+// proto = protocol::PROTOCOL_VERSION; abweichend → Error "protocol-mismatch", Socket zu. Keine Kompatibilität zu älteren Builds.
 { "t": "offer",      "to": "B", "sdp": "…" }
 { "t": "answer",     "to": "B", "sdp": "…" }
 { "t": "ice",        "to": "B", "candidate": "…" }

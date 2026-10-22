@@ -37,7 +37,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
-use protocol::{ClientMsg, PeerInfo, ServerMsg};
+use protocol::{ClientMsg, PeerInfo, ServerMsg, ERR_ID_IN_USE, ERR_PROTOCOL_MISMATCH, PROTOCOL_VERSION};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
@@ -82,6 +82,27 @@ const WS_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn len_ok(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max
+}
+
+/// True when a raw frame carries `"t":"join"`, regardless of whether it
+/// deserializes as the current `ClientMsg::Join`. Used to classify a join
+/// from a different protocol generation before giving up on the socket.
+fn is_join_frame(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("t").and_then(|t| t.as_str()).map(|t| t == "join"))
+        .unwrap_or(false)
+}
+
+/// The terminal error for a client on another protocol generation. `proto`
+/// is what the client sent, `None` when its join did not even deserialize
+/// (pre-0.4.0 builds carry no `proto` at all).
+fn protocol_mismatch_error(proto: Option<u32>) -> ServerMsg {
+    let got = proto.map(|p| p.to_string()).unwrap_or_else(|| "none".into());
+    ServerMsg::Error {
+        code: ERR_PROTOCOL_MISMATCH.into(),
+        message: format!("protocol {got} not supported, server speaks {PROTOCOL_VERSION}: update subraum"),
+    }
 }
 
 /// Minimal HTML-escape for any value reflected into server-rendered HTML.
@@ -141,7 +162,7 @@ fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
         if let Some(last) = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').map(str::trim).filter(|s| !s.is_empty()).last())
+            .and_then(|s| s.split(',').map(str::trim).rfind(|s| !s.is_empty()))
         {
             return last.to_string();
         }
@@ -188,8 +209,9 @@ fn flag_on(v: &str) -> bool {
 struct PeerHandle {
     name: String,
     tx: mpsc::Sender<ServerMsg>,
-    /// Join secret of this connection; None for pre-secret clients.
-    secret: Option<String>,
+    /// Join secret of this connection: only a later join presenting the same
+    /// value may supersede it.
+    secret: String,
 }
 
 type Room = HashMap<String, PeerHandle>; // user_id -> handle
@@ -932,15 +954,13 @@ fn render_changelog(md: &str) -> String {
     // inserted tags contain no backticks/asterisks, so each loop terminates).
     fn inline(s: &str) -> String {
         let mut out = esc(s);
-        loop {
-            let Some(a) = out.find('`') else { break };
+        while let Some(a) = out.find('`') {
             let Some(rel) = out[a + 1..].find('`') else { break };
             let b = a + 1 + rel;
             let code = out[a + 1..b].to_string();
             out.replace_range(a..=b, &format!("<code>{code}</code>"));
         }
-        loop {
-            let Some(a) = out.find("**") else { break };
+        while let Some(a) = out.find("**") {
             let Some(rel) = out[a + 2..].find("**") else { break };
             let b = a + 2 + rel;
             let strong = out[a + 2..b].to_string();
@@ -1073,13 +1093,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         let cmsg: ClientMsg = match serde_json::from_str(&text) {
             Ok(m) => m,
             Err(e) => {
+                // A join that does not even deserialize is almost always an
+                // older build (no `proto`/`secret`). Name the real problem so
+                // the user sees "update" instead of a serde field error.
+                if me.is_none() && is_join_frame(&text) {
+                    let _ = tx.try_send(protocol_mismatch_error(None));
+                    break;
+                }
                 let _ = tx.try_send(ServerMsg::Error { code: "bad_json".into(), message: e.to_string() });
                 continue;
             }
         };
 
         match cmsg {
-            ClientMsg::Join { room, user_id, name, token, secret } => {
+            ClientMsg::Join { proto, room, user_id, name, token, secret } => {
                 if me.is_some() {
                     let _ = tx.try_send(ServerMsg::Error {
                         code: "already_joined".into(),
@@ -1087,12 +1114,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     });
                     continue;
                 }
+                if proto != PROTOCOL_VERSION {
+                    let _ = tx.try_send(protocol_mismatch_error(Some(proto)));
+                    break;
+                }
                 // Bound all client-supplied fields before doing anything with them.
                 if !len_ok(&room, MAX_ID)
                     || !len_ok(&user_id, MAX_ID)
                     || !len_ok(&name, MAX_NAME)
                     || token.as_deref().map(|t| t.len() > MAX_TOKEN).unwrap_or(false)
-                    || secret.as_deref().map(|t| t.len() > MAX_SECRET).unwrap_or(false)
+                    || !len_ok(&secret, MAX_SECRET)
                 {
                     let _ = tx.try_send(ServerMsg::Error {
                         code: "bad_input".into(),
@@ -1117,16 +1148,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         drop(rooms);
                         break;
                     }
-                    // Supersede only a connection that is ours (same secret) or a
-                    // pre-secret client (no secret stored); anyone else holding
-                    // the id is refused.
-                    let takeover_ok = match r.get(&user_id) {
-                        None => true,
-                        Some(old) => old.secret.is_none() || old.secret == secret,
-                    };
+                    // Supersede only a connection that is ours (same secret);
+                    // anyone else holding the id is refused.
+                    let takeover_ok = r.get(&user_id).map(|old| old.secret == secret).unwrap_or(true);
                     if !takeover_ok {
                         let _ = tx.try_send(ServerMsg::Error {
-                            code: "id-in-use".into(),
+                            code: ERR_ID_IN_USE.into(),
                             message: "user_id already taken in this room".into(),
                         });
                         drop(rooms);
@@ -1212,7 +1239,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 if let Some((room, from)) = &me {
                     {
                         let mut rekeys = state.rekeys.lock().unwrap();
-                        if rekeys.get(room).map_or(false, |t| now.duration_since(*t) < REKEY_COOLDOWN) {
+                        if rekeys.get(room).is_some_and(|t| now.duration_since(*t) < REKEY_COOLDOWN) {
                             continue;
                         }
                         rekeys.insert(room.clone(), now);
@@ -1237,7 +1264,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     if let Some((room, user_id)) = me {
         let mut rooms = state.rooms.lock().unwrap();
         if let Some(r) = rooms.get_mut(&room) {
-            let mine = r.get(&user_id).map_or(false, |h| h.tx.same_channel(&tx));
+            let mine = r.get(&user_id).is_some_and(|h| h.tx.same_channel(&tx));
             if mine {
                 r.remove(&user_id);
                 for h in r.values() {
@@ -1322,26 +1349,40 @@ mod ws_tests {
         }
     }
 
-    /// Connect and join; returns once the Roster has arrived.
+    /// Connect and join; returns once the Roster has arrived. The secret is
+    /// derived from the user_id, so a second `join` for the same id is "the
+    /// same client reconnecting".
     async fn join(url: &str, room: &str, user_id: &str) -> Client {
-        join_with(url, room, user_id, None).await
+        join_with(url, room, user_id, &format!("secret-{user_id}")).await
     }
 
-    async fn join_with(url: &str, room: &str, user_id: &str, secret: Option<&str>) -> Client {
-        let (mut c, _) = connect_async(url).await.unwrap();
-        let j = serde_json::to_string(&ClientMsg::Join {
+    fn join_msg(room: &str, user_id: &str, secret: &str) -> ClientMsg {
+        ClientMsg::Join {
+            proto: PROTOCOL_VERSION,
             room: room.into(),
             user_id: user_id.into(),
             name: user_id.into(),
             token: None,
-            secret: secret.map(str::to_string),
-        })
-        .unwrap();
+            secret: secret.into(),
+        }
+    }
+
+    async fn join_with(url: &str, room: &str, user_id: &str, secret: &str) -> Client {
+        let (mut c, _) = connect_async(url).await.unwrap();
+        let j = serde_json::to_string(&join_msg(room, user_id, secret)).unwrap();
         c.send(WsMsg::Text(j)).await.unwrap();
         match next_msg(&mut c).await {
             Some(ServerMsg::Roster { .. }) => c,
             other => panic!("expected Roster, got {other:?}"),
         }
+    }
+
+    /// Send a raw text frame on a fresh socket and return the first reply.
+    async fn send_raw(url: &str, frame: &str) -> (Client, Option<ServerMsg>) {
+        let (mut c, _) = connect_async(url).await.unwrap();
+        c.send(WsMsg::Text(frame.into())).await.unwrap();
+        let first = next_msg(&mut c).await;
+        (c, first)
     }
 
     fn member_present(state: &AppState, room: &str, user_id: &str) -> bool {
@@ -1351,13 +1392,11 @@ mod ws_tests {
     #[tokio::test]
     async fn second_join_with_wrong_secret_is_rejected_with_id_in_use() {
         let (url, state) = spawn_server(Duration::from_secs(30)).await;
-        let mut a = join_with(&url, "r", "u", Some("s1")).await;
-        let (mut b, _) = connect_async(&url).await.unwrap();
-        b.send(WsMsg::Text(serde_json::to_string(&ClientMsg::Join {
-            room: "r".into(), user_id: "u".into(), name: "u".into(), token: None, secret: Some("s2".into()),
-        }).unwrap())).await.unwrap();
-        match next_msg(&mut b).await {
-            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "id-in-use"),
+        let mut a = join_with(&url, "r", "u", "s1").await;
+        let frame = serde_json::to_string(&join_msg("r", "u", "s2")).unwrap();
+        let (mut b, first) = send_raw(&url, &frame).await;
+        match first {
+            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, ERR_ID_IN_USE),
             other => panic!("expected id-in-use, got {other:?}"),
         }
         assert!(next_msg(&mut b).await.is_none(), "socket must be closed after id-in-use");
@@ -1369,31 +1408,105 @@ mod ws_tests {
     #[tokio::test]
     async fn second_join_with_matching_secret_supersedes() {
         let (url, _) = spawn_server(Duration::from_secs(30)).await;
-        let mut a = join_with(&url, "r", "u", Some("s1")).await;
-        let _b = join_with(&url, "r", "u", Some("s1")).await;
+        let mut a = join_with(&url, "r", "u", "s1").await;
+        let _b = join_with(&url, "r", "u", "s1").await;
         match next_msg(&mut a).await {
             Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "superseded"),
             other => panic!("{other:?}"),
         }
     }
 
+    /// A 0.3.x build sends a join with no `proto` and no `secret`. It must be
+    /// told to update (not "bad_json") and the socket must close.
     #[tokio::test]
-    async fn legacy_holder_without_secret_is_still_superseded() {
+    async fn pre_v2_join_is_refused_with_protocol_mismatch() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let old = r#"{"t":"join","room":"r","user_id":"u","name":"u"}"#;
+        let (mut c, first) = send_raw(&url, old).await;
+        match first {
+            Some(ServerMsg::Error { code, message }) => {
+                assert_eq!(code, ERR_PROTOCOL_MISMATCH);
+                assert!(message.contains("update"), "{message}");
+                assert!(message.contains("none"), "{message}");
+            }
+            other => panic!("expected protocol-mismatch, got {other:?}"),
+        }
+        assert!(next_msg(&mut c).await.is_none(), "socket must be closed");
+        assert!(!member_present(&state, "r", "u"));
+    }
+
+    /// A join with an explicit but foreign `proto` (older or newer) is refused
+    /// the same way, and the room never learns of it.
+    #[tokio::test]
+    async fn wrong_proto_is_refused_and_not_announced() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let mut observer = join(&url, "r", "w").await;
+        for proto in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+            let frame = format!(
+                r#"{{"t":"join","proto":{proto},"room":"r","user_id":"u","name":"u","secret":"s"}}"#
+            );
+            let (mut c, first) = send_raw(&url, &frame).await;
+            match first {
+                Some(ServerMsg::Error { code, message }) => {
+                    assert_eq!(code, ERR_PROTOCOL_MISMATCH);
+                    assert!(message.contains(&proto.to_string()), "{message}");
+                }
+                other => panic!("expected protocol-mismatch, got {other:?}"),
+            }
+            assert!(next_msg(&mut c).await.is_none(), "socket must be closed");
+        }
+        assert!(!member_present(&state, "r", "u"));
+        assert!(tokio::time::timeout(Duration::from_millis(300), observer.next()).await.is_err());
+    }
+
+    /// Garbage that is not a join still gets the generic bad_json and keeps the
+    /// socket open — only a join-shaped frame is classified as "too old".
+    #[tokio::test]
+    async fn non_join_garbage_is_bad_json_not_protocol_mismatch() {
         let (url, _) = spawn_server(Duration::from_secs(30)).await;
-        let mut a = join(&url, "r", "u").await; // 0.3.4 client, no secret
-        let _b = join_with(&url, "r", "u", Some("s1")).await; // new client takes over
-        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::Error { code, .. }) if code == "superseded"));
+        let (mut c, first) = send_raw(&url, r#"{"t":"offer"}"#).await;
+        match first {
+            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "bad_json"),
+            other => panic!("expected bad_json, got {other:?}"),
+        }
+        // Socket still usable: a proper join now succeeds.
+        let j = serde_json::to_string(&join_msg("r", "u", "s")).unwrap();
+        c.send(WsMsg::Text(j)).await.unwrap();
+        assert!(matches!(next_msg(&mut c).await, Some(ServerMsg::Roster { .. })));
     }
 
     #[tokio::test]
-    async fn legacy_joiner_without_secret_cannot_take_a_secured_id() {
-        let (url, _) = spawn_server(Duration::from_secs(30)).await;
-        let _a = join_with(&url, "r", "u", Some("s1")).await;
-        let (mut b, _) = connect_async(&url).await.unwrap();
-        b.send(WsMsg::Text(serde_json::to_string(&ClientMsg::Join {
-            room: "r".into(), user_id: "u".into(), name: "u".into(), token: None, secret: None,
-        }).unwrap())).await.unwrap();
-        assert!(matches!(next_msg(&mut b).await, Some(ServerMsg::Error { code, .. }) if code == "id-in-use"));
+    async fn empty_secret_is_bad_input() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let frame = serde_json::to_string(&join_msg("r", "u", "")).unwrap();
+        let (_c, first) = send_raw(&url, &frame).await;
+        assert!(matches!(first, Some(ServerMsg::Error { code, .. }) if code == "bad_input"));
+        assert!(!member_present(&state, "r", "u"));
+    }
+
+    #[test]
+    fn is_join_frame_classifies_by_tag_only() {
+        assert!(is_join_frame(r#"{"t":"join"}"#));
+        assert!(is_join_frame(r#"{"t":"join","room":"r","user_id":"u","name":"n"}"#));
+        assert!(!is_join_frame(r#"{"t":"offer","to":"x","sdp":""}"#));
+        assert!(!is_join_frame("not json"));
+        assert!(!is_join_frame(r#"["t","join"]"#));
+    }
+
+    #[test]
+    fn protocol_mismatch_error_names_both_versions() {
+        match protocol_mismatch_error(Some(1)) {
+            ServerMsg::Error { code, message } => {
+                assert_eq!(code, ERR_PROTOCOL_MISMATCH);
+                assert!(message.starts_with("protocol 1 "), "{message}");
+                assert!(message.contains(&format!("speaks {PROTOCOL_VERSION}")), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match protocol_mismatch_error(None) {
+            ServerMsg::Error { message, .. } => assert!(message.starts_with("protocol none "), "{message}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A client reconnects while its old socket is still half-open. The old

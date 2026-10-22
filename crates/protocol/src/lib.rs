@@ -7,8 +7,32 @@
 //! The InitConnection server is a dumb relay: it routes `offer`/`answer`/`ice`
 //! by `to`, keeps the roster, enforces auth + cap, and mints TURN creds. It
 //! never sees media. Glare (who offers) is decided client-side from user ids.
+//!
+//! Compatibility policy: **none across protocol versions.** Every `Join`
+//! carries [`PROTOCOL_VERSION`]; the server refuses any other value with the
+//! [`ERR_PROTOCOL_MISMATCH`] error and closes the socket. Any change to the
+//! wire format (new/removed/retyped field, new variant a peer must understand)
+//! bumps the constant — there are no `#[serde(default)]` escape hatches for
+//! older builds.
 
 use serde::{Deserialize, Serialize};
+
+/// Wire-format generation. Bump on any incompatible change; the server
+/// refuses a `Join` whose `proto` differs.
+///
+/// - 1: implicit — every build before 0.4.0 (no `proto` field, optional
+///   `secret`, bare `ChatMsg` fallback on the DataChannel).
+/// - 2: 0.4.0 — `proto` + `secret` mandatory on `Join`; DataChannel frames
+///   are `CtrlMsg` only.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// `ServerMsg::Error.code` for a `Join` from a different protocol generation.
+/// Terminal for the client: reconnecting will not help, only an update.
+pub const ERR_PROTOCOL_MISMATCH: &str = "protocol-mismatch";
+
+/// `ServerMsg::Error.code` when the `user_id` is held by a connection that
+/// presented a different `secret`. Terminal: pick another id.
+pub const ERR_ID_IN_USE: &str = "id-in-use";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
@@ -26,12 +50,12 @@ pub struct ChatMsg {
 
 /// Control envelope carried over the per-peer WebRTC DataChannel (mesh mode).
 /// The server never sees this — named channels (frequencies) are a pure
-/// client-side overlay. Receivers parse `CtrlMsg` first and fall back to a bare
-/// `ChatMsg` for one version's backward-compat read.
+/// client-side overlay. Every DataChannel frame is a `CtrlMsg`; anything that
+/// does not parse as one is dropped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "kebab-case")]
 pub enum CtrlMsg {
-    /// A text-chat line (same payload as the legacy bare `ChatMsg`).
+    /// A text-chat line.
     Chat(ChatMsg),
     /// Sender announces its current channel (frequency) name. Matching is
     /// case-insensitive (trim + lowercase); peers only mix audio from senders
@@ -93,15 +117,16 @@ pub enum ClientMsg {
     /// First message on a connection. `token` is the room-auth token
     /// (required when the server runs with ROOM_AUTH_SECRET).
     Join {
+        /// Must equal [`PROTOCOL_VERSION`] or the server refuses the join.
+        proto: u32,
         room: String,
         user_id: String,
         name: String,
-        #[serde(default)]
+        /// Room-auth token; `None` only works against an open-auth (dev) server.
         token: Option<String>,
         /// Random per-connection value. The server lets a later connection
         /// supersede this user_id only when it presents the same secret.
-        #[serde(default)]
-        secret: Option<String>,
+        secret: String,
     },
     Offer { to: String, sdp: String },
     Answer { to: String, sdp: String },
@@ -173,23 +198,78 @@ mod tests {
     }
 
     #[test]
-    fn legacy_bare_chatmsg_still_parses() {
-        // A pre-CtrlMsg client sends a bare ChatMsg; the fallback path must read it.
-        let legacy = serde_json::to_string(&ChatMsg { text: "old".into(), ts: 1 }).unwrap();
-        assert!(serde_json::from_str::<CtrlMsg>(&legacy).is_err());
-        let c: ChatMsg = serde_json::from_str(&legacy).unwrap();
-        assert_eq!(c.text, "old");
+    fn bare_chatmsg_is_not_a_ctrl_msg() {
+        // Pre-0.4.0 clients sent a bare ChatMsg on the DataChannel. That frame
+        // must not parse as CtrlMsg — receivers drop it instead of reading it.
+        let bare = serde_json::to_string(&ChatMsg { text: "old".into(), ts: 1 }).unwrap();
+        assert!(serde_json::from_str::<CtrlMsg>(&bare).is_err());
     }
 
     #[test]
-    fn join_without_secret_deserializes_for_old_clients() {
-        let j = r#"{"t":"join","room":"r","user_id":"u","name":"n"}"#;
-        match serde_json::from_str::<ClientMsg>(j).unwrap() {
-            ClientMsg::Join { secret, token, .. } => {
-                assert!(secret.is_none());
-                assert!(token.is_none());
+    fn join_round_trips_with_proto_and_secret() {
+        let j = serde_json::to_string(&ClientMsg::Join {
+            proto: PROTOCOL_VERSION,
+            room: "r".into(),
+            user_id: "u".into(),
+            name: "n".into(),
+            token: Some("t".into()),
+            secret: "s".into(),
+        })
+        .unwrap();
+        assert!(j.contains("\"t\":\"join\""));
+        assert!(j.contains(&format!("\"proto\":{PROTOCOL_VERSION}")));
+        match serde_json::from_str::<ClientMsg>(&j).unwrap() {
+            ClientMsg::Join { proto, room, user_id, name, token, secret } => {
+                assert_eq!(proto, PROTOCOL_VERSION);
+                assert_eq!((room.as_str(), user_id.as_str(), name.as_str()), ("r", "u", "n"));
+                assert_eq!(token.as_deref(), Some("t"));
+                assert_eq!(secret, "s");
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn join_without_token_still_parses() {
+        // Open-auth dev servers take a join with no token; `null` and absent both work.
+        for j in [
+            r#"{"t":"join","proto":2,"room":"r","user_id":"u","name":"n","token":null,"secret":"s"}"#,
+            r#"{"t":"join","proto":2,"room":"r","user_id":"u","name":"n","secret":"s"}"#,
+        ] {
+            match serde_json::from_str::<ClientMsg>(j).unwrap() {
+                ClientMsg::Join { token, .. } => assert!(token.is_none()),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn pre_v2_join_does_not_deserialize() {
+        // A 0.3.x join (no proto, no secret) is a parse error, not a lenient default.
+        let old = r#"{"t":"join","room":"r","user_id":"u","name":"n"}"#;
+        assert!(serde_json::from_str::<ClientMsg>(old).is_err());
+        let no_secret = r#"{"t":"join","proto":2,"room":"r","user_id":"u","name":"n"}"#;
+        assert!(serde_json::from_str::<ClientMsg>(no_secret).is_err());
+        let no_proto = r#"{"t":"join","room":"r","user_id":"u","name":"n","secret":"s"}"#;
+        assert!(serde_json::from_str::<ClientMsg>(no_proto).is_err());
+    }
+
+    #[test]
+    fn client_and_server_tags_are_kebab_case() {
+        let j = serde_json::to_string(&ServerMsg::RoomFull { cap: 16 }).unwrap();
+        assert!(j.contains("\"t\":\"room-full\""));
+        let j = serde_json::to_string(&ServerMsg::PeerJoined { user_id: "u".into(), name: "n".into() }).unwrap();
+        assert!(j.contains("\"t\":\"peer-joined\""));
+        let j = serde_json::to_string(&ClientMsg::Rekey).unwrap();
+        assert_eq!(j, r#"{"t":"rekey"}"#);
+        let j = serde_json::to_string(&CtrlMsg::KemHello { kem_pk: "a".into(), x_pk: "b".into() }).unwrap();
+        assert!(j.contains("\"t\":\"kem-hello\""));
+    }
+
+    #[test]
+    fn error_codes_are_stable_strings() {
+        // Client and server compare these literally; a rename is a protocol change.
+        assert_eq!(ERR_PROTOCOL_MISMATCH, "protocol-mismatch");
+        assert_eq!(ERR_ID_IN_USE, "id-in-use");
     }
 }

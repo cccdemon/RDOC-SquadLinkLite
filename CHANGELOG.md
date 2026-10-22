@@ -7,6 +7,17 @@ Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
 Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
 
+### Breaking
+- **Alle Teilnehmer müssen auf diese Version aktualisieren.** Ab jetzt gibt es
+  keine Kompatibilität mehr zu älteren subraum-Versionen — weder zum Server
+  noch zwischen Mitspielern. Der Server weist eine ältere Version beim
+  Beitritt mit der Meldung „Diese subraum-Version passt nicht zum Server“ ab;
+  ein Mitspieler mit älterer Version würde in der Sitzung nicht gehört und
+  könnte nicht chatten. Technisch: Das Protokoll trägt jetzt eine
+  Versionsnummer (Generation 2), das Join-Geheimnis ist Pflicht, und der
+  Lesepfad für Chat-Nachrichten alter Versionen ist entfernt. Künftige
+  Protokolländerungen erhöhen die Nummer, ohne Übergangsphase.
+
 ### Neu
 - **Fingerabdruck pro Teilnehmer.** Für jeden Mitspieler zeigt subraum einen
   Fingerabdruck der verschlüsselten Verbindung. Vergleicht ihn über einen
@@ -17,8 +28,7 @@ Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`).
   zeigt, verbindet erst nach Bestätigung.
 - **Join-Geheimnis pro Verbindung.** Niemand kann mehr mit dem Namen eines
   anderen Mitglieds beitreten und dessen Verbindung übernehmen; der Server
-  meldet dann „Name bereits vergeben". Ältere Versionen ohne Geheimnis
-  funktionieren weiter.
+  meldet dann „Name bereits vergeben".
 
 ### Behoben
 - **Nach einem fehlgeschlagenen Verbindungsversuch blieb das Mikrofon offen.**

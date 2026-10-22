@@ -275,15 +275,9 @@ fn wire_ctrl(
                     dispatch_inner(&p, inner, &events, &chan);
                 }
                 Ok(_) => {}
-                Err(_) => {
-                    // Legacy bare ChatMsg fallback.
-                    if let Ok(mut c) = serde_json::from_slice::<ChatMsg>(&msg.data) {
-                        if c.text.chars().count() > crate::MAX_CHAT_CHARS {
-                            c.text = c.text.chars().take(crate::MAX_CHAT_CHARS).collect();
-                        }
-                        let _ = events.send(MeshEvent::Chat { from: p, text: c.text });
-                    }
-                }
+                // Not a CtrlMsg (e.g. a pre-0.4.0 bare ChatMsg): dropped. No
+                // cross-version compatibility on the DataChannel.
+                Err(_) => {}
             }
         })
     }));
@@ -768,19 +762,14 @@ async fn read_track(
     chan: Arc<ChanState>,
     room: Arc<RoomAudio>,
 ) {
-    loop {
-        match track.read_rtp().await {
-            Ok((pkt, _)) => {
-                // Channel RX-gate: only feed the decoder when this peer is tuned
-                // to the same channel as me. Off-channel audio is dropped here.
-                if !pkt.payload.is_empty() && chan.hears(&peer) {
-                    // Unseal the group-audio frame (raw passthrough pre-key).
-                    if let Some(opus) = room.open_inbound(&peer, &pkt.payload) {
-                        let _ = dtx.send((peer.clone(), Bytes::from(opus)));
-                    }
-                }
+    while let Ok((pkt, _)) = track.read_rtp().await {
+        // Channel RX-gate: only feed the decoder when this peer is tuned
+        // to the same channel as me. Off-channel audio is dropped here.
+        if !pkt.payload.is_empty() && chan.hears(&peer) {
+            // Unseal the group-audio frame (raw passthrough pre-key).
+            if let Some(opus) = room.open_inbound(&peer, &pkt.payload) {
+                let _ = dtx.send((peer.clone(), Bytes::from(opus)));
             }
-            Err(_) => break,
         }
     }
 }
