@@ -3,6 +3,18 @@
 All notable changes to subraum (formerly RDOC SquadLink Lite).
 Tags: `subraum-v*` (older releases: `squadlink-lite-v*`).
 
+## Unveröffentlicht
+
+### Intern
+- **Abhängigkeiten mit Sicherheitshinweisen aktualisiert** (Dependabot-Fund
+  nach dem 0.4.0-Push): `rustls` 0.23.46 (u. a. ein Downgrade des
+  Post-Quantum-Schlüsselaustauschs durch eine unauthentifizierte
+  ServerHello), `rustls-webpki`, `webpki-roots` (ausgemusterte emSign-
+  Zwischenzertifikate), `h2`, `anyhow`, `event-listener`, `aws-lc`; im
+  Icon-Werkzeug des Stream-Deck-Plugins `sharp` 0.35.5. Offen bleiben
+  `quick-xml` 0.39 und `glib` 0.18 — beides Abhängigkeiten von Tauri, ein
+  Fix braucht ein Tauri-Update.
+
 ## v0.4.0 — 2026-10-22
 
 Ergebnis eines vollständigen Code-Audits (`docs/AUDIT-2026-10-18.md`), plus
