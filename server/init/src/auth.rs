@@ -18,10 +18,17 @@ impl AuthConfig {
     /// opted into via `ALLOW_OPEN_AUTH=1` (dev). Otherwise a missing
     /// `ROOM_AUTH_SECRET` is a hard error so production never silently runs open.
     pub fn from_env() -> Result<Self, String> {
-        match std::env::var("ROOM_AUTH_SECRET") {
-            Ok(s) if !s.is_empty() => Ok(Self::Hmac(s.into_bytes())),
+        Self::from_values(std::env::var("ROOM_AUTH_SECRET").ok(), std::env::var("ALLOW_OPEN_AUTH").ok())
+    }
+
+    /// The decision behind `from_env`, on plain values: `secret` is
+    /// `ROOM_AUTH_SECRET`, `allow_open` is `ALLOW_OPEN_AUTH`. Split out so the
+    /// fail-closed rule can be tested without touching process environment.
+    fn from_values(secret: Option<String>, allow_open: Option<String>) -> Result<Self, String> {
+        match secret {
+            Some(s) if !s.is_empty() => Ok(Self::Hmac(s.into_bytes())),
             _ => {
-                let allow_open = std::env::var("ALLOW_OPEN_AUTH")
+                let allow_open = allow_open
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false);
                 if allow_open {
@@ -139,5 +146,75 @@ mod tests {
         assert!(!ct_eq(b"abc", b"abd"));
         assert!(!ct_eq(b"abc", b"ab")); // length mismatch short-circuits
         assert!(ct_eq(b"", b""));
+    }
+
+    /// The token IS HMAC-SHA256(secret, room) as lowercase hex — the `mint`
+    /// subcommand, FleetPlanner and anyone scripting invites rely on exactly
+    /// that formula, so pin it independently of `hmac_hex`.
+    #[test]
+    fn token_is_hmac_sha256_of_the_room_name() {
+        let mut mac = HmacSha256::new_from_slice(b"test-secret").unwrap();
+        mac.update(b"squad-abc");
+        let expected = hex::encode(mac.finalize().into_bytes());
+        assert_eq!(hmac().token_for("squad-abc").unwrap(), expected);
+        assert_eq!(expected, expected.to_lowercase());
+    }
+
+    #[test]
+    fn a_set_secret_means_hmac_mode_regardless_of_allow_open() {
+        for allow in [None, Some("1".to_string()), Some("0".to_string())] {
+            let a = AuthConfig::from_values(Some("s".into()), allow).unwrap();
+            assert!(matches!(a, AuthConfig::Hmac(ref k) if k == b"s"));
+        }
+    }
+
+    /// Fail-closed: no secret and no explicit opt-in is a startup error, never
+    /// a silently open server.
+    #[test]
+    fn missing_secret_without_allow_open_refuses_to_start() {
+        for secret in [None, Some(String::new())] {
+            for allow in [None, Some("0".to_string()), Some("yes".to_string()), Some(String::new())] {
+                let err = AuthConfig::from_values(secret.clone(), allow.clone()).err().expect("must refuse");
+                assert!(err.contains("ROOM_AUTH_SECRET"), "{err}");
+                assert!(err.contains("ALLOW_OPEN_AUTH"), "{err}");
+            }
+        }
+    }
+
+    #[test]
+    fn allow_open_one_or_true_opens_only_without_a_secret() {
+        for allow in ["1", "true", "TRUE", "True"] {
+            let a = AuthConfig::from_values(None, Some(allow.into())).unwrap();
+            assert!(matches!(a, AuthConfig::Open), "{allow}");
+            let a = AuthConfig::from_values(Some(String::new()), Some(allow.into())).unwrap();
+            assert!(matches!(a, AuthConfig::Open), "empty secret counts as unset");
+        }
+        // Whitespace is not trimmed here: " true" stays off (unlike main's flag_on).
+        assert!(AuthConfig::from_values(None, Some(" true".into())).is_err());
+    }
+
+    #[test]
+    fn hmac_accepts_any_key_length() {
+        // Short and long keys both work — the HMAC spec pads/hashes them.
+        let short = AuthConfig::Hmac(b"k".to_vec());
+        let long = AuthConfig::Hmac(vec![b'x'; 300]);
+        let ts = short.token_for("r").unwrap();
+        let tl = long.token_for("r").unwrap();
+        assert_eq!(ts.len(), 64);
+        assert_eq!(tl.len(), 64);
+        assert_ne!(ts, tl);
+        assert!(short.check("r", Some(&ts)));
+        assert!(long.check("r", Some(&tl)));
+    }
+
+    #[test]
+    fn room_names_with_unicode_and_empty_string_mint_distinct_tokens() {
+        let a = hmac();
+        let empty = a.token_for("").unwrap();
+        let uni = a.token_for("Übung-ß").unwrap();
+        assert_ne!(empty, uni);
+        assert!(a.check("", Some(&empty)));
+        assert!(a.check("Übung-ß", Some(&uni)));
+        assert!(!a.check("Übung-ss", Some(&uni)));
     }
 }

@@ -13,7 +13,7 @@
 ///
 /// Browser zoom does the same job and persists per site; this exists for the
 /// people who never learned Ctrl +, which is most of the ones who complain.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ui {
     Normal,
     Large,
@@ -48,7 +48,7 @@ impl Ui {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
     En,
     De,
@@ -113,7 +113,7 @@ impl Lang {
 /// are served from `/assets/shot/<n>`; `count` says how many exist. Captions
 /// describe the actual screenshots, so adding one means adding its caption here
 /// in the same position.
-pub fn screenshots(l: Lang, _base: &str, count: usize) -> String {
+pub fn screenshots(l: Lang, count: usize) -> String {
     if count == 0 {
         return String::new();
     }
@@ -361,7 +361,7 @@ pub fn home(l: Lang, base: &str, shots: usize) -> (&'static str, String) {
     let lc = l.code();
     // No screenshots on disk → no gallery section at all, rather than a heading
     // over six broken images.
-    let shots_section = match screenshots(l, base, shots) {
+    let shots_section = match screenshots(l, shots) {
         s if s.is_empty() => String::new(),
         s => format!(
             "<section class=\"sec\">\n<p class=\"eyebrow\">{}</p>\n{s}\n</section>\n",
@@ -1188,3 +1188,328 @@ const LEGAL_FR: &str = r#"<h1>Mentions légales</h1>
 <p class="muted">Exploitant : raumdock.org<br>Contact : via <a href="https://raumdock.org">raumdock.org</a></p>
 <h2>Responsabilité</h2>
 <p>Le logiciel est fourni « en l'état », sans garantie ni responsabilité (voir la <a href="/license?lang=fr">licence</a>). Les exploitants des sites externes liés sont responsables de leur contenu.</p>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Language / display-size selection ────────────────────────────────────
+
+    #[test]
+    fn lang_codes_round_trip_and_are_distinct() {
+        let codes: Vec<&str> = Lang::all().iter().map(|l| l.code()).collect();
+        assert_eq!(codes, ["en", "de", "it", "es", "fr"]);
+        for l in Lang::all() {
+            assert_eq!(Lang::parse(l.code()), Some(l));
+        }
+    }
+
+    #[test]
+    fn lang_parse_takes_the_primary_subtag_case_insensitively() {
+        assert_eq!(Lang::parse("de-DE"), Some(Lang::De));
+        assert_eq!(Lang::parse("  FR_ca "), Some(Lang::Fr));
+        assert_eq!(Lang::parse("ES"), Some(Lang::Es));
+        assert_eq!(Lang::parse("it-IT;q=0.9"), Some(Lang::It));
+        assert_eq!(Lang::parse("xx"), None);
+        assert_eq!(Lang::parse("d"), None, "one char cannot name a language");
+        assert_eq!(Lang::parse(""), None);
+    }
+
+    #[test]
+    fn query_lang_beats_accept_language() {
+        assert_eq!(Lang::detect(Some("de"), Some("fr")), Lang::De);
+        assert_eq!(Lang::detect(Some("it-CH"), Some("de-DE,de;q=0.9")), Lang::It);
+    }
+
+    #[test]
+    fn unknown_query_lang_falls_through_to_accept_language() {
+        assert_eq!(Lang::detect(Some("xx"), Some("es")), Lang::Es);
+        assert_eq!(Lang::detect(Some(""), Some("fr")), Lang::Fr);
+    }
+
+    #[test]
+    fn accept_language_uses_the_first_supported_tag_in_order() {
+        // Order in the header is the client's preference order; q-values are
+        // not re-sorted (browsers already emit the list sorted).
+        assert_eq!(Lang::detect(None, Some("fr-CH, fr;q=0.9, en;q=0.8")), Lang::Fr);
+        assert_eq!(Lang::detect(None, Some("xx, zz;q=0.9, it;q=0.5")), Lang::It);
+        assert_eq!(Lang::detect(None, Some("de-DE")), Lang::De);
+        assert_eq!(Lang::detect(None, Some("*")), Lang::En);
+        assert_eq!(Lang::detect(None, Some("")), Lang::En);
+    }
+
+    #[test]
+    fn no_hint_at_all_means_english() {
+        assert_eq!(Lang::detect(None, None), Lang::En);
+        assert_eq!(Lang::detect(Some("klingon"), Some("tlh")), Lang::En);
+    }
+
+    #[test]
+    fn ui_codes_round_trip_and_detect_prefers_query_over_cookie() {
+        let codes: Vec<&str> = Ui::all().iter().map(|u| u.code()).collect();
+        assert_eq!(codes, ["md", "lg", "xl"]);
+        for u in Ui::all() {
+            assert_eq!(Ui::parse(u.code()), Some(u));
+        }
+        assert_eq!(Ui::parse(" xl "), Some(Ui::Larger));
+        assert_eq!(Ui::parse("XL"), None, "size codes are lowercase only");
+        assert_eq!(Ui::detect(Some("lg"), Some("xl")), Ui::Large);
+        assert_eq!(Ui::detect(Some("bogus"), Some("xl")), Ui::Larger, "bad query falls back to cookie");
+        assert_eq!(Ui::detect(None, Some("lg")), Ui::Large);
+        assert_eq!(Ui::detect(None, Some("junk")), Ui::Normal);
+        assert_eq!(Ui::detect(None, None), Ui::Normal);
+    }
+
+    // ── Every language carries every string ──────────────────────────────────
+
+    #[test]
+    fn meta_desc_is_a_safe_single_line_in_every_language() {
+        let mut seen = std::collections::HashSet::new();
+        for l in Lang::all() {
+            let d = meta_desc(l);
+            assert!(!d.is_empty(), "{}", l.code());
+            assert!(!d.contains('"') && !d.contains('<') && !d.contains('\n'), "{}: {d}", l.code());
+            assert!(seen.insert(d), "{} reuses another description", l.code());
+        }
+    }
+
+    #[test]
+    fn nav_has_four_non_empty_labels_per_language() {
+        for l in Lang::all() {
+            for label in nav(l) {
+                assert!(!label.trim().is_empty(), "{}", l.code());
+            }
+        }
+    }
+
+    #[test]
+    fn ui_aria_and_titles_are_set_for_every_language_and_size() {
+        for l in Lang::all() {
+            assert!(!ui_aria(l).is_empty());
+            let titles: Vec<&str> = Ui::all().iter().map(|u| ui_title(l, *u)).collect();
+            assert!(titles.iter().all(|t| !t.is_empty()));
+            assert_ne!(titles[0], titles[1]);
+            assert_ne!(titles[1], titles[2]);
+        }
+    }
+
+    #[test]
+    fn home_renders_every_language_with_shared_structure() {
+        for l in Lang::all() {
+            let (title, body) = home(l, "https://x.test", 5);
+            assert!(!title.is_empty());
+            // The structure every language must carry.
+            assert!(body.contains("<h1>subraum</h1>"), "{}", l.code());
+            assert!(body.contains(STORE_URL), "{}", l.code());
+            assert!(body.contains(GITHUB_URL) && body.contains(FLEET_URL) && body.contains(RAUMDOCK_URL));
+            assert!(body.contains("https://x.test/get"), "{}: downloads link uses base", l.code());
+            assert!(body.contains(&format!("/privacy?lang={}", l.code())), "{}", l.code());
+            assert!(body.contains("<svg"), "{}: topology schematic missing", l.code());
+            assert_eq!(body.matches("<li>").count(), 3, "{}: three steps", l.code());
+            assert_eq!(body.matches("class=\"v yes\"").count(), 3, "{}: three visible spec rows", l.code());
+            assert_eq!(body.matches("class=\"v no\"").count(), 3, "{}: three never-seen spec rows", l.code());
+            assert_eq!(body.matches("<figure class=\"shot\">").count(), 5, "{}", l.code());
+            assert!(!body.contains('{'), "{}: unexpanded placeholder", l.code());
+        }
+    }
+
+    #[test]
+    fn home_pages_differ_between_languages() {
+        let bodies: Vec<String> = Lang::all().iter().map(|l| home(*l, "b", 0).1).collect();
+        for i in 0..bodies.len() {
+            for j in (i + 1)..bodies.len() {
+                assert_ne!(bodies[i], bodies[j], "two languages render identical pages");
+            }
+        }
+    }
+
+    #[test]
+    fn home_without_screenshots_has_no_gallery_section() {
+        let (_, body) = home(Lang::En, "b", 0);
+        assert!(!body.contains("class=\"shots\""));
+        assert!(!body.contains("<figure class=\"shot\">"));
+        assert!(body.contains("<figure"), "the topology schematic figure stays");
+    }
+
+    #[test]
+    fn screenshots_are_capped_at_the_caption_count_and_relative() {
+        assert_eq!(screenshots(Lang::De, 0), "");
+        let two = screenshots(Lang::De, 2);
+        assert_eq!(two.matches("<figure").count(), 2);
+        assert!(two.contains("src=\"/assets/shot/1\"") && two.contains("src=\"/assets/shot/2\""));
+        assert!(!two.contains("/assets/shot/3"));
+        let many = screenshots(Lang::En, 50);
+        assert_eq!(many.matches("<figure").count(), 5, "only five captions exist");
+        for l in Lang::all() {
+            let s = screenshots(l, 5);
+            assert!(s.contains("loading=\"lazy\""));
+            assert!(!s.contains("alt=\"\""), "{}: empty caption", l.code());
+        }
+    }
+
+    #[test]
+    fn switcher_links_every_language_and_size_and_marks_the_current_ones() {
+        let s = switcher("/get", Lang::De, Ui::Large);
+        for l in Lang::all() {
+            assert!(s.contains(&format!("href=\"/get?lang={}&amp;ui=lg\"", l.code())), "{}", l.code());
+        }
+        assert!(s.contains("href=\"/get?lang=de&amp;ui=lg\" class=\"on\">DE</a>"));
+        assert_eq!(s.matches(" class=\"on\"").count(), 1, "exactly one language is current");
+        for u in Ui::all() {
+            assert!(s.contains(&format!("href=\"/get?lang=de&amp;ui={}\"", u.code())));
+        }
+        assert!(s.contains("class=\"lg on\""));
+        assert!(!s.contains("class=\"md on\"") && !s.contains("class=\"xl on\""));
+        assert!(s.contains(&format!("aria-label=\"{}\"", ui_aria(Lang::De))));
+    }
+
+    #[test]
+    fn static_documents_exist_in_every_language_and_are_wrapped() {
+        for l in Lang::all() {
+            for (what, (title, body)) in [("privacy", privacy(l)), ("legal", legal(l)), ("license", license(l))] {
+                assert!(!title.is_empty(), "{what} {}", l.code());
+                assert!(body.starts_with("<section class=\"sec hero\"><div class=\"prose\">"), "{what} {}", l.code());
+                assert!(body.ends_with("</div></section>"), "{what} {}", l.code());
+                assert!(body.contains("<h1>"), "{what} {}", l.code());
+            }
+            let (_, lic) = license(l);
+            assert!(lic.contains("PolyForm Noncommercial License 1.0.0"));
+            assert!(lic.contains("commercialusage@raumdock.org"));
+            assert!(lic.contains(&format!("{GITHUB_URL}/blob/main/LICENSE")));
+        }
+    }
+
+    #[test]
+    fn doc_wraps_the_body_verbatim() {
+        assert_eq!(doc("<p>x</p>"), "<section class=\"sec hero\"><div class=\"prose\"><p>x</p></div></section>");
+    }
+
+    #[test]
+    fn landing_leads_with_the_code_and_links_both_install_paths() {
+        for l in Lang::all() {
+            let html = landing(l, "https://x.test", "abcd2345");
+            assert!(html.contains("<p class=\"code\">abcd2345</p>"), "{}", l.code());
+            assert!(html.contains(STORE_URL));
+            assert!(html.contains("href=\"https://x.test/download/\""));
+            assert_eq!(html.matches("<li>").count(), 2, "{}: two steps", l.code());
+            assert!(!html.contains('{'), "{}: unexpanded placeholder", l.code());
+        }
+        // The code is inserted as given: callers escape it (main.rs does).
+        assert!(landing(Lang::En, "b", "&lt;x&gt;").contains("<p class=\"code\">&lt;x&gt;</p>"));
+    }
+
+    // ── Download page ────────────────────────────────────────────────────────
+
+    fn art(platform: &str, file: &str, size: u64) -> Artifact {
+        Artifact { platform: platform.into(), arch: "x64".into(), file: file.into(), size, sha256: "ab".repeat(32) }
+    }
+
+    #[test]
+    fn downloads_without_artifacts_shows_the_empty_notice_only() {
+        for l in Lang::all() {
+            let (title, body) = downloads(l, "https://x.test", None, &[]);
+            assert!(!title.is_empty());
+            assert!(body.contains("<b>n/a</b>"), "{}: version unknown", l.code());
+            assert!(body.contains(STORE_URL));
+            assert!(!body.contains("class=\"arts\""), "{}", l.code());
+            assert!(body.contains(dl_text(l).none), "{}", l.code());
+        }
+    }
+
+    #[test]
+    fn downloads_groups_artifacts_by_platform_in_fixed_order() {
+        let arts = [
+            art("android", "subraum.apk", 5 * 1_048_576),
+            art("windows", "subraum.exe", 10973184),
+            art("streamdeck", "subraum.streamDeckPlugin", 2048),
+            art("linux", "subraum.deb", 1_048_576),
+            art("macos", "subraum.dmg", 3_000_000),
+            art("ios", "nope.ipa", 1), // unknown platform: never listed
+        ];
+        let (_, body) = downloads(Lang::En, "https://x.test", Some("0.4.0"), &arts);
+        assert!(body.contains("<b>v0.4.0</b>"));
+        let pos = |s: &str| body.find(s).unwrap_or_else(|| panic!("missing {s}"));
+        assert!(pos("subraum.exe") < pos("subraum.deb"));
+        assert!(pos("subraum.deb") < pos("subraum.dmg"));
+        assert!(pos("subraum.dmg") < pos("subraum.apk"));
+        assert!(pos("subraum.apk") < pos("subraum.streamDeckPlugin"));
+        assert!(!body.contains("nope.ipa"));
+        assert!(body.contains("href=\"https://x.test/download/subraum.exe\""));
+        assert!(body.contains("10.5 MB · x64"));
+        assert!(body.contains("2 KB · x64"));
+        assert!(body.contains(&"ab".repeat(32)));
+        assert_eq!(body.matches("<section class=\"sec\">").count(), 5);
+    }
+
+    #[test]
+    fn downloads_escapes_manifest_values() {
+        let mut a = art("windows", "evil<script>.exe", 1);
+        a.arch = "x\"64".into();
+        a.sha256 = "<sha>".into();
+        let (_, body) = downloads(Lang::En, "b", Some("1<2"), &[a]);
+        assert!(body.contains("evil&lt;script&gt;.exe"));
+        assert!(!body.contains("<script>"));
+        assert!(body.contains("x&quot;64"));
+        assert!(body.contains("&lt;sha&gt;"));
+        assert!(body.contains("<b>v1&lt;2</b>"));
+    }
+
+    #[test]
+    fn dl_section_is_empty_when_no_artifact_matches_the_platform() {
+        let arts = [art("linux", "a.deb", 1)];
+        assert_eq!(dl_section("b", "Windows", "note", "SHA-256:", "windows", &arts), "");
+        let s = dl_section("b", "Linux", "note", "SHA-256:", "linux", &arts);
+        assert!(s.contains("<p class=\"eyebrow\">Linux</p>"));
+        assert!(s.contains("SHA-256: "));
+        assert_eq!(s.matches("<li>").count(), 1);
+    }
+
+    #[test]
+    fn dl_text_is_complete_for_every_language() {
+        for l in Lang::all() {
+            let t = dl_text(l);
+            for (name, s) in [
+                ("title", t.title), ("intro", t.intro), ("store_btn", t.store_btn), ("store_note", t.store_note),
+                ("win", t.win), ("win_note", t.win_note), ("linux", t.linux), ("linux_note", t.linux_note),
+                ("android", t.android), ("android_note", t.android_note), ("macos", t.macos), ("macos_note", t.macos_note),
+                ("deck", t.deck), ("deck_note", t.deck_note), ("verify", t.verify), ("none", t.none),
+            ] {
+                assert!(!s.trim().is_empty(), "{}: {name} empty", l.code());
+            }
+        }
+    }
+
+    #[test]
+    fn human_size_switches_units_at_one_mebibyte() {
+        assert_eq!(human_size(10973184), "10.5 MB");
+        assert_eq!(human_size(1_048_576), "1.0 MB");
+        assert_eq!(human_size(1_048_575), "1024 KB");
+        assert_eq!(human_size(2048), "2 KB");
+        assert_eq!(human_size(1536), "2 KB", "rounds, does not truncate");
+        assert_eq!(human_size(0), "0 KB");
+    }
+
+    #[test]
+    fn esc_neutralises_markup_and_quotes() {
+        assert_eq!(esc(r#"<a href="x">&</a>"#), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
+        assert_eq!(esc("plain"), "plain");
+    }
+
+    #[test]
+    fn store_badge_links_the_store_with_the_label() {
+        let b = store_badge("Get it");
+        assert!(b.starts_with(&format!("<a class=\"dl store\" href=\"{STORE_URL}\">")));
+        assert!(b.ends_with("Get it</a>"));
+        assert!(b.contains("<svg"));
+    }
+
+    #[test]
+    fn credits_name_the_testers_in_every_language() {
+        for l in Lang::all() {
+            let c = credits(l);
+            assert!(c.contains("twitch.tv/JustCallMeDeimos"));
+            assert!(c.contains("xhead87x"));
+            assert!(!c.contains('{'));
+        }
+    }
+}

@@ -299,4 +299,137 @@ mod tests {
         assert!(!ct_eq(b"123456", b"123457"));
         assert!(!ct_eq(b"123456", b"12345"));
     }
+
+    /// Codes are read aloud off a share link: fixed length, no 0/o/1/l.
+    #[test]
+    fn share_codes_are_eight_chars_from_the_unambiguous_alphabet() {
+        for _ in 0..500 {
+            let c = rand_code();
+            assert_eq!(c.len(), 8);
+            assert!(c.chars().all(|ch| "abcdefghijkmnpqrstuvwxyz23456789".contains(ch)), "{c}");
+        }
+    }
+
+    /// Leading zeros must survive: "000042" is a valid PIN and must not become "42".
+    #[test]
+    fn pins_are_always_six_zero_padded_digits() {
+        let mut saw_leading_zero = false;
+        for _ in 0..5000 {
+            let p = rand_pin();
+            assert_eq!(p.len(), 6, "{p}");
+            assert!(p.chars().all(|c| c.is_ascii_digit()), "{p}");
+            saw_leading_zero |= p.starts_with('0');
+        }
+        assert!(saw_leading_zero, "1 in 10 PINs starts with 0; 5000 draws never did");
+    }
+
+    #[test]
+    fn rand_hex_is_lowercase_hex_of_the_requested_width() {
+        let h = rand_hex(8);
+        assert_eq!(h.len(), 16);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_ne!(rand_hex(8), rand_hex(8));
+        assert_eq!(rand_hex(0), "");
+    }
+
+    #[test]
+    fn room_names_are_squad_plus_64_random_bits() {
+        let s = sessions();
+        let (_, _, room, _) = s.create(token_for);
+        let hex = room.strip_prefix("squad-").expect("prefix");
+        assert_eq!(hex.len(), 16);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn open_mode_sessions_carry_no_token() {
+        let s = sessions();
+        let (code, pin, _, token) = s.create(|_| None);
+        assert!(token.is_none());
+        let (_, got) = s.join(&code, &pin).ok().unwrap();
+        assert!(got.is_none());
+    }
+
+    /// A wrong PIN of the right length and a wrong PIN of the wrong length are
+    /// both just wrong — the comparison must not leak the length either.
+    #[test]
+    fn wrong_length_pin_is_a_bad_pin_not_a_crash() {
+        let s = sessions();
+        let (code, _, _, _) = s.create(token_for);
+        assert!(matches!(s.join(&code, ""), Err(JoinError::BadPin)));
+        assert!(matches!(s.join(&code, "1234567"), Err(JoinError::BadPin)));
+    }
+
+    #[test]
+    fn the_lock_lifts_exactly_at_the_window_boundary() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        let wrong = if pin == "000000" { "111111" } else { "000000" };
+        let t0 = 1_000_000;
+        for _ in 0..MAX_ATTEMPTS {
+            let _ = s.join_at(&code, wrong, t0);
+        }
+        assert!(matches!(s.join_at(&code, &pin, t0), Err(JoinError::Locked)));
+        assert!(matches!(s.join_at(&code, &pin, t0 + LOCK_SECS - 1), Err(JoinError::Locked)));
+        assert!(s.join_at(&code, &pin, t0 + LOCK_SECS).is_ok());
+    }
+
+    /// Guesses below the cap do not accumulate into a lock across a later
+    /// correct join: only the budget counter matters, and it is not reset by a
+    /// success (so a correct PIN cannot be used to "unlock" guessing either).
+    #[test]
+    fn attempts_persist_across_a_successful_join() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        let wrong = if pin == "000000" { "111111" } else { "000000" };
+        for _ in 0..(MAX_ATTEMPTS - 1) {
+            let _ = s.join(&code, wrong);
+        }
+        assert!(s.join(&code, &pin).is_ok());
+        // One more wrong guess hits the cap.
+        assert!(matches!(s.join(&code, wrong), Err(JoinError::BadPin)));
+        assert!(matches!(s.join(&code, &pin), Err(JoinError::Locked)));
+    }
+
+    #[test]
+    fn a_successful_join_refreshes_last_active() {
+        let s = sessions();
+        let (code, pin, _, _) = s.create(token_for);
+        {
+            let mut map = s.inner.lock().unwrap();
+            map.get_mut(&code).unwrap().last_active = now().saturating_sub(EMPTY_GRACE_SECS + 100);
+        }
+        assert!(s.join(&code, &pin).is_ok(), "the join itself must still work");
+        s.reap(|_| false);
+        assert!(s.join(&code, &pin).is_ok(), "join refreshed last_active, so the sweep keeps it");
+    }
+
+    #[test]
+    fn reap_decides_per_session() {
+        let s = sessions();
+        let (keep, keep_pin, keep_room, _) = s.create(token_for);
+        let (drop_me, drop_pin, _, _) = s.create(token_for);
+        {
+            let mut map = s.inner.lock().unwrap();
+            for c in [&keep, &drop_me] {
+                map.get_mut(c).unwrap().last_active = now().saturating_sub(EMPTY_GRACE_SECS + 1);
+            }
+        }
+        s.reap(|room| room == keep_room);
+        assert!(s.join(&keep, &keep_pin).is_ok());
+        assert!(matches!(s.join(&drop_me, &drop_pin), Err(JoinError::NotFound)));
+    }
+
+    #[test]
+    fn reap_on_an_occupied_room_refreshes_last_active() {
+        let s = sessions();
+        let (code, _, _, _) = s.create(token_for);
+        {
+            let mut map = s.inner.lock().unwrap();
+            map.get_mut(&code).unwrap().last_active = 0;
+        }
+        s.reap(|_| true);
+        let la = s.inner.lock().unwrap().get(&code).unwrap().last_active;
+        assert!(la >= now().saturating_sub(2), "occupied sweep must stamp the clock");
+    }
 }

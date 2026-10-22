@@ -1017,8 +1017,12 @@ fn downloads_dir() -> String {
 /// empty, so the page degrades to a "no builds yet" notice instead of erroring.
 fn load_manifest() -> (Option<String>, Vec<i18n::Artifact>) {
     let dir = downloads_dir();
-    let path = std::path::Path::new(&dir).join("manifest.json");
-    let Ok(txt) = std::fs::read_to_string(&path) else {
+    parse_manifest(&std::path::Path::new(&dir).join("manifest.json"))
+}
+
+/// `load_manifest` for a given file (no environment access, so it is testable).
+fn parse_manifest(path: &std::path::Path) -> (Option<String>, Vec<i18n::Artifact>) {
+    let Ok(txt) = std::fs::read_to_string(path) else {
         return (None, Vec::new());
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else {
@@ -1139,7 +1143,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     break;
                 }
 
-                let (roster, size) = {
+                let size = {
                     let mut rooms = state.rooms.lock().unwrap();
                     let r = rooms.entry(room.clone()).or_default();
                     // Cap check (a rejoining same user_id doesn't count as growth).
@@ -1181,16 +1185,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     let size = r.len();
+                    // The joiner's first frame is always its Roster — before any
+                    // room-wide Warn, so a client can rely on the order.
+                    let _ = tx.try_send(ServerMsg::Roster { peers: roster });
                     // Soft-cap warning to everyone in the room.
                     if size >= WARN_CAP {
                         for h in r.values() {
                             let _ = h.tx.try_send(ServerMsg::Warn { size, cap: WARN_CAP });
                         }
                     }
-                    (roster, size)
+                    size
                 };
 
-                let _ = tx.try_send(ServerMsg::Roster { peers: roster });
                 if let Some(turn) = &state.turn {
                     let _ = tx.try_send(ServerMsg::Turn(turn.mint(&user_id)));
                 }
@@ -1608,6 +1614,441 @@ mod ws_tests {
     }
 
     /// The client heartbeat is a WS ping; it must count as activity.
+    fn text(msg: &ClientMsg) -> WsMsg {
+        WsMsg::Text(serde_json::to_string(msg).unwrap())
+    }
+
+    async fn expect_quiet(c: &mut Client) {
+        assert!(tokio::time::timeout(Duration::from_millis(300), c.next()).await.is_err(), "unexpected frame");
+    }
+
+    #[tokio::test]
+    async fn offer_answer_ice_are_relayed_to_the_target_with_the_sender_stamped() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        let mut c = join(&url, "r", "c").await;
+        // a saw b and c join, b saw c join — drain those.
+        for _ in 0..2 {
+            assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+        }
+        assert!(matches!(next_msg(&mut b).await, Some(ServerMsg::PeerJoined { .. })));
+
+        a.send(text(&ClientMsg::Offer { to: "b".into(), sdp: "v=0 offer".into() })).await.unwrap();
+        match next_msg(&mut b).await {
+            Some(ServerMsg::Offer { from, sdp }) => assert_eq!((from.as_str(), sdp.as_str()), ("a", "v=0 offer")),
+            other => panic!("{other:?}"),
+        }
+        b.send(text(&ClientMsg::Answer { to: "a".into(), sdp: "v=0 answer".into() })).await.unwrap();
+        match next_msg(&mut a).await {
+            Some(ServerMsg::Answer { from, sdp }) => assert_eq!((from.as_str(), sdp.as_str()), ("b", "v=0 answer")),
+            other => panic!("{other:?}"),
+        }
+        a.send(text(&ClientMsg::Ice { to: "b".into(), candidate: "cand".into() })).await.unwrap();
+        match next_msg(&mut b).await {
+            Some(ServerMsg::Ice { from, candidate }) => assert_eq!((from.as_str(), candidate.as_str()), ("a", "cand")),
+            other => panic!("{other:?}"),
+        }
+        // The third member never hears a word of the pair's exchange.
+        expect_quiet(&mut c).await;
+    }
+
+    #[tokio::test]
+    async fn relay_to_an_unknown_peer_or_with_an_oversized_payload_is_dropped_silently() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+
+        a.send(text(&ClientMsg::Offer { to: "nobody".into(), sdp: "v=0".into() })).await.unwrap();
+        a.send(text(&ClientMsg::Offer { to: "b".into(), sdp: "x".repeat(MAX_SDP + 1) })).await.unwrap();
+        a.send(text(&ClientMsg::Ice { to: "b".into(), candidate: "x".repeat(MAX_ICE + 1) })).await.unwrap();
+        a.send(text(&ClientMsg::Offer { to: "".into(), sdp: "v=0".into() })).await.unwrap();
+        expect_quiet(&mut b).await;
+        expect_quiet(&mut a).await;
+        // The socket is still alive: a well-formed relay goes through afterwards.
+        a.send(text(&ClientMsg::Ice { to: "b".into(), candidate: "ok".into() })).await.unwrap();
+        assert!(matches!(next_msg(&mut b).await, Some(ServerMsg::Ice { candidate, .. }) if candidate == "ok"));
+    }
+
+    #[tokio::test]
+    async fn signaling_before_join_is_ignored_and_the_socket_stays_open() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let _b = join(&url, "r", "b").await;
+        let (mut c, _) = connect_async(&url).await.unwrap();
+        c.send(text(&ClientMsg::Offer { to: "b".into(), sdp: "v=0".into() })).await.unwrap();
+        c.send(text(&ClientMsg::Ptt { active: true })).await.unwrap();
+        c.send(text(&ClientMsg::Rekey)).await.unwrap();
+        expect_quiet(&mut c).await;
+        c.send(text(&join_msg("r", "c", "s"))).await.unwrap();
+        assert!(matches!(next_msg(&mut c).await, Some(ServerMsg::Roster { peers }) if peers.len() == 1));
+    }
+
+    #[tokio::test]
+    async fn a_second_join_on_the_same_socket_is_refused() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        a.send(text(&join_msg("r", "a2", "s"))).await.unwrap();
+        match next_msg(&mut a).await {
+            Some(ServerMsg::Error { code, .. }) => assert_eq!(code, "already_joined"),
+            other => panic!("{other:?}"),
+        }
+        assert!(member_present(&state, "r", "a"));
+        assert!(!member_present(&state, "r", "a2"));
+    }
+
+    #[tokio::test]
+    async fn ptt_is_broadcast_to_everyone_but_the_speaker() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+        a.send(text(&ClientMsg::Ptt { active: true })).await.unwrap();
+        match next_msg(&mut b).await {
+            Some(ServerMsg::Ptt { user_id, active }) => assert_eq!((user_id.as_str(), active), ("a", true)),
+            other => panic!("{other:?}"),
+        }
+        expect_quiet(&mut a).await;
+    }
+
+    #[tokio::test]
+    async fn the_roster_lists_everyone_already_present_but_not_the_joiner() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let _a = join(&url, "r", "a").await;
+        let _b = join(&url, "r", "b").await;
+        let (mut c, _) = connect_async(&url).await.unwrap();
+        c.send(text(&join_msg("r", "c", "s"))).await.unwrap();
+        match next_msg(&mut c).await {
+            Some(ServerMsg::Roster { peers }) => {
+                let mut ids: Vec<&str> = peers.iter().map(|p| p.user_id.as_str()).collect();
+                ids.sort();
+                assert_eq!(ids, ["a", "b"]);
+                assert!(peers.iter().all(|p| p.name == p.user_id), "fixture uses id as name");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Rooms are isolated: a joiner elsewhere sees an empty roster.
+        let (mut d, _) = connect_async(&url).await.unwrap();
+        d.send(text(&join_msg("elsewhere", "d", "s"))).await.unwrap();
+        assert!(matches!(next_msg(&mut d).await, Some(ServerMsg::Roster { peers }) if peers.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn the_warn_cap_is_announced_to_the_whole_room() {
+        let (url, _) = spawn_server(Duration::from_secs(60)).await;
+        let mut first = join(&url, "r", "m0").await;
+        let mut others = Vec::new();
+        for i in 1..WARN_CAP {
+            others.push(join(&url, "r", &format!("m{i}")).await);
+        }
+        // `first` saw WARN_CAP-1 joins and then exactly one Warn for the 12th.
+        let mut warns = 0;
+        for _ in 1..WARN_CAP {
+            assert!(matches!(next_msg(&mut first).await, Some(ServerMsg::PeerJoined { .. })));
+        }
+        match next_msg(&mut first).await {
+            Some(ServerMsg::Warn { size, cap }) => {
+                assert_eq!((size, cap), (WARN_CAP, WARN_CAP));
+                warns += 1;
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(warns, 1);
+        // The 12th joiner itself gets Roster then Warn.
+        let last = others.last_mut().unwrap();
+        assert!(matches!(next_msg(last).await, Some(ServerMsg::Warn { size, .. }) if size == WARN_CAP));
+    }
+
+    #[tokio::test]
+    async fn the_hard_cap_refuses_the_next_joiner_and_closes_the_socket() {
+        let (url, state) = spawn_server(Duration::from_secs(60)).await;
+        let mut members = Vec::new();
+        for i in 0..HARD_CAP {
+            members.push(join(&url, "r", &format!("m{i}")).await);
+        }
+        let frame = serde_json::to_string(&join_msg("r", "late", "s")).unwrap();
+        let (mut late, first) = send_raw(&url, &frame).await;
+        assert!(matches!(first, Some(ServerMsg::RoomFull { cap }) if cap == HARD_CAP), "{first:?}");
+        assert!(next_msg(&mut late).await.is_none(), "socket must be closed after RoomFull");
+        assert!(!member_present(&state, "r", "late"));
+        assert_eq!(state.rooms.lock().unwrap()["r"].len(), HARD_CAP);
+        // A member reconnecting with its own id is not growth and still works.
+        let _again = join_with(&url, "r", "m0", "secret-m0").await;
+    }
+
+    #[tokio::test]
+    async fn rekey_is_broadcast_to_the_whole_room_including_the_initiator() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+        b.send(text(&ClientMsg::Rekey)).await.unwrap();
+        for c in [&mut a, &mut b] {
+            match next_msg(c).await {
+                Some(ServerMsg::Rekey { by }) => assert_eq!(by, "b", "by carries the display name"),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn leaving_empties_the_room_and_clears_its_rekey_state() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        a.send(text(&ClientMsg::Rekey)).await.unwrap();
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::Rekey { .. })));
+        assert!(state.rekeys.lock().unwrap().contains_key("r"));
+        a.send(text(&ClientMsg::Leave)).await.unwrap();
+        assert!(next_msg(&mut a).await.is_none(), "server closes after Leave");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!state.rooms.lock().unwrap().contains_key("r"), "empty room is dropped");
+        assert!(!state.rekeys.lock().unwrap().contains_key("r"));
+    }
+
+    #[tokio::test]
+    async fn peers_are_told_when_a_member_leaves() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+        b.send(text(&ClientMsg::Leave)).await.unwrap();
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerLeft { user_id }) if user_id == "b"));
+        // Dropping the socket without Leave has the same effect.
+        let mut c = join(&url, "r", "c").await;
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+        c.close(None).await.unwrap();
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerLeft { user_id }) if user_id == "c"));
+    }
+
+    /// A member is authenticated, not trusted: a flood of frames must be
+    /// dropped past the per-second budget instead of fanning out to the room.
+    #[tokio::test]
+    async fn frames_past_the_rate_budget_are_dropped() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let mut b = join(&url, "r", "b").await;
+        assert!(matches!(next_msg(&mut a).await, Some(ServerMsg::PeerJoined { .. })));
+        let burst = (MSG_RATE_MAX * 2) as usize;
+        for _ in 0..burst {
+            a.send(text(&ClientMsg::Ptt { active: true })).await.unwrap();
+        }
+        let mut got = 0;
+        while tokio::time::timeout(Duration::from_millis(300), b.next()).await.map(|m| m.is_some()).unwrap_or(false) {
+            got += 1;
+        }
+        // The join frame already used one slot. Even if the burst straddles a
+        // window boundary it cannot all get through.
+        assert!(got < burst, "nothing was dropped: {got}");
+        assert!(got >= (MSG_RATE_MAX - 1) as usize, "too much dropped: {got}");
+    }
+
+    #[tokio::test]
+    async fn oversized_ws_frames_end_the_connection() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let mut a = join(&url, "r", "a").await;
+        let huge = format!(r#"{{"t":"offer","to":"b","sdp":"{}"}}"#, "x".repeat(MAX_WS_MSG + 1));
+        let _ = a.send(WsMsg::Text(huge)).await;
+        assert!(next_msg(&mut a).await.is_none(), "the server drops the socket");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!member_present(&state, "r", "a"));
+    }
+
+    // ── REST + pages over a real TCP socket ─────────────────────────────────
+
+    /// Minimal HTTP/1.1 client: one request, `Connection: close`, returns
+    /// (status, lowercase headers, body). Enough for JSON and HTML responses.
+    async fn http(ws_url: &str, method: &str, path: &str, extra_headers: &str, body: &str) -> (u16, String, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = ws_url.trim_start_matches("ws://").trim_end_matches("/ws");
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        let raw = String::from_utf8_lossy(&buf).to_string();
+        let (head, mut body) = raw.split_once("\r\n\r\n").map(|(h, b)| (h.to_string(), b.to_string())).unwrap();
+        let status: u16 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+        let headers = head.to_lowercase();
+        if headers.contains("transfer-encoding: chunked") {
+            let mut out = String::new();
+            let mut rest = body.as_str();
+            loop {
+                let (len, after) = rest.split_once("\r\n").unwrap();
+                let n = usize::from_str_radix(len.trim(), 16).unwrap();
+                if n == 0 {
+                    break;
+                }
+                out.push_str(&after[..n]);
+                rest = &after[n + 2..];
+            }
+            body = out;
+        }
+        (status, headers, body)
+    }
+
+    async fn post_json(ws_url: &str, path: &str, json: &str) -> (u16, serde_json::Value) {
+        let (st, _, body) = http(ws_url, "POST", path, "Content-Type: application/json\r\n", json).await;
+        (st, serde_json::from_str(&body).unwrap_or(serde_json::Value::Null))
+    }
+
+    #[tokio::test]
+    async fn healthz_answers_ok() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let (st, _, body) = http(&url, "GET", "/healthz", "", "").await;
+        assert_eq!((st, body.as_str()), (200, "ok"));
+    }
+
+    #[tokio::test]
+    async fn create_session_then_join_with_the_pin_resolves_the_room() {
+        let (url, state) = spawn_server(Duration::from_secs(30)).await;
+        let (st, v) = post_json(&url, "/session", "{}").await;
+        assert_eq!(st, 200, "{v}");
+        let code = v["code"].as_str().unwrap();
+        let pin = v["pin"].as_str().unwrap();
+        let room = v["room"].as_str().unwrap();
+        assert_eq!(code.len(), 8);
+        assert_eq!(pin.len(), 6);
+        assert!(room.starts_with("squad-"));
+        assert!(v["token"].is_null(), "open-auth server mints no token");
+        assert_eq!(v["ws"], public_ws());
+        assert_eq!(v["link"], format!("{}/j/{code}", public_base()));
+
+        let (st, j) = post_json(&url, &format!("/session/{code}/join"), &format!(r#"{{"pin":"{pin}"}}"#)).await;
+        assert_eq!(st, 200, "{j}");
+        assert_eq!(j["room"], room);
+        assert_eq!(j["ws"], public_ws());
+        assert!(j["token"].is_null());
+        // The session store agrees.
+        assert!(state.sessions.join(code, pin).is_ok());
+    }
+
+    #[tokio::test]
+    async fn join_session_errors_map_to_status_codes() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let (_, v) = post_json(&url, "/session", "{}").await;
+        let code = v["code"].as_str().unwrap().to_string();
+        let pin = v["pin"].as_str().unwrap().to_string();
+        let wrong = if pin == "000000" { "111111" } else { "000000" };
+
+        let (st, j) = post_json(&url, "/session/nosuch12/join", r#"{"pin":"123456"}"#).await;
+        assert_eq!((st, j["error"].as_str()), (404, Some("not_found")));
+        let (st, j) = post_json(&url, &format!("/session/{code}/join"), &format!(r#"{{"pin":"{wrong}"}}"#)).await;
+        assert_eq!((st, j["error"].as_str()), (403, Some("bad_pin")));
+        let (st, j) = post_json(&url, &format!("/session/{code}/join"), r#"{"nopin":true}"#).await;
+        assert_eq!((st, j["error"].as_str()), (404, Some("not_found")), "missing pin is bounded out before the store");
+        let (st, j) = post_json(&url, &format!("/session/{code}/join"), r#"{"pin":"1234567890123"}"#).await;
+        assert_eq!((st, j["error"].as_str()), (404, Some("not_found")), "over-long pin");
+        // Burn the remaining guesses → locked, and the right PIN no longer helps.
+        for _ in 0..5 {
+            let _ = post_json(&url, &format!("/session/{code}/join"), &format!(r#"{{"pin":"{wrong}"}}"#)).await;
+        }
+        let (st, j) = post_json(&url, &format!("/session/{code}/join"), &format!(r#"{{"pin":"{pin}"}}"#)).await;
+        assert_eq!((st, j["error"].as_str()), (429, Some("locked")));
+    }
+
+    #[tokio::test]
+    async fn session_creation_is_rate_limited_per_ip() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        for i in 0..RL_CREATE_MAX {
+            let (st, _) = post_json(&url, "/session", "{}").await;
+            assert_eq!(st, 200, "creation {i}");
+        }
+        let (st, v) = post_json(&url, "/session", "{}").await;
+        assert_eq!((st, v["error"].as_str()), (429, Some("rate_limited")));
+    }
+
+    #[tokio::test]
+    async fn rest_bodies_over_the_limit_are_refused() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let big = format!(r#"{{"pin":"1","pad":"{}"}}"#, "x".repeat(MAX_REST_BODY + 1));
+        let (st, _, _) = http(&url, "POST", "/session/abcd2345/join", "Content-Type: application/json\r\n", &big).await;
+        assert_eq!(st, 413);
+    }
+
+    #[tokio::test]
+    async fn landing_page_shows_the_code_escaped_and_truncated() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let (st, _, body) = http(&url, "GET", "/j/abcd2345?lang=de", "", "").await;
+        assert_eq!(st, 200);
+        assert!(body.contains("<html lang=\"de\""));
+        assert!(body.contains("<p class=\"code\">abcd2345</p>"));
+        let (st, _, body) = http(&url, "GET", "/j/%3Cb%3Ex", "", "").await;
+        assert_eq!(st, 200);
+        assert!(body.contains("<p class=\"code\">&lt;b&gt;x</p>"), "{body}");
+        assert!(!body.contains("<b>x"));
+        let long = "a".repeat(40);
+        let (_, _, body) = http(&url, "GET", &format!("/j/{long}"), "", "").await;
+        assert!(body.contains(&format!("<p class=\"code\">{}</p>", "a".repeat(32))));
+    }
+
+    #[tokio::test]
+    async fn pages_render_in_the_requested_language_and_remember_an_explicit_size() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        let (st, headers, body) = http(&url, "GET", "/?lang=fr&ui=xl", "", "").await;
+        assert_eq!(st, 200);
+        assert!(body.starts_with("<!doctype html><html lang=\"fr\" data-ui=\"xl\">"));
+        assert!(headers.contains("set-cookie: subraum_ui=xl;"), "{headers}");
+        // Accept-Language alone picks the language but sets no cookie.
+        let (_, headers, body) = http(&url, "GET", "/", "Accept-Language: it-IT,it;q=0.8\r\nCookie: subraum_ui=lg\r\n", "").await;
+        assert!(body.contains("<html lang=\"it\" data-ui=\"lg\">"));
+        assert!(!headers.contains("set-cookie"), "{headers}");
+        for (path, needle) in [
+            ("/privacy", "<h1>Privacy</h1>"),
+            ("/legal", "<h1>Legal notice</h1>"),
+            ("/license", "PolyForm Noncommercial License 1.0.0"),
+            ("/changelog", "<h1>Changelog</h1>"),
+            ("/get", "<h1>Downloads</h1>"),
+        ] {
+            let (st, headers, body) = http(&url, "GET", path, "", "").await;
+            assert_eq!(st, 200, "{path}");
+            assert!(headers.contains("content-type: text/html"), "{path}: {headers}");
+            assert!(body.contains(needle), "{path} lacks {needle}");
+        }
+    }
+
+    #[tokio::test]
+    async fn brand_assets_are_served_with_types_and_caching_and_unknown_ones_are_404() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        for (path, ctype) in [
+            ("/assets/logo.svg", "image/svg+xml"),
+            ("/assets/rdoc.svg", "image/svg+xml"),
+            ("/assets/rdoc-light.svg", "image/svg+xml"),
+            ("/assets/og-image.png", "image/png"),
+            ("/assets/shot/1", "image/png"),
+            ("/assets/shot/5", "image/png"),
+            ("/assets/fonts/mi-400.woff2", "font/woff2"),
+        ] {
+            let (st, headers, body) = http(&url, "GET", path, "", "").await;
+            assert_eq!(st, 200, "{path}");
+            assert!(headers.contains(&format!("content-type: {ctype}")), "{path}: {headers}");
+            assert!(headers.contains(&format!("cache-control: {ASSET_CACHE}")), "{path}: {headers}");
+            assert!(!body.is_empty(), "{path}");
+        }
+        for path in ["/assets/shot/0", "/assets/shot/6", "/assets/fonts/nope.woff2", "/nope"] {
+            let (st, _, _) = http(&url, "GET", path, "", "").await;
+            assert_eq!(st, 404, "{path}");
+        }
+        // A non-numeric shot index is rejected by the path extractor itself.
+        let (st, _, _) = http(&url, "GET", "/assets/shot/x", "", "").await;
+        assert_eq!(st, 400);
+    }
+
+    #[tokio::test]
+    async fn pngs_really_are_pngs() {
+        let (url, _) = spawn_server(Duration::from_secs(30)).await;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let addr = url.trim_start_matches("ws://").trim_end_matches("/ws");
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        s.write_all(b"GET /assets/og-image.png HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        let sep = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&buf[sep..sep + 8], b"\x89PNG\r\n\x1a\n");
+    }
+
     #[tokio::test]
     async fn pings_keep_a_quiet_socket_alive() {
         let (url, state) = spawn_server(Duration::from_millis(300)).await;
@@ -1659,5 +2100,336 @@ mod client_ip_tests {
     fn xff_from_a_non_loopback_peer_is_ignored() {
         let peer: SocketAddr = "9.9.9.9:1".parse().unwrap();
         assert_eq!(client_ip(&hdr("1.2.3.4"), peer), "9.9.9.9");
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    // ── Input bounds and escaping ────────────────────────────────────────────
+
+    #[test]
+    fn len_ok_rejects_empty_and_over_long_by_bytes() {
+        assert!(!len_ok("", 10));
+        assert!(len_ok("a", 1));
+        assert!(len_ok(&"x".repeat(64), 64));
+        assert!(!len_ok(&"x".repeat(65), 64));
+        // Byte length, not char count: two umlauts are four bytes.
+        assert!(len_ok("ää", 4));
+        assert!(!len_ok("ää", 3));
+    }
+
+    #[test]
+    fn esc_covers_every_reflected_character() {
+        assert_eq!(esc("<>&\"'"), "&lt;&gt;&amp;&quot;&#x27;");
+        assert_eq!(esc("abcd2345"), "abcd2345");
+        // Ampersand first, so already-escaped sequences are not double-decoded.
+        assert_eq!(esc("&lt;"), "&amp;lt;");
+    }
+
+    // ── Per-IP rate limiter ──────────────────────────────────────────────────
+
+    #[test]
+    fn rate_limiter_allows_max_then_denies_within_the_window() {
+        let rl = RateLimiter::default();
+        for i in 0..3 {
+            assert!(rl.allow("1.2.3.4", 3, 300), "call {i} is within budget");
+        }
+        assert!(!rl.allow("1.2.3.4", 3, 300));
+        assert!(!rl.allow("1.2.3.4", 3, 300), "stays denied, the counter keeps growing");
+    }
+
+    #[test]
+    fn rate_limiter_counts_per_ip() {
+        let rl = RateLimiter::default();
+        assert!(rl.allow("a", 1, 300));
+        assert!(!rl.allow("a", 1, 300));
+        assert!(rl.allow("b", 1, 300), "another IP has its own budget");
+    }
+
+    #[test]
+    fn rate_limiter_zero_window_resets_every_call() {
+        let rl = RateLimiter::default();
+        for _ in 0..10 {
+            assert!(rl.allow("a", 1, 0));
+        }
+    }
+
+    #[test]
+    fn prune_drops_expired_windows_and_keeps_live_ones() {
+        let rl = RateLimiter::default();
+        assert!(rl.allow("a", 5, 300));
+        rl.prune(300);
+        assert_eq!(rl.inner.lock().unwrap().len(), 1, "a fresh window survives");
+        rl.prune(0);
+        assert!(rl.inner.lock().unwrap().is_empty(), "window 0 means everything is expired");
+        // After a prune the IP starts over.
+        assert!(rl.allow("a", 1, 300));
+    }
+
+    // ── Language / size selection from a request ─────────────────────────────
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(), v.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn lang_of_reads_the_lang_query_param_anywhere_in_the_string() {
+        assert_eq!(lang_of(&Some("ui=lg&lang=de".into()), &HeaderMap::new()), Lang::De);
+        assert_eq!(lang_of(&Some("lang=fr".into()), &headers(&[("accept-language", "de")])), Lang::Fr);
+        assert_eq!(lang_of(&Some("language=fr".into()), &HeaderMap::new()), Lang::En, "only the exact key counts");
+        assert_eq!(lang_of(&None, &headers(&[("accept-language", "it-IT,it;q=0.9")])), Lang::It);
+        assert_eq!(lang_of(&None, &HeaderMap::new()), Lang::En);
+    }
+
+    #[test]
+    fn ui_of_prefers_query_then_cookie_and_reports_an_explicit_choice() {
+        assert_eq!(ui_of(&Some("ui=xl".into()), &HeaderMap::new()), (Ui::Larger, true));
+        assert_eq!(ui_of(&Some("lang=de&ui=lg".into()), &headers(&[("cookie", "subraum_ui=xl")])), (Ui::Large, true));
+        assert_eq!(ui_of(&None, &headers(&[("cookie", "a=b; subraum_ui=xl; c=d")])), (Ui::Larger, false));
+        assert_eq!(ui_of(&None, &headers(&[("cookie", "subraum_ui=junk")])), (Ui::Normal, false));
+        assert_eq!(ui_of(&None, &headers(&[("cookie", "other_ui=xl")])), (Ui::Normal, false), "prefix match must be exact");
+        assert_eq!(ui_of(&None, &HeaderMap::new()), (Ui::Normal, false));
+        // A bad query value still counts as "chosen" (the cookie gets rewritten to normal).
+        assert_eq!(ui_of(&Some("ui=huge".into()), &HeaderMap::new()), (Ui::Normal, true));
+    }
+
+    #[test]
+    fn ui_cookie_is_a_year_long_lax_http_only_cookie_holding_only_the_size() {
+        let c = ui_cookie(Ui::Large);
+        assert!(c.starts_with("subraum_ui=lg; "), "{c}");
+        for attr in ["Path=/", "Max-Age=31536000", "SameSite=Lax", "HttpOnly"] {
+            assert!(c.contains(attr), "{c} lacks {attr}");
+        }
+        assert_eq!(c.matches(';').count(), if c.contains("Secure") { 5 } else { 4 }, "no extra attributes: {c}");
+    }
+
+    // ── Changelog rendering ──────────────────────────────────────────────────
+
+    #[test]
+    fn render_changelog_maps_headings_bullets_and_inline_marks() {
+        let md = "# Changelog\n\n## v1.0 — 2026-01-01\n\n### Behoben\n- **Fett** und `code` <b>\n  Fortsetzung der Zeile.\n- Zweiter Punkt\n\nEin Absatz.\n";
+        let html = render_changelog(md);
+        assert!(html.starts_with("<h1>Changelog</h1>"));
+        assert_eq!(html.matches("<h1>").count(), 1, "the markdown title is skipped");
+        assert!(html.contains("<h2 class=\"ver\">v1.0 — 2026-01-01</h2>"));
+        assert!(html.contains("<h3>Behoben</h3>"));
+        assert!(html.contains("<li><strong>Fett</strong> und <code>code</code> &lt;b&gt; Fortsetzung der Zeile.</li>"));
+        assert!(html.contains("<li>Zweiter Punkt</li>"));
+        assert!(html.contains("<p class=\"muted\">Ein Absatz.</p>"));
+        assert_eq!(html.matches("<ul>").count(), 1);
+        assert_eq!(html.matches("</ul>").count(), 1);
+    }
+
+    #[test]
+    fn render_changelog_closes_lists_at_headings_and_blank_lines() {
+        let html = render_changelog("- a\n## v2\n- b\n\n- c\n### s\n");
+        assert_eq!(html.matches("<ul>").count(), 3);
+        assert_eq!(html.matches("</ul>").count(), 3);
+        assert!(html.ends_with("<h3>s</h3>"), "{html}");
+    }
+
+    #[test]
+    fn render_changelog_leaves_unbalanced_marks_literal_and_escapes_html() {
+        let html = render_changelog("- a `tick and **half\n");
+        assert!(html.contains("<li>a `tick and **half</li>"), "{html}");
+        let html = render_changelog("- <script>alert(1)</script> & co\n");
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt; &amp; co"));
+        assert!(!html.contains("<script>"));
+    }
+
+    #[test]
+    fn render_changelog_handles_the_real_changelog() {
+        // The embedded CHANGELOG.md must render without a panic and keep every
+        // version heading.
+        let html = render_changelog(CHANGELOG_MD);
+        let versions = CHANGELOG_MD.lines().filter(|l| l.starts_with("## ")).count();
+        assert_eq!(html.matches("<h2 class=\"ver\">").count(), versions);
+        assert!(versions >= 5);
+    }
+
+    // ── Manifest parsing ─────────────────────────────────────────────────────
+
+    fn scratch_file(tag: &str, content: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "subraum-manifest-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("manifest.json");
+        if let Some(c) = content {
+            std::fs::write(&p, c).unwrap();
+        }
+        p
+    }
+
+    #[test]
+    fn missing_or_invalid_manifest_degrades_to_empty() {
+        let p = scratch_file("missing", None);
+        let (v, a) = parse_manifest(&p);
+        assert!(v.is_none() && a.is_empty());
+        let p = scratch_file("invalid", Some("{not json"));
+        let (v, a) = parse_manifest(&p);
+        assert!(v.is_none() && a.is_empty());
+        let p = scratch_file("wrongshape", Some("[1,2,3]"));
+        let (v, a) = parse_manifest(&p);
+        assert!(v.is_none() && a.is_empty());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn manifest_entries_need_platform_and_file_and_default_the_rest() {
+        let json = r#"{
+          "version": "0.4.0",
+          "artifacts": [
+            {"platform":"windows","arch":"x64","file":"s.exe","size":123,"sha256":"ab"},
+            {"platform":"linux","file":"s.deb"},
+            {"platform":"macos"},
+            {"file":"orphan.bin"},
+            {"platform":"android","file":"s.apk","size":"big"}
+          ]
+        }"#;
+        let p = scratch_file("ok", Some(json));
+        let (v, a) = parse_manifest(&p);
+        assert_eq!(v.as_deref(), Some("0.4.0"));
+        assert_eq!(a.len(), 3, "entries without platform or file are skipped");
+        assert_eq!((a[0].platform.as_str(), a[0].arch.as_str(), a[0].size, a[0].sha256.as_str()), ("windows", "x64", 123, "ab"));
+        assert_eq!((a[1].platform.as_str(), a[1].arch.as_str(), a[1].size, a[1].sha256.as_str()), ("linux", "", 0, ""));
+        assert_eq!(a[2].size, 0, "non-numeric size defaults to 0");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn empty_version_string_counts_as_unknown() {
+        let p = scratch_file("nover", Some(r#"{"version":"","artifacts":[]}"#));
+        let (v, a) = parse_manifest(&p);
+        assert!(v.is_none());
+        assert!(a.is_empty());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    // ── Page shell ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn shell_sets_language_size_title_csp_and_wraps_the_body() {
+        let Html(html) = shell(Lang::De, Ui::Larger, "/get", "Downloads", "<p>BODY</p>");
+        assert!(html.starts_with("<!doctype html><html lang=\"de\" data-ui=\"xl\">"));
+        assert!(html.contains("<title>Downloads | subraum</title>"));
+        assert!(html.contains(HTML_CSP));
+        assert!(html.contains(&format!("content=\"{}\"", i18n::meta_desc(Lang::De))));
+        assert!(html.contains("<main><p>BODY</p></main>"));
+        assert!(html.contains("og:image\" content=\"https://subraum.cc/assets/og-image.png\""));
+        assert!(html.contains("href=\"/get?lang=de&amp;ui=xl\" class=\"on\">DE</a>"), "switcher keeps path + size");
+        assert!(html.contains("<a class=\"brand\" href=\"/?lang=de\">subraum</a>"));
+        assert!(html.ends_with("</footer></body></html>"));
+    }
+
+    #[test]
+    fn footer_links_every_page_in_the_current_language() {
+        let f = footer("https://x.test", Lang::Fr);
+        assert!(f.contains("href=\"https://x.test/get?lang=fr\">Télécharger</a>"));
+        for path in ["/privacy", "/legal", "/license", "/changelog"] {
+            assert!(f.contains(&format!("href=\"{path}?lang=fr\"")), "{path}");
+        }
+        assert!(f.contains(i18n::GITHUB_URL) && f.contains(i18n::RAUMDOCK_URL));
+        assert!(f.contains("src=\"/assets/rdoc.svg\"") && f.contains("src=\"/assets/rdoc-light.svg\""));
+    }
+
+    // ── relay_to ─────────────────────────────────────────────────────────────
+
+    fn state_with_room(room: &str, members: &[&str]) -> (Arc<AppState>, Vec<mpsc::Receiver<ServerMsg>>) {
+        let state = Arc::new(AppState {
+            rooms: Mutex::new(HashMap::new()),
+            auth: AuthConfig::Open,
+            turn: None,
+            sessions: Sessions::default(),
+            rate: RateLimiter::default(),
+            ws_idle: WS_IDLE_TIMEOUT,
+            rekeys: Mutex::new(HashMap::new()),
+        });
+        let mut rxs = Vec::new();
+        {
+            let mut rooms = state.rooms.lock().unwrap();
+            let r = rooms.entry(room.to_string()).or_default();
+            for m in members {
+                let (tx, rx) = mpsc::channel(8);
+                r.insert(m.to_string(), PeerHandle { name: m.to_uppercase(), tx, secret: format!("s-{m}") });
+                rxs.push(rx);
+            }
+        }
+        (state, rxs)
+    }
+
+    #[test]
+    fn relay_to_stamps_the_sender_and_reaches_only_the_target() {
+        let (state, mut rxs) = state_with_room("r", &["a", "b", "c"]);
+        let me = Some(("r".to_string(), "a".to_string()));
+        relay_to(&state, &me, "b", |from| ServerMsg::Offer { from, sdp: "v=0".into() });
+        match rxs[1].try_recv() {
+            Ok(ServerMsg::Offer { from, sdp }) => assert_eq!((from.as_str(), sdp.as_str()), ("a", "v=0")),
+            other => panic!("{other:?}"),
+        }
+        assert!(rxs[0].try_recv().is_err(), "sender gets nothing back");
+        assert!(rxs[2].try_recv().is_err(), "third party gets nothing");
+    }
+
+    #[test]
+    fn relay_to_drops_unknown_targets_other_rooms_and_unjoined_senders() {
+        let (state, mut rxs) = state_with_room("r", &["a", "b"]);
+        let me = Some(("r".to_string(), "a".to_string()));
+        relay_to(&state, &me, "zzz", |from| ServerMsg::Ice { from, candidate: "c".into() });
+        let elsewhere = Some(("other".to_string(), "a".to_string()));
+        relay_to(&state, &elsewhere, "b", |from| ServerMsg::Ice { from, candidate: "c".into() });
+        relay_to(&state, &None, "b", |from| ServerMsg::Ice { from, candidate: "c".into() });
+        assert!(rxs[0].try_recv().is_err());
+        assert!(rxs[1].try_recv().is_err());
+    }
+
+    #[test]
+    fn relay_to_does_not_block_on_a_full_peer_queue() {
+        let (state, mut rxs) = state_with_room("r", &["a", "b"]);
+        let me = Some(("r".to_string(), "a".to_string()));
+        for _ in 0..20 {
+            relay_to(&state, &me, "b", |from| ServerMsg::Ice { from, candidate: "c".into() });
+        }
+        // Queue depth 8 in this fixture: the excess is dropped, nothing hangs.
+        let mut n = 0;
+        while rxs[1].try_recv().is_ok() {
+            n += 1;
+        }
+        assert_eq!(n, 8);
+    }
+
+    #[test]
+    fn caps_and_limits_keep_their_documented_values() {
+        // ARCHITECTURE §10: warn at 12, refuse at 16. Changing these is a product
+        // decision, not a tweak.
+        assert_eq!(WARN_CAP, 12);
+        assert_eq!(HARD_CAP, 16);
+        const {
+            assert!(WARN_CAP < HARD_CAP);
+            assert!(MAX_SECRET >= 32, "a 16-byte hex secret must fit");
+            assert!(MAX_WS_MSG > MAX_SDP, "an SDP must fit in one frame");
+        }
+    }
+
+    #[test]
+    fn public_urls_default_to_the_production_host() {
+        // Only when the env is not set — which is the case in the test image.
+        if std::env::var("PUBLIC_BASE").is_err() {
+            assert_eq!(public_base(), "https://subraum.cc");
+        }
+        if std::env::var("PUBLIC_WS").is_err() {
+            assert_eq!(public_ws(), "wss://subraum.cc/ws");
+        }
+        if std::env::var("DOWNLOADS_DIR").is_err() {
+            assert_eq!(downloads_dir(), "/srv/downloads/subraum");
+        }
     }
 }
