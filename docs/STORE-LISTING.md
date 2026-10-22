@@ -58,13 +58,16 @@ AUDIO
 • Microphone self-test and a low-bandwidth mode for weak connections
 
 CONNECTION
-• Direct peer-to-peer, optional relay for strict NATs
+• Direct peer-to-peer — no media server, no relay in the middle
 • Automatic reconnect — losing the broker does not end the call
 • Network self-check; connection type shown per participant
+• A dead link is detected, rebuilt on its own, and named with its cause
 
 ENCRYPTION
 • Voice over DTLS-SRTP, chat over DTLS-SCTP, brokering over TLS
 • Plus a post-quantum key exchange (ML-KEM-768 with X25519)
+• A fingerprint per participant — compare it over another channel to rule
+  out anyone in the middle
 • Keys live only for the session; re-encrypt at any time from the app
 • No accounts, no recording, no history on any server
 
@@ -74,6 +77,37 @@ Previously published as SquadLink Lite.
 ```
 
 ### What's new in this version
+
+```text
+Version 0.4.0 — everyone in a session must update to this version.
+
+This release drops compatibility with older subraum versions. An older
+version is refused by the server with "this subraum version does not match
+the server"; an older teammate inside a session would not be heard. Update
+together, then nothing else changes: sessions, links and settings stay as
+they are.
+
+What is new once everyone is on 0.4.0:
+
+• A fingerprint for every participant. Compare it over another channel
+  (a phone call, a chat you trust) to be sure nobody sits in the middle.
+• Your name in a session is protected: nobody can join under a member's
+  name and take over their connection.
+• A link that points to a server other than subraum.cc asks before it
+  connects.
+• Fixed: after a failed connection attempt the microphone stayed open in
+  the background.
+• Fixed: teammates who left during a broker outage lingered as ghosts and
+  kept the old key; the roster is now reconciled and the key rotated.
+• Fixed: several re-encryptions in quick succession could drop audio.
+• Fixed: two simultaneous connection offers made the rebuild fail.
+• Fixed: leaving is announced immediately instead of after the server's
+  timeout.
+• Windows: app ducking no longer gets stuck when talk and release alternate
+  quickly; Stream Deck and keyboard push-to-talk work together.
+```
+
+Previous version, for reference:
 
 ```text
 Version 0.3.3 — a dead connection now tells you why.
@@ -219,14 +253,18 @@ AUDIO
 • Mikrofon-Selbsttest und Low-Bandwidth-Modus für schwache Leitungen
 
 VERBINDUNG
-• Direkt Peer-zu-Peer, optionaler Relay für strenge NATs
+• Direkt Peer-zu-Peer — kein Medienserver, kein Relay dazwischen
 • Automatischer Reconnect — ein Abriss der Vermittlung beendet das Gespräch
   nicht
 • Netzwerk-Selbsttest; Verbindungsart je Teilnehmer sichtbar
+• Ein toter Draht wird erkannt, selbstständig neu aufgebaut und mit Ursache
+  gemeldet
 
 VERSCHLÜSSELUNG
 • Sprache über DTLS-SRTP, Chat über DTLS-SCTP, Vermittlung über TLS
 • Zusätzlich post-quanten-sicherer Schlüsselaustausch (ML-KEM-768 mit X25519)
+• Ein Fingerabdruck je Teilnehmer — über einen zweiten Kanal verglichen,
+  schließt er jeden Mithörer in der Mitte aus
 • Schlüssel gelten nur für die Session; Neuverschlüsselung jederzeit per
   Knopfdruck
 • Keine Accounts, keine Aufnahmen, kein Verlauf auf einem Server
@@ -237,6 +275,43 @@ Früher veröffentlicht als SquadLink Lite.
 ```
 
 ### Neuerungen in dieser Version
+
+```text
+Version 0.4.0 — alle Teilnehmer einer Session müssen auf diese Version
+aktualisieren.
+
+Diese Version ist nicht mehr kompatibel mit älteren subraum-Versionen. Eine
+ältere Version weist der Server mit „Diese subraum-Version passt nicht zum
+Server" ab; ein Mitspieler mit älterer Version würde in der Session nicht
+gehört. Gemeinsam aktualisieren, dann ändert sich sonst nichts: Sessions,
+Links und Einstellungen bleiben, wie sie sind.
+
+Neu, sobald alle auf 0.4.0 sind:
+
+• Ein Fingerabdruck für jeden Teilnehmer. Über einen anderen Kanal
+  verglichen (Telefon, ein Chat, dem ihr vertraut), schließt er aus, dass
+  jemand in der Mitte sitzt.
+• Dein Name in einer Session ist geschützt: Niemand kann unter dem Namen
+  eines Mitglieds beitreten und dessen Verbindung übernehmen.
+• Ein Link, der auf einen anderen Server als subraum.cc zeigt, fragt vor
+  dem Verbinden nach.
+• Behoben: Nach einem fehlgeschlagenen Verbindungsversuch blieb das Mikrofon
+  im Hintergrund offen.
+• Behoben: Mitspieler, die während einer Störung der Vermittlung gingen,
+  blieben als Geister in der Session und behielten den alten Schlüssel;
+  die Teilnehmerliste wird jetzt abgeglichen und der Schlüssel rotiert.
+• Behoben: Mehrere Neuverschlüsselungen kurz hintereinander konnten Audio
+  aussetzen lassen.
+• Behoben: Zwei gleichzeitige Verbindungsangebote ließen den Neuaufbau
+  scheitern.
+• Behoben: Wer die Session verlässt, wird sofort gemeldet statt erst nach
+  dem Zeitlimit des Servers.
+• Windows: Die Absenkung anderer Programme bleibt nicht mehr hängen, wenn
+  Sprechen und Loslassen schnell wechseln; Stream Deck und Tastatur
+  arbeiten bei Push-to-Talk zusammen.
+```
+
+Vorherige Version, zur Referenz:
 
 ```text
 Version 0.3.3 — eine tote Verbindung sagt jetzt, woran es lag.

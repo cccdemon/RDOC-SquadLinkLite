@@ -23,8 +23,25 @@ pnpm build                       # tsc typecheck + vite build (frontend only)
 pnpm tauri icon src/subraum.png  # regenerate app icons (source: subraum-icon.svg)
 ```
 
-There is **no frontend test runner and no linter** — `pnpm build` (i.e. `tsc`) is the
-only static check the UI gets. Don't go looking for `pnpm test` / `pnpm lint`.
+There is **no linter** for the UI — `pnpm build` (i.e. `tsc` with
+`noUnusedLocals`) is its only static check. Unit tests are **vitest** over the
+pure helpers extracted from `App.tsx` into `src/lib/*.ts` (`pnpm test`); React
+state/effects themselves have no tests.
+
+**The whole suite, one command** (what CI runs; `e2e/test-all.sh` is the single
+definition of "the tests"):
+
+```sh
+bash e2e/test-all.sh                # everything, inside the subraum-test Docker image
+bash e2e/test-all.sh --native       # everything, on a machine that has the toolchains
+ONLY=rust bash e2e/test-all.sh      # one stage: rust | tauri | frontend | streamdeck
+```
+
+Stages: `rust` = clippy `-D warnings` + tests for the workspace; `tauri` = the
+same for src-tauri; `frontend` = tsc + vite build + vitest; `streamdeck` =
+`node --test` + `test-harness.mjs`. **Clippy warnings fail CI** — keep
+`cargo clippy --all-targets -- -D warnings` clean in both cargo roots.
+`.github/workflows/test.yml` and `.gitlab-ci.yml` call these stages on push/PR.
 
 Rust workspace (from repo root — members: `crates/protocol`, `server/init`,
 `apps/companion-core`):
@@ -44,15 +61,23 @@ standalone throwaway crates, also excluded — a new spike must either be added 
 (as `spikes/apm-build` does), or cargo refuses to build it.
 
 Local compilates and CI-downloaded installers go in `test-build/<version>/`
-(gitignored) — never loose in the repo root. `screenshots/` and `store-art/`
-(`generate.mjs` renders the Store tiles/promo PNGs) are intentionally
+(gitignored) — never loose in the repo root. `screenshots/`, `store-art/`
+(`generate.mjs` renders the Store tiles/promo PNGs) and `docs/superpowers/plans/`
+(implementation plans written by the superpowers skills) are intentionally
 untracked local dirs, not stray files to clean up.
 
-Tests live in `#[cfg(test)]` modules inside the source files — there is no
-separate test dir: `lib.rs`, `mesh.rs`, `crypto.rs`, `audio.rs`, `signaling.rs`
-(companion-core), `crates/protocol/src/lib.rs`, `auth.rs`/`turn.rs`/`sessions.rs`
-(server/init) and `lib.rs`/`control.rs` (src-tauri, which needs its own
-`cargo test` from its directory — it is out of the workspace).
+Rust tests live in `#[cfg(test)]` modules inside the source files — there is
+no separate test dir. Every module in companion-core, server/init and
+src-tauri has one (src-tauri needs its own `cargo test` from its directory —
+it is out of the workspace). Counts as of 0.4.0: companion-core 175,
+init 138, protocol 18, src-tauri 50. Where a function's env/IO access got in
+the way, the pattern is a `from_values`/`parse_x(path)` split (auth, turn,
+tls, manifest) or a pure extraction (`terminal_error_text`,
+`keyless_warn_due`, the IPC validators in src-tauri) — follow it rather than
+mocking. Server WS tests use the `spawn_server`/`join`/`next_msg`/`send_raw`
+helpers in `main.rs`. Frontend tests: `apps/companion/src/lib/*.test.ts`
+(vitest, 74). Stream Deck: `streamdeck-plugin/test/*.test.mjs` over
+`bin/lib.js` (node:test, 59) plus `test-harness.mjs`.
 
 ## Build hosts
 
@@ -71,18 +96,25 @@ bash e2e/desktop.sh   # REAL Linux desktop app (webkit2gtk) under Xvfb; probes
 ```
 
 `docker build` re-copies the tree, so every edit means a cold build. For an
-edit-test loop, bind-mount the repo into the already-built image and keep the
-target dir in a named volume — incremental runs take ~20 s:
+edit-test loop use the **test-runner image** — toolchains + every sysdep
+(incl. webkit2gtk, node 20, pnpm 10, clippy), no source — bind-mount the repo
+and keep the target dir in a named volume; incremental runs take ~20 s.
+`CARGO_TARGET_DIR=/target` is baked into the image:
 
 ```sh
+docker build -t subraum-test -f e2e/Dockerfile.test e2e   # once
 export MSYS_NO_PATHCONV=1   # Git Bash: keep C:/... paths intact for -v
 docker run --rm -v "$PWD:/work" -v subraum-target:/target -w /work \
-  -e CARGO_TARGET_DIR=/target subraum-build cargo test --workspace
-# src-tauri (needs webkit2gtk etc.) — same trick with the desktop image:
+  subraum-test cargo test --workspace
+# src-tauri — its own volume (different lockfile):
 docker run --rm -v "$PWD:/work" -v subraum-target-tauri:/target \
-  -w /work/apps/companion/src-tauri -e CARGO_TARGET_DIR=/target \
-  subraum-desktopbuild cargo check
+  -w /work/apps/companion/src-tauri subraum-test cargo test
 ```
+
+Two agents running cargo against the same volume serialize on the target
+lock; clone the volume instead (`docker run --rm -v subraum-target:/from -v
+<new>:/to subraum-test cp -a /from/. /to/`, ~12 GB). A Linux cargo run drops
+`gen/schemas/linux-schema.json` in src-tauri — gitignored, leave it.
 
 The desktop stage builds src-tauri with `--features tauri/custom-protocol` —
 without it a plain cargo build serves the DEV URL (localhost:1420) instead of
@@ -188,6 +220,17 @@ selection and mic gain versus a webview-based client).
 - **`crates/protocol`** — shared signaling message enums (`ClientMsg`/`ServerMsg`).
   Single source of truth for the wire format; both the server and the client depend
   on it, so a change here is a protocol change on both sides at once.
+  **No cross-version compatibility, by decision (0.4.0):** `ClientMsg::Join`
+  carries `proto` = `PROTOCOL_VERSION`; the server refuses anything else with
+  the terminal `protocol-mismatch` error and closes the socket, and a join
+  frame that does not even deserialize is classified by its `"t":"join"` tag
+  and refused the same way. Any wire change bumps the constant — no
+  `#[serde(default)]` escape hatches, no fallback parsers (the bare `ChatMsg`
+  read on the DataChannel is gone). `Join` also carries a mandatory
+  per-connection `secret` that binds the `user_id`: a reconnect may supersede
+  its own id only with the same secret, and `id-in-use` is terminal too. Both
+  error codes are constants in this crate (`ERR_PROTOCOL_MISMATCH`,
+  `ERR_ID_IN_USE`); the client matches on them to stop reconnecting.
 - **`apps/companion-core`** — the headless engine, and the interesting part of the
   codebase. Builds as both a lib (`companion_core`) and a standalone binary.
   - `lib.rs` — `Engine` + `EngineConfig`, and the `UiEvent` enum. The engine pushes
@@ -195,7 +238,11 @@ selection and mic gain versus a webview-based client).
     those events to the frontend. `ChanState` holds per-channel state.
   - `mesh.rs` — one `RTCPeerConnection` per peer, ICE, renegotiation, `rekey()`.
     Glare rule: for any peer pair, the **lexicographically smaller userId offers**;
-    the larger one waits. Applies to both the initial offer and re-keying.
+    the larger one waits. Applies to both the initial offer and re-keying. The
+    link watchdog's relink ignores the rule, so both sides can end up in
+    `HaveLocalOffer`; `on_offer` resolves that collision instead of failing —
+    the smaller id keeps its offer and ignores the peer's, the larger id drops
+    its half-built PC and answers. Keep any new offer path glare-aware.
   - `audio.rs` — cpal capture/playback, resampling (device rate ↔ 48 kHz — mandatory,
     WASAPI shared mode forces the device mix rate), RNNoise, DSP chain, the 20 ms
     mixer clock.
@@ -215,7 +262,10 @@ selection and mic gain versus a webview-based client).
     an unreachable authority (STUN-only, strict NAT) leaves a peer keyless on
     otherwise-healthy links — it is neither heard nor hears (raw audio is only accepted before the first key).
     Encode-once rules out serving that peer plaintext, so the engine warns
-    instead (`KEYLESS_WARN_AFTER`).
+    instead (`KEYLESS_WARN_AFTER`). Each pairwise session also exposes a
+    **per-peer PQC fingerprint** (`UiEvent::Secure { fingerprint }`, shown in the
+    roster for out-of-band comparison); it is cleared when the session is gone,
+    never kept from a stale one.
   - `signaling.rs` — WS client to InitConnection, keepalive, reconnect with backoff.
   - `serverless.rs` — the no-server 1:1 mode: base64 copy-paste SDP exchange,
     non-trickle ICE, STUN only (no TURN, since there is no cred server).
@@ -265,9 +315,12 @@ selection and mic gain versus a webview-based client).
     JetBrains Mono font installed.
 
 - **`streamdeck-plugin`** — the Stream Deck plugin, plain Node/JS (no Rust, no
-  build step): `org.raumdock.subraum.sdPlugin` is the shipped folder,
-  `generate-icons.mjs` renders its key art with `sharp`, `pack.ps1` zips it
-  locally and `test-harness.mjs` drives it without a deck. CI's `streamdeck`
+  build step): `org.raumdock.subraum.sdPlugin` is the shipped folder —
+  `bin/plugin.js` is socket wiring only, every pure piece (control-API
+  frames, control.json discovery, backoff, key rendering) lives in
+  `bin/lib.js` so `test/*.test.mjs` can import it. `generate-icons.mjs`
+  renders its key art with `sharp`, `pack.ps1` zips it locally and
+  `test-harness.mjs` drives it without a deck. CI's `streamdeck`
   job in `build-companion.yml` does `npm ci --omit=dev` inside the `.sdPlugin`
   folder and zips it to `subraum.streamDeckPlugin`. It talks to `control.rs`
   over the loopback WS — protocol changes must land on both sides.
@@ -281,8 +334,10 @@ platforms (`LINUX.md`, `MACOS-IOS-PLAN.md`, `MSIX-PACKAGING.md`,
 `TURN-RELAY-FALLBACK-CONCEPT.md`, `NATIVE-VIDEO-CONCEPT.md`,
 `VIDEO-FILESHARING-CONCEPT.md` describe designs with no code behind them, so
 don't read them as documentation of what exists. `AUDIT-2026-10-18.md` is the
-full code audit: what was fixed (with commits) and which design decisions are
-still open — read its Offen section before re-auditing the same ground.
+full code audit: what was fixed (with commits) and, under "Entschieden und
+umgesetzt (2026-10-20)", the decision + commit for every design question it
+raised. Only the Impressum TODO is still open — read those sections before
+re-auditing the same ground or re-opening a settled decision.
 
 Encode-once fan-out is the load-bearing performance assumption: one
 `TrackLocalStaticRTP` is attached to all peer connections and a single `write_rtp()`
@@ -343,8 +398,11 @@ cover:
 | Deep-link scheme | `subraum://` — `squadlink://` still registered + parsed |
 | Release tag prefix | `subraum-v*` |
 
-Backwards compatibility that must not be dropped while old builds are in the
-wild:
+**Old clients are not supported** (decided 2026-10-22, shipped in 0.4.0): the
+server refuses any other `PROTOCOL_VERSION`, the DataChannel has no fallback
+parsers, and no code path exists to humour an older build. Don't add one.
+What *does* stay compatible is **old links**, because people have them pinned
+in Discord and on paper:
 
 - **Both deep-link schemes work.** `DEEPLINK_SCHEMES` in `src-tauri/src/lib.rs`,
   `schemes` in `tauri.conf.json`, two `uap:Protocol` entries in
@@ -353,8 +411,9 @@ wild:
   the session host from a pasted share link, so an old `/j/<code>` link fetches
   the old host; CSP checks the pre-redirect URL, so removing it breaks old links.
 - **The old host must keep proxying `/ws`, not redirect it** — see the Caddy
-  snippet in `deploy/README.md`. Installed clients have that WS URL baked in and
-  tungstenite does not follow redirects.
+  snippet in `deploy/README.md`. A current client that followed an old
+  `/j/<code>` link derives its WS URL from that host, and tungstenite does not
+  follow redirects.
 
 Deliberately **not** renamed — don't "fix" these:
 

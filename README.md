@@ -61,6 +61,40 @@ Workflow [`.github/workflows/build-companion.yml`](.github/workflows/build-compa
 
 Lokaler Dev-Build (braucht Rust + Node + pnpm): `cd apps/companion && pnpm install && pnpm tauri dev`
 
+## Testen
+
+Die komplette Testsuite läuft mit einem Befehl — lokal in Docker oder auf
+einem CI-Runner, gleiche Schritte, gleiche Definition
+([`e2e/test-all.sh`](e2e/test-all.sh)):
+
+```sh
+bash e2e/test-all.sh                # alles, in Docker (baut das Runner-Image beim ersten Mal)
+bash e2e/test-all.sh --native       # alles, direkt auf dieser Maschine (Toolchains vorhanden)
+ONLY=rust bash e2e/test-all.sh      # eine Stufe: rust | tauri | frontend | streamdeck
+```
+
+| Stufe | Was läuft |
+| --- | --- |
+| `rust` | `cargo clippy -D warnings` + `cargo test` für `crates/protocol`, `server/init`, `apps/companion-core` |
+| `tauri` | dasselbe für `apps/companion/src-tauri` (eigener Workspace, braucht webkit2gtk) |
+| `frontend` | `tsc` + `vite build`, dann `vitest` (`apps/companion`) |
+| `streamdeck` | `node --test` + der Fake-Deck-Harness (`streamdeck-plugin`) |
+
+CI: [`.github/workflows/test.yml`](.github/workflows/test.yml) (GitHub) und
+[`.gitlab-ci.yml`](.gitlab-ci.yml) (GitLab-Runner) rufen genau diese Stufen auf.
+Der echte Drei-Client-Mesh-Test mit Server (`bash e2e/run.sh`) und der
+Desktop-Boot-Test unter Xvfb (`bash e2e/desktop.sh`) bleiben separate
+Docker-Läufe.
+
+## Kompatibilität
+
+**Es gibt keine Kompatibilität zwischen subraum-Versionen.** Das Protokoll
+trägt eine Versionsnummer (`protocol::PROTOCOL_VERSION`); der Server weist
+jede andere Nummer beim Beitritt ab, und ein Mitspieler mit abweichender
+Version wird in der Session weder gehört noch kann er chatten. Alle Teilnehmer
+aktualisieren gemeinsam. Share-Links (`subraum://`, `/j/<code>`) bleiben
+dagegen gültig.
+
 ## Verschlüsselung & Key-Rotation
 
 Nichts verlässt den Rechner unverschlüsselt:
