@@ -3793,23 +3793,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "subraum"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "companion-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-deep-link",
- "tauri-plugin-single-instance",
- "tokio",
- "windows 0.59.0",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "realfft"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4596,6 +4579,28 @@ dependencies = [
  "tokio",
  "url",
  "webrtc-util",
+]
+
+[[package]]
+name = "subraum"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "companion-core",
+ "futures",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-single-instance",
+ "tokio",
+ "tokio-tungstenite",
+ "webview2-com",
+ "windows 0.59.0",
+ "windows-core 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
