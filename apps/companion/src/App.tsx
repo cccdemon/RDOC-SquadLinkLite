@@ -16,24 +16,52 @@ import {
   IconCheck,
 } from "@tabler/icons-react";
 import logo from "./rdoc-signet.svg";
+import { isNewer, mdToText, topChangelogSection } from "./lib/version";
+import { PTT_LATCH_MS, PTT_LONGPRESS_MS, pttLabel } from "./lib/bindings";
+import {
+  DEFAULT_CHANNEL,
+  MAX_CHANNEL_LEN,
+  appendCapped,
+  canonChannel,
+  cleanChannelName,
+  cycleTarget,
+  dedupeChannels,
+} from "./lib/channels";
+import {
+  SESSION_BASE,
+  baseFromInput,
+  isTrustedLinkHost,
+  linkHost,
+  parseCode,
+  parseDirectLink,
+  sanitizeUid,
+} from "./lib/links";
+import {
+  DSP_DEFAULT,
+  RADIO_DEFAULT,
+  UI_SCALES,
+  UI_SCALE_DEFAULT,
+  mergeStoredConfig,
+  uiScaleFromStored,
+  type DspConfig,
+  type RadioCfg,
+} from "./lib/settings";
+import {
+  OVERLAY_DIMS,
+  OVERLAY_POSITIONS,
+  overlayPosition,
+  type OverlayPos,
+  type OverlaySize,
+} from "./lib/overlay";
 
 const REPO = "cccdemon/RDOC-SquadLinkLite";
 
-// Display size. Scales the whole webview, not just type: the stylesheet is
-// px-based, so lifting a root font size would move the text and leave every
-// control, gap and icon at its old size. Native webview zoom scales layout and
-// font together, which is what "the text is too small" actually asks for.
-//
-// 100 % stays the default so nobody's window silently reflows on update.
-const UI_SCALES = [0.9, 1.0, 1.1, 1.25, 1.5] as const;
-const UI_SCALE_DEFAULT = 1.0;
-
+// Display size (see lib/settings for the scale list). Native webview zoom
+// scales layout and font together, which is what "the text is too small"
+// actually asks for.
 function loadUiScale(): number {
   try {
-    const v = Number(localStorage.getItem("sa.uiscale"));
-    // Guard the stored value: an old or hand-edited entry must not be able to
-    // zoom the window to something unusable.
-    return UI_SCALES.includes(v as (typeof UI_SCALES)[number]) ? v : UI_SCALE_DEFAULT;
+    return uiScaleFromStored(localStorage.getItem("sa.uiscale"));
   } catch {
     return UI_SCALE_DEFAULT;
   }
@@ -47,72 +75,6 @@ async function applyUiScale(scale: number) {
   } catch {
     document.documentElement.style.zoom = String(scale);
   }
-}
-
-// Cap retained chat lines so a flood of messages can't grow webview memory.
-const MAX_CHAT_LINES = 500;
-
-// Parse "0.1.10" → [0,1,10]; true if `a` is a newer version than `b`.
-function isNewer(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
-  }
-  return false;
-}
-
-// Newest CHANGELOG section: from the first "## " heading to the next one.
-function topChangelogSection(md: string): string {
-  const start = md.indexOf("## ");
-  if (start < 0) return "";
-  const next = md.indexOf("\n## ", start + 3);
-  return md.slice(start, next < 0 ? undefined : next).trim();
-}
-
-// Render markdown release notes as readable plain text.
-function mdToText(s: string): string {
-  return s
-    .replace(/^#{1,6}\s*/gm, "")
-    .replace(/^\s*[-*]\s+/gm, "• ")
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/`/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-// Friendly label for raw input codes (e.g. "F8", "KeyR", "Mouse:Unknown(1)").
-// Label one base key (no modifiers).
-function baseLabel(code: string): string {
-  if (code.startsWith("Pad:")) return `Gamepad-Taste ${code.slice(4)}`;
-  if (code.startsWith("Mouse:")) {
-    const b = code.slice(6);
-    const wheel: Record<string, string> = {
-      WheelUp: "Mausrad ▲", WheelDown: "Mausrad ▼",
-      WheelLeft: "Mausrad ◀", WheelRight: "Mausrad ▶",
-    };
-    if (wheel[b]) return wheel[b];
-    const m = b.match(/Unknown\((\d+)\)/);
-    if (m) return `Maustaste ${Number(m[1]) + 3}`; // Unknown(1)→Mouse4
-    return `Maus ${b}`;
-  }
-  return code.replace(/^Key/, "");
-}
-
-// Label a binding, including modifier chords ("Shift+KeyT" → "Shift + T").
-/// Max gap between two PTT key presses that still counts as a double-tap (ms).
-const PTT_LATCH_MS = 350;
-
-/// Hold time on the on-screen PTT button that latches transmit on (ms).
-const PTT_LONGPRESS_MS = 700;
-
-function pttLabel(code: string): string {
-  if (!code) return "—";
-  const mods = new Set(["Ctrl", "Alt", "Shift", "Meta"]);
-  const parts = code.split("+");
-  const base = parts.pop() ?? "";
-  const prefix = parts.filter((p) => mods.has(p));
-  return [...prefix, baseLabel(base)].join(" + ");
 }
 
 type Participant = {
@@ -145,29 +107,7 @@ type UiEvent =
   | { type: "channel_removed"; name: string }
   | { type: "room_audio"; gen: number | null; authority: boolean };
 
-const DEFAULT_CHANNEL = "Funk 1";
-const MAX_CHANNEL_LEN = 32;
-// Canonical form for channel matching: trim + lowercase (mirrors the Rust side).
-const canonChannel = (s: string) => s.trim().toLowerCase();
-
 // ── Channel overlay (separate transparent, click-through window) ──────────────
-type OverlaySize = "s" | "m" | "l";
-type OverlayPos = "tl" | "tc" | "tr" | "bl" | "bc" | "br";
-const OVERLAY_DIMS: Record<OverlaySize, { w: number; h: number }> = {
-  s: { w: 180, h: 40 },
-  m: { w: 224, h: 52 },
-  l: { w: 288, h: 64 },
-};
-const OVERLAY_POSITIONS: { key: OverlayPos; label: string; title: string }[] = [
-  { key: "tl", label: "◤", title: "oben links" },
-  { key: "tc", label: "▲", title: "oben mitte" },
-  { key: "tr", label: "◥", title: "oben rechts" },
-  { key: "bl", label: "◣", title: "unten links" },
-  { key: "bc", label: "▼", title: "unten mitte" },
-  { key: "br", label: "◢", title: "unten rechts" },
-];
-const OVERLAY_MARGIN = 24;
-
 // Create-if-needed / size / position (or destroy) the overlay window. The window
 // is created lazily only while enabled and fully closed when disabled, so it
 // costs no RAM/CPU when off. Logical coordinates; anchored to a corner/center of
@@ -203,65 +143,12 @@ async function applyOverlayWindow(on: boolean, pos: OverlayPos, size: OverlaySiz
   }
   await w.setSize(new LogicalSize(d.w, d.h)).catch(() => {});
   const mon = await currentMonitor().catch(() => null);
-  const sf = mon?.scaleFactor ?? 1;
-  const MW = (mon?.size.width ?? 1920) / sf;
-  const MH = (mon?.size.height ?? 1080) / sf;
-  const OX = (mon?.position.x ?? 0) / sf;
-  const OY = (mon?.position.y ?? 0) / sf;
-  const left = OX + OVERLAY_MARGIN;
-  const right = OX + MW - d.w - OVERLAY_MARGIN;
-  const cx = OX + (MW - d.w) / 2;
-  const top = OY + OVERLAY_MARGIN;
-  const bottom = OY + MH - d.h - OVERLAY_MARGIN;
-  const map: Record<OverlayPos, [number, number]> = {
-    tl: [left, top], tc: [cx, top], tr: [right, top],
-    bl: [left, bottom], bc: [cx, bottom], br: [right, bottom],
-  };
-  const [x, y] = map[pos];
-  await w.setPosition(new LogicalPosition(Math.round(x), Math.round(y))).catch(() => {});
+  const { x, y } = overlayPosition(mon, pos, size);
+  await w.setPosition(new LogicalPosition(x, y)).catch(() => {});
   await w.setAlwaysOnTop(true).catch(() => {});
   await w.setIgnoreCursorEvents(true).catch(() => {});
   await w.show().catch(() => {});
 }
-
-// Capture-path DSP (must match companion_core::audio::DspConfig field names).
-type DspConfig = {
-  gate: boolean;
-  gate_threshold: number;
-  compressor: boolean;
-  comp_threshold: number;
-  comp_ratio: number;
-  comp_makeup: number;
-  limiter: boolean;
-  limiter_ceiling: number;
-};
-const DSP_DEFAULT: DspConfig = {
-  gate: true,
-  gate_threshold: 0.015,
-  compressor: true,
-  comp_threshold: 0.15,
-  comp_ratio: 3.0,
-  comp_makeup: 1.4,
-  limiter: true,
-  limiter_ceiling: 0.97,
-};
-
-// Funk-Effekt: Bandpass + Saturation + Destruction auf den EMPFANGS-Mix (alle
-// eingehenden Stimmen). Reine Hörer-Einstellung — ändert nichts am Gesendeten.
-type RadioCfg = {
-  enabled: boolean;
-  low_cut: number;   // Hz — FX Tiefen abschneiden
-  high_cut: number;  // Hz — FX Höhen abschneiden
-  saturation: number;  // 0..1
-  destruction: number; // 0..1
-};
-const RADIO_DEFAULT: RadioCfg = {
-  enabled: false,
-  low_cut: 300,
-  high_cut: 3400,
-  saturation: 0.35,
-  destruction: 0.15,
-};
 
 export default function App() {
   const [connected, setConnected] = useState(false);
@@ -281,7 +168,7 @@ export default function App() {
   // (a created channel doesn't vanish when its roster count hits zero).
   const [sessionChannels, setSessionChannels] = useState<string[]>([]);
   const rememberChannel = (name: string) => {
-    const clean = name.trim().slice(0, MAX_CHANNEL_LEN);
+    const clean = cleanChannelName(name);
     if (!clean) return;
     setSessionChannels((prev) =>
       prev.some((c) => canonChannel(c) === canonChannel(clean)) ? prev : [...prev, clean]
@@ -362,14 +249,14 @@ export default function App() {
   const [deaf, setDeaf] = useState(false);
   const [dsp, setDsp] = useState<DspConfig>(() => {
     try {
-      return { ...DSP_DEFAULT, ...JSON.parse(localStorage.getItem("sa.dsp") || "{}") };
+      return mergeStoredConfig(DSP_DEFAULT, localStorage.getItem("sa.dsp"));
     } catch {
       return DSP_DEFAULT;
     }
   });
   const [radioFx, setRadioFx] = useState<RadioCfg>(() => {
     try {
-      return { ...RADIO_DEFAULT, ...JSON.parse(localStorage.getItem("sa.radiofx") || "{}") };
+      return mergeStoredConfig(RADIO_DEFAULT, localStorage.getItem("sa.radiofx"));
     } catch {
       return RADIO_DEFAULT;
     }
@@ -696,10 +583,7 @@ export default function App() {
     const un = listen<UiEvent>("ui", (e) => {
       const p = e.payload;
       if (p.type === "roster") setParticipants(p.participants);
-      else if (p.type === "chat") setChat((c) => {
-        const next = [...c, { from: p.from, text: p.text }];
-        return next.length > MAX_CHAT_LINES ? next.slice(next.length - MAX_CHAT_LINES) : next;
-      });
+      else if (p.type === "chat") setChat((c) => appendCapped(c, { from: p.from, text: p.text }));
       else if (p.type === "status") {
         setConnected(p.connected);
         setTransmitting(p.transmitting);
@@ -870,7 +754,7 @@ export default function App() {
 
   // Switch to a (validated) channel: optimistic UI + tell the engine.
   const switchChannel = (name: string) => {
-    const clean = name.trim().slice(0, MAX_CHANNEL_LEN);
+    const clean = cleanChannelName(name);
     if (!clean) return;
     rememberChannel(clean); // keep even a brand-new channel in the list right away
     if (canonChannel(clean) === canonChannel(myChannel)) return;
@@ -880,27 +764,14 @@ export default function App() {
 
   // Ordered, deduped channel list (session-remembered + mine + live peers) —
   // the order the cycle hotkeys and the chips walk through.
-  const orderedChannels = () => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const label of [...sessionChannels, myChannel, ...participants.map((p) => p.channel)]) {
-      const k = canonChannel(label);
-      if (!k || seen.has(k)) continue;
-      seen.add(k);
-      out.push(label);
-    }
-    return out;
-  };
+  const orderedChannels = () =>
+    dedupeChannels([...sessionChannels, myChannel, ...participants.map((p) => p.channel)]);
   // Cycle prev (-1) / next (+1). Kept in a ref so the (once-registered) global
   // hotkey listener always sees the current channel list, not a stale closure.
   const cycleRef = useRef<(dir: number) => void>(() => {});
   cycleRef.current = (dir: number) => {
-    const list = orderedChannels();
-    if (list.length < 2) return;
-    const idx = list.findIndex((c) => canonChannel(c) === canonChannel(myChannel));
-    const cur = idx < 0 ? 0 : idx;
-    const nextIdx = (cur + (dir < 0 ? -1 : 1) + list.length) % list.length;
-    switchChannel(list[nextIdx]);
+    const target = cycleTarget(orderedChannels(), myChannel, dir);
+    if (target !== null) switchChannel(target);
   };
 
   // Latest overlay state for the handshake below (a freshly-created overlay
@@ -1058,31 +929,13 @@ PIN: ${sessionInfo.pin}`);
   };
 
   // ── Session brokering (PIN-protected link via InitConnection REST) ──────────
-  // The session service is the hosted public endpoint.
-  const SESSION_BASE = "https://subraum.cc";
-  const parseCode = (s: string) => {
-    const t = s.trim();
-    const m = t.match(/\/j\/([A-Za-z0-9]+)/);
-    return m ? m[1] : t;
-  };
-  const baseFromInput = (input: string) => {
-    const t = input.trim();
-    if (/^https?:\/\//.test(t)) {
-      try {
-        const u = new URL(t);
-        return `${u.protocol}//${u.host}`;
-      } catch {
-        /* fall through */
-      }
-    }
-    return SESSION_BASE;
-  };
+  // parseCode / baseFromInput live in lib/links.
   const connectWith = async (ws: string, room: string, token: string | null, nameOverride?: string, userIdOverride?: string) => {
     const name = (nameOverride ?? form.name).trim() || "Commander";
     if (nameOverride) setForm((f: any) => ({ ...f, name }));
     // Stable identity. From a deep link this is the player's Discord name; sanitize
     // to the id charset the backend accepts ([A-Za-z0-9_.-]). Fallback: random.
-    const uid = (userIdOverride || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 64);
+    const uid = sanitizeUid(userIdOverride);
     try {
       localStorage.setItem("sa.form", JSON.stringify({ ...form, name }));
     } catch {
@@ -1157,32 +1010,13 @@ PIN: ${sessionInfo.pin}`);
   // Carries the full creds so neither link nor PIN entry is needed. `uid` is the
   // player's stable identity (e.g. Discord name); `name` is the display name.
   // `squadlink:` is the pre-rename scheme — same payload, still accepted so links
-  // already handed out keep working.
-  const LINK_SCHEMES = ["subraum:", "squadlink:"];
-  const parseDirectLink = (raw: string): { ws: string; room: string; token: string | null; name?: string; uid?: string } | null => {
-    try {
-      const u = new URL(raw.trim());
-      if (!LINK_SCHEMES.includes(u.protocol)) return null;
-      const ws = u.searchParams.get("ws");
-      const room = u.searchParams.get("room");
-      if (!ws || !room) return null;
-      return {
-        ws,
-        room,
-        token: u.searchParams.get("token"),
-        name: u.searchParams.get("name") || undefined,
-        uid: u.searchParams.get("uid") || undefined,
-      };
-    } catch {
-      return null;
-    }
-  };
+  // already handed out keep working. Parsing lives in lib/links (parseDirectLink).
   const connectedRef = useRef(connected);
   connectedRef.current = connected;
   const connectingRef = useRef(connecting);
   connectingRef.current = connecting;
-  // Hosts a deep link may connect to without asking. Anything else needs a click.
-  const TRUSTED_LINK_HOSTS = ["subraum.cc", "squadlink.raumdock.org"];
+  // Hosts a deep link may connect to without asking (lib/links TRUSTED_LINK_HOSTS).
+  // Anything else needs a click.
   const connectDirect = async (raw: string, trusted = false) => {
     // A link while connected (or mid-connect) would start a second engine; the
     // backend refuses that too, but refusing here keeps the log message clear.
@@ -1196,15 +1030,13 @@ PIN: ${sessionInfo.pin}`);
       return;
     }
     if (!trusted) {
-      let host: string;
-      try {
-        // hostname carries no port; lowercase so "Subraum.cc:443" still matches.
-        host = new URL(cfg.ws).hostname.toLowerCase();
-      } catch {
+      // hostname carries no port; lowercase so "Subraum.cc:443" still matches.
+      const host = linkHost(cfg.ws);
+      if (host === null) {
         setLog("Ungültiger subraum-Direktlink");
         return;
       }
-      if (!TRUSTED_LINK_HOSTS.includes(host)) {
+      if (!isTrustedLinkHost(host)) {
         setPendingLink({ raw, host });
         return;
       }
