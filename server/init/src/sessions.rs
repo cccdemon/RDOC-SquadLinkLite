@@ -189,7 +189,7 @@ mod tests {
         assert_ne!(r1, r2);
         // One session's PIN must not open another's code.
         assert!(matches!(s.join(&c2, &p1), Err(JoinError::BadPin) | Ok(_)) );
-        if let Ok(_) = s.join(&c2, &p1) {
+        if s.join(&c2, &p1).is_ok() {
             // 1-in-a-million collision; only a real leak would be systematic.
             let (c3, _, _, _) = s.create(token_for);
             assert!(matches!(s.join(&c3, &p1), Err(JoinError::BadPin)));

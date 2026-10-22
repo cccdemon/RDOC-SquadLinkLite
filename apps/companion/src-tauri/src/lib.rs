@@ -108,12 +108,22 @@ fn refresh_chan_bound() {
 // Live modifier state, updated from every keyboard edge. A binding may be a plain
 // key ("F8") or a chord ("Shift+KeyT", "Ctrl+Shift+Mouse:Left"); a chord fires
 // only while its required modifiers are held.
+//
+// The live state and `handle_raw` are fed by the Windows Raw Input thread only,
+// so they are `cfg(windows)`. The pure chord helpers (`Mods`, `parse_binding`,
+// `build_combo`, `mods_ok`, `mod_of_label`) are platform-neutral and
+// unit-tested everywhere; on other targets nothing calls them at runtime.
+#[cfg(windows)]
 static MOD_SHIFT: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 static MOD_CTRL: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 static MOD_ALT: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 static MOD_META: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Mods {
     shift: bool,
     ctrl: bool,
@@ -122,6 +132,7 @@ struct Mods {
 }
 
 /// Which modifier group a raw key label belongs to (None = not a modifier).
+#[cfg_attr(not(windows), allow(dead_code))]
 fn mod_of_label(code: &str) -> Option<&'static str> {
     match code {
         "ShiftLeft" | "ShiftRight" => Some("Shift"),
@@ -132,6 +143,7 @@ fn mod_of_label(code: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(windows)]
 fn held_mods() -> Mods {
     Mods {
         shift: MOD_SHIFT.load(Ordering::SeqCst),
@@ -142,6 +154,7 @@ fn held_mods() -> Mods {
 }
 
 /// All required modifiers held? (Extra held modifiers are tolerated.)
+#[cfg_attr(not(windows), allow(dead_code))]
 fn mods_ok(req: Mods, held: Mods) -> bool {
     (!req.shift || held.shift)
         && (!req.ctrl || held.ctrl)
@@ -150,6 +163,7 @@ fn mods_ok(req: Mods, held: Mods) -> bool {
 }
 
 /// Split a binding string into its required modifiers + base key.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_binding(s: &str) -> (Mods, String) {
     let mut m = Mods::default();
     let mut rest = s;
@@ -167,6 +181,7 @@ fn parse_binding(s: &str) -> (Mods, String) {
 }
 
 /// Build a canonical chord label from the held modifiers + a base key.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn build_combo(base: &str, m: Mods) -> String {
     let mut s = String::new();
     if m.ctrl {
@@ -189,6 +204,7 @@ fn build_combo(base: &str, m: Mods) -> String {
 /// new binding (emitted as `ptt-bound`); otherwise edges on the bound code
 /// toggle transmit via the `ptt` event. De-duped so key auto-repeat (and
 /// duplicate button flags in one packet) don't spam the IPC channel.
+#[cfg(windows)]
 fn handle_raw(code: String, down: bool) {
     // Track modifier state first (chords gate on it). Modifier keys can still be
     // a plain binding on their own.
@@ -784,6 +800,7 @@ fn valid_hex(s: &str, max: usize) -> bool {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // one IPC call = one connect form; splitting it would only move the fields into a struct
 async fn connect(
     app: AppHandle,
     state: State<'_, AppState>,

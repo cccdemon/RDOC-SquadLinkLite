@@ -390,10 +390,11 @@ pub fn run_devices(
     in_rate.store(inp.rate, Ordering::SeqCst);
     out_rate.store(outp.rate, Ordering::SeqCst);
     let _ = rate_tx.send(Ok((inp.rate, outp.rate))); // unblocks setup_audio once devices run
-    let mut in_s = Some(in_s);
-    let mut out_s = Some(out_s);
-
     // Hold the streams alive until shutdown; dropping them stops capture/playback.
+    // Never read, only replaced on a device switch — the binding exists for its Drop.
+    let mut _in_s = Some(in_s);
+    let mut _out_s = Some(out_s);
+
     while !stop.load(Ordering::SeqCst) {
         while let Ok(cmd) = dev_rx.try_recv() {
             match cmd {
@@ -406,7 +407,7 @@ pub fn run_devices(
                         Ok(p) => match build_input(&p, cap.clone()) {
                             Ok(s) if s.play().is_ok() => {
                                 in_rate.store(p.rate, Ordering::SeqCst);
-                                in_s = Some(s); // replaces (drops) the old stream now that the new one runs
+                                _in_s = Some(s); // replaces (drops) the old stream now that the new one runs
                             }
                             Ok(_) => eprintln!("input switch: new device won't start; keeping current"),
                             Err(e) => eprintln!("input rebuild failed: {e}; keeping current"),
@@ -420,7 +421,7 @@ pub fn run_devices(
                         Ok(p) => match build_output(&p, play.clone()) {
                             Ok(s) if s.play().is_ok() => {
                                 out_rate.store(p.rate, Ordering::SeqCst);
-                                out_s = Some(s); // replaces (drops) the old stream now that the new one runs
+                                _out_s = Some(s); // replaces (drops) the old stream now that the new one runs
                             }
                             Ok(_) => eprintln!("output switch: new device won't start; keeping current"),
                             Err(e) => eprintln!("output rebuild failed: {e}; keeping current"),
@@ -1008,7 +1009,7 @@ mod decode_gc_tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     fn opus_silence() -> Bytes {
-        let mut enc = Encoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip).unwrap();
+        let enc = Encoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip).unwrap();
         let pcm = [0i16; FRAME];
         let mut out = [0u8; 400];
         let n = enc.encode(&pcm, &mut out).unwrap();

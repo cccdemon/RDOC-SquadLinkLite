@@ -49,14 +49,9 @@ fn wire_chat(slot: ChatSlot, dc: Arc<RTCDataChannel>, sink: Sink) {
 }
 
 async fn read_track(track: Arc<TrackRemote>, dtx: UnboundedSender<(String, Bytes)>) {
-    loop {
-        match track.read_rtp().await {
-            Ok((p, _)) => {
-                if !p.payload.is_empty() {
-                    let _ = dtx.send(("peer".to_string(), p.payload));
-                }
-            }
-            Err(_) => break,
+    while let Ok((p, _)) = track.read_rtp().await {
+        if !p.payload.is_empty() {
+            let _ = dtx.send(("peer".to_string(), p.payload));
         }
     }
 }
